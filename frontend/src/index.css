@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 228 40% 98.5%;
+    --foreground: 240 22% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 22% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 22% 14%;
+    --primary: 262 71% 56%;
+    --primary-foreground: 0 0% 100%;
+    --primary-50: 262 100% 97%;
+    --primary-100: 263 94% 93%;
+    --primary-200: 264 90% 86%;
+    --primary-300: 263 86% 76%;
+    --primary-400: 263 76% 65%;
+    --primary-500: 262 71% 56%;
+    --primary-600: 261 70% 47%;
+    --primary-700: 259 66% 39%;
+    --primary-800: 259 61% 32%;
+    --primary-900: 256 59% 28%;
+    --secondary: 240 20% 95%;
+    --secondary-foreground: 240 22% 14%;
+    --muted: 240 22% 95.5%;
+    --muted-foreground: 240 10% 44%;
+    --accent: 262 70% 96%;
+    --accent-foreground: 259 66% 39%;
+    --destructive: 0 78% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 15% 88%;
+    --input: 240 15% 88%;
+    --ring: 262 71% 56%;
+    --radius: 0.5rem;
+
+    --success: 150 76% 38%;
+    --success-foreground: 0 0% 100%;
+    --success-50: 151 80% 95%;
+    --success-100: 150 75% 88%;
+    --success-700: 148 72% 28%;
+
+    --warning: 27 93% 49%;
+    --warning-foreground: 0 0% 100%;
+    --warning-50: 30 100% 95%;
+    --warning-100: 29 100% 88%;
+    --warning-700: 26 93% 36%;
+
+    --info: 210 100% 50%;
+    --info-foreground: 0 0% 100%;
+    --info-50: 209 100% 95%;
+    --info-100: 210 95% 88%;
+    --info-700: 210 100% 36%;
+
+    --sidebar: 262 55% 16%;
+    --sidebar-foreground: 262 30% 86%;
+    --sidebar-muted: 262 24% 64%;
+    --sidebar-border: 260 30% 28%;
+    --sidebar-active: 262 71% 56%;
+    --sidebar-active-foreground: 0 0% 100%;
+    --sidebar-hover: 261 38% 24%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(240 10% 72%);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

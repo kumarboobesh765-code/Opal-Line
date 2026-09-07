@@ -1,0 +1,124 @@
+import {
+  Activity,
+  ArrowLeftRight,
+  BarChart3,
+  Barcode,
+  BookOpen,
+  Boxes,
+  Building2,
+  DatabaseBackup,
+  FileText,
+  Gem,
+  HandCoins,
+  Landmark,
+  LayoutDashboard,
+  ListOrdered,
+  Package,
+  PackageSearch,
+  PackageX,
+  Receipt,
+  RefreshCcw,
+  Settings,
+  ShoppingBag,
+  Sparkles,
+  ScrollText,
+  Tags,
+  TrendingUp,
+  Undo2,
+  UserCog,
+  Users,
+  UsersRound,
+  Wallet,
+  type LucideIcon,
+} from 'lucide-react'
+
+export interface NavItem {
+  title: string
+  path: string
+  icon: LucideIcon
+  badge?: string
+}
+
+export interface NavSection {
+  label: string
+  items: NavItem[]
+}
+
+export const navSections: NavSection[] = [
+  {
+    label: 'Main',
+    items: [
+      { title: 'Dashboard', path: '/', icon: LayoutDashboard },
+      { title: 'Silver Rate', path: '/silver-rate', icon: Tags },
+    ],
+  },
+  {
+    label: 'Sales',
+    items: [
+      { title: 'Sales Invoices', path: '/sales/invoices', icon: FileText },
+      { title: 'Sales Orders', path: '/sales/orders', icon: ListOrdered },
+      { title: 'Customers', path: '/sales/customers', icon: Users },
+      { title: 'Returns', path: '/sales/returns', icon: Undo2 },
+    ],
+  },
+  {
+    label: 'Purchase',
+    items: [
+      { title: 'Purchase Orders', path: '/purchase/orders', icon: ShoppingBag },
+      { title: 'Purchase Invoices', path: '/purchase/invoices', icon: Receipt },
+      { title: 'Suppliers', path: '/purchase/suppliers', icon: Building2 },
+      { title: 'Returns', path: '/purchase/returns', icon: Undo2 },
+    ],
+  },
+  {
+    label: 'Inventory',
+    items: [
+      { title: 'Products', path: '/inventory/products', icon: Gem },
+      { title: 'Stock Overview', path: '/inventory/stock', icon: Boxes },
+      { title: 'Stock Transfer', path: '/inventory/transfers', icon: ArrowLeftRight },
+      { title: 'Barcode / Labels', path: '/inventory/barcode', icon: Barcode },
+      { title: 'Low Stock Alert', path: '/inventory/low-stock', icon: PackageX },
+      { title: 'Stock Running', path: '/inventory/stock-running', icon: TrendingUp },
+    ],
+  },
+  {
+    label: 'Accounts',
+    items: [
+      { title: 'Expenses', path: '/accounts/expenses', icon: Wallet },
+      { title: 'Payments', path: '/accounts/payments', icon: HandCoins },
+      { title: 'Bank Accounts', path: '/accounts/bank', icon: Landmark },
+      { title: 'Ledger', path: '/accounts/ledger', icon: BookOpen },
+    ],
+  },
+  {
+    label: 'Reports',
+    items: [
+      { title: 'Business Reports', path: '/reports/business', icon: BarChart3 },
+      { title: 'GST Reports', path: '/reports/gst', icon: Receipt },
+      { title: 'Sales Analysis', path: '/reports/sales', icon: TrendingUp },
+      { title: 'Inventory Reports', path: '/reports/inventory', icon: PackageSearch },
+    ],
+  },
+  {
+    label: 'Shopify',
+    items: [
+      { title: 'Shopify Dashboard', path: '/shopify/dashboard', icon: Sparkles },
+      { title: 'Orders Sync', path: '/shopify/orders', icon: ListOrdered },
+      { title: 'Products Sync', path: '/shopify/products', icon: Package },
+      { title: 'Inventory Sync', path: '/shopify/inventory', icon: Boxes },
+      { title: 'Customers Sync', path: '/shopify/customers', icon: UsersRound },
+      { title: 'Price Sync', path: '/shopify/price', icon: Tags },
+      { title: 'Sync Logs', path: '/shopify/logs', icon: RefreshCcw },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { title: 'Users & Roles', path: '/system/users', icon: UserCog },
+      { title: 'Backup & Restore', path: '/system/backup', icon: DatabaseBackup },
+      { title: 'Settings', path: '/system/settings', icon: Settings },
+      { title: 'Audit Logs', path: '/system/audit', icon: Activity },
+      { title: 'Activity Log', path: '/system/activity', icon: ScrollText },
+    ],
+  },
+]

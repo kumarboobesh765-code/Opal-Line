@@ -1,0 +1,412 @@
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ColumnDef } from '@/lib/table'
+import {
+  ArrowDownToLine,
+  ArrowLeftRight,
+  ArrowUpFromLine,
+  CheckCircle2,
+  Loader2,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Truck,
+  XCircle,
+} from 'lucide-react'
+import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { StatCard } from '@/components/ui/stat-card'
+import { DataTable } from '@/components/ui/data-table'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { dbApi } from '@/lib/api'
+import type { InventoryLocation, Product, StockTransfer, TransferStatus } from '@/types'
+import { formatDateTime, formatNumber, formatWeight } from '@/lib/format'
+
+const statusVariant: Record<TransferStatus, { label: string; variant: 'success' | 'warning' | 'info' | 'muted' }> = {
+  pending: { label: 'Pending', variant: 'warning' },
+  'in-transit': { label: 'In Transit', variant: 'info' },
+  received: { label: 'Received', variant: 'success' },
+  cancelled: { label: 'Cancelled', variant: 'muted' },
+}
+
+export default function StockTransfersPage() {
+  const [transfers, setTransfers] = useState<StockTransfer[]>([])
+  const [locations, setLocations] = useState<InventoryLocation[]>([])
+  const [products, setProducts] = useState<Product[]>([])
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [receiveDialogOpen, setReceiveDialogOpen] = useState(false)
+  const [form, setForm] = useState({ product: '', from: '', to: '', qty: '' })
+
+  useEffect(() => {
+    Promise.all([dbApi.getStockTransfers(), dbApi.getInventoryLocations(), dbApi.getProducts()]).then(
+      ([t, l, p]) => {
+        setTransfers(t)
+        setLocations(l)
+        setProducts(p)
+        setLoading(false)
+      },
+    ).catch(() => setLoading(false))
+  }, [])
+
+  const load = useCallback(() => {
+    dbApi.getStockTransfers().then(setTransfers).catch(() => {})
+  }, [])
+
+  const counts = useMemo(
+    () => ({
+      pending: transfers.filter((t) => t.status === 'pending').length,
+      transit: transfers.filter((t) => t.status === 'in-transit').length,
+      received: transfers.filter((t) => t.status === 'received').length,
+      cancelled: transfers.filter((t) => t.status === 'cancelled').length,
+    }),
+    [transfers],
+  )
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return transfers.filter((t) => {
+      const matchQ =
+        !q ||
+        t.number.toLowerCase().includes(q) ||
+        t.product.toLowerCase().includes(q) ||
+        t.sku.toLowerCase().includes(q) ||
+        (t.from ?? '').toLowerCase().includes(q)
+      const matchStatus = !statusFilter || t.status === statusFilter
+      return matchQ && matchStatus
+    })
+  }, [transfers, query, statusFilter])
+
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleCreate = async () => {
+    const product = products.find((p) => p.id === form.product)
+    if (!product || !form.from || !form.to || !form.qty || form.from === form.to) return
+    const qty = Number(form.qty)
+    if (Number.isNaN(qty) || qty <= 0) {
+      setError('Enter a valid quantity')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await dbApi.create('inventory/transfers', {
+        number: `ST-2026-000${String(22 + transfers.length).padStart(3, '0')}`,
+        from: form.from,
+        to: form.to,
+        product: product.name,
+        sku: product.sku,
+        qty,
+        weight: Number((qty * product.netWeight).toFixed(1)),
+        initiatedBy: 'Arjun Mehta',
+        status: 'pending',
+        date: new Date().toISOString(),
+      })
+      setDialogOpen(false)
+      setForm({ product: '', from: '', to: '', qty: '' })
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create transfer')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const updateStatus = async (id: string, status: TransferStatus) => {
+    try {
+      await dbApi.update('inventory/transfers', id, { status })
+      load()
+    } catch {
+      window.alert('Failed to update transfer status')
+    }
+  }
+
+  const selectedProduct = products.find((p) => p.id === form.product)
+
+  const columns = useMemo<ColumnDef<StockTransfer>[]>(
+    () => [
+      {
+        accessorKey: 'number',
+        header: 'Transfer',
+        meta: { headerClassName: 'min-w-[140px]' },
+        cell: ({ row }) => (
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+              <ArrowLeftRight className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="font-medium text-foreground">{row.original.number}</p>
+              <p className="text-[11px] text-muted-foreground">{formatDateTime(row.original.date)}</p>
+            </div>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'product',
+        header: 'Product',
+        cell: ({ row }) => (
+          <div>
+            <p className="font-medium text-foreground">{row.original.product}</p>
+            <p className="text-[11px] text-muted-foreground">{row.original.sku}</p>
+          </div>
+        ),
+      },
+      {
+        id: 'route',
+        header: 'Route',
+        meta: { headerClassName: 'min-w-[240px]' },
+        cell: ({ row }) => (
+          <div className="flex items-center gap-1.5 text-[12.5px]">
+            <span className="max-w-[130px] truncate text-muted-foreground">{row.original.from}</span>
+            <ArrowRightIcon />
+            <span className="max-w-[130px] truncate font-medium text-foreground">{row.original.to}</span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'qty',
+        header: 'Qty',
+        meta: { align: 'right' as const },
+        cell: ({ row }) => <span className="tabular-nums font-medium text-foreground">{formatNumber(row.original.qty)} pcs</span>,
+      },
+      {
+        accessorKey: 'weight',
+        header: 'Weight',
+        meta: { align: 'right' as const },
+        cell: ({ row }) => <span className="tabular-nums text-muted-foreground">{formatWeight(row.original.weight)}</span>,
+      },
+      { accessorKey: 'initiatedBy', header: 'By', cell: ({ row }) => <span className="text-muted-foreground">{row.original.initiatedBy}</span> },
+      {
+        id: 'status',
+        header: 'Status',
+        meta: { align: 'center' as const },
+        cell: ({ row }) => {
+          const s = statusVariant[row.original.status]
+          return <Badge variant={s.variant} dot>{s.label}</Badge>
+        },
+      },
+      {
+        id: 'actions',
+        header: '',
+        meta: { align: 'right' as const, headerClassName: 'w-10' },
+        cell: ({ row }) => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
+              <DropdownMenuItem disabled={row.original.status === 'received'} onClick={() => updateStatus(row.original.id, 'received')}>
+                <CheckCircle2 className="h-3.5 w-3.5" /> Mark as Received
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={row.original.status === 'cancelled' || row.original.status === 'received'} onClick={() => updateStatus(row.original.id, 'cancelled')}>
+                <XCircle className="h-3.5 w-3.5" /> Cancel Transfer
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="text-red-600 focus:text-red-600">
+                <XCircle className="h-3.5 w-3.5" /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      },
+    ],
+    [],
+  )
+
+  return (
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 px-4 py-4 sm:py-6 lg:px-6">
+      <PageHeader
+        title="Stock Transfer"
+        subtitle="Move silver stock between stores, warehouses and the workshop."
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setReceiveDialogOpen(true)}>
+              <ArrowDownToLine className="h-3.5 w-3.5" /> Receive
+            </Button>
+            <Dialog open={receiveDialogOpen} onOpenChange={setReceiveDialogOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Receive Transfer</DialogTitle>
+                  <DialogDescription>Select an in-transit transfer to mark as received.</DialogDescription>
+                </DialogHeader>
+                {transfers.filter((t) => t.status === 'in-transit').length === 0 ? (
+                  <p className="py-4 text-sm text-muted-foreground">No transfers in transit.</p>
+                ) : (
+                  <div className="max-h-[300px] space-y-2 overflow-y-auto">
+                    {transfers.filter((t) => t.status === 'in-transit').map((t) => (
+                      <div key={t.id} className="flex items-center justify-between rounded-lg border p-3">
+                        <div>
+                          <p className="font-medium text-foreground">{t.number}</p>
+                          <p className="text-xs text-muted-foreground">{t.product} · {t.qty} pcs · {t.from} → {t.to}</p>
+                        </div>
+                        <Button size="sm" onClick={() => { updateStatus(t.id, 'received'); setReceiveDialogOpen(false) }}>
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Receive
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm">
+                  <Plus className="h-4 w-4" /> New Transfer
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>New Stock Transfer</DialogTitle>
+                  <DialogDescription>
+                    Select a product and the locations to move stock between.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="transfer-product">Product</Label>
+                    <Select
+                      id="transfer-product"
+                      options={products.map((p) => ({ value: p.id, label: `${p.name} (${p.stock} in stock)` }))}
+                      value={form.product}
+                      onValueChange={(v) => setForm((f) => ({ ...f, product: v }))}
+                      placeholder="Select product"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="transfer-from">From</Label>
+                      <Select
+                        id="transfer-from"
+                        options={locations.map((l) => ({ value: l.name, label: l.name }))}
+                        value={form.from}
+                        onValueChange={(v) => setForm((f) => ({ ...f, from: v }))}
+                        placeholder="From location"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="transfer-to">To</Label>
+                      <Select
+                        id="transfer-to"
+                        options={locations.map((l) => ({ value: l.name, label: l.name }))}
+                        value={form.to}
+                        onValueChange={(v) => setForm((f) => ({ ...f, to: v }))}
+                        placeholder="To location"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="transfer-qty">Quantity (pcs)</Label>
+                    <Input
+                      id="transfer-qty"
+                      type="number"
+                      min={1}
+                      max={selectedProduct?.stock}
+                      placeholder={selectedProduct ? `Available: ${selectedProduct.stock}` : 'Enter quantity'}
+                      value={form.qty}
+                      onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))}
+                    />
+                  </div>
+                  {selectedProduct && form.qty ? (
+                    <p className="text-xs text-muted-foreground">
+                      Weight: <span className="font-medium text-foreground">{formatWeight(Number(form.qty) * selectedProduct.netWeight)}</span> · {selectedProduct.name}
+                    </p>
+                  ) : null}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={handleCreate}
+                    disabled={!form.product || !form.from || !form.to || form.from === form.to || !form.qty || Number(form.qty) < 1 || saving}
+                  >
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpFromLine className="h-4 w-4" />} Create Transfer
+                  </Button>
+                </DialogFooter>
+                {error ? <p className="px-6 pb-4 text-sm text-red-600">{error}</p> : null}
+              </DialogContent>
+            </Dialog>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard icon={ArrowUpFromLine} title="Pending" value={String(counts.pending)} accent="orange" support="Awaiting dispatch" />
+        <StatCard icon={Truck} title="In Transit" value={String(counts.transit)} accent="blue" support="On the move" />
+        <StatCard icon={CheckCircle2} title="Received" value={String(counts.received)} accent="green" support="Completed" />
+        <StatCard icon={XCircle} title="Cancelled" value={String(counts.cancelled)} accent="slate" support="Not dispatched" />
+      </div>
+
+      <Card>
+        <CardContent className="space-y-4 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2.5">
+            <div className="relative min-w-[240px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search transfer, product, SKU, location..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Select
+              options={[
+                { value: '', label: 'All Status' },
+                { value: 'pending', label: 'Pending' },
+                { value: 'in-transit', label: 'In Transit' },
+                { value: 'received', label: 'Received' },
+                { value: 'cancelled', label: 'Cancelled' },
+              ]}
+              value={statusFilter}
+              onValueChange={setStatusFilter}
+              className="w-[140px]"
+            />
+            <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+              <span><span className="font-semibold text-foreground">{filtered.length}</span> of {transfers.length} transfers</span>
+            </div>
+          </div>
+
+          <DataTable
+            columns={columns}
+            data={filtered}
+            loading={loading}
+            emptyMessage="No transfers match your filters"
+          />
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function ArrowRightIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M3 8h9M9 4.5L12.5 8 9 11.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}

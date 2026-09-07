@@ -1,0 +1,539 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ImagePlus, Loader2, Plus, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { dbApi, shopifyApi, uploadsApi } from '@/lib/api'
+import type { Product } from '@/types'
+import { cn, safeImageUrl } from '@/lib/utils'
+import { todayIST } from '@/lib/format'
+
+const API_ORIGIN = (import.meta.env.VITE_API_BASE ?? '').replace(/\/api\/v1$/, '') || ''
+
+export interface ProductDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  mode: 'add' | 'edit'
+  product?: Product | null
+  onSaved: (product: Product, pushed: boolean) => void
+}
+
+interface ProductForm {
+  name: string
+  sku: string
+  barcode: string
+  category: string
+  collection: string
+  purity: string
+  supplier: string
+  grossWeight: string
+  stoneWeight: string
+  netWeight: string
+  makingCharge: string
+  gst: string
+  silverRate: string
+  sellingPrice: string
+  compareAtPrice: string
+  stock: string
+  reorderLevel: string
+  vendor: string
+  productType: string
+  tags: string
+  image: string
+  images: string[]
+  trackInventory: boolean
+  chargeOnTax: boolean
+  pushToShopify: boolean
+}
+
+const CATEGORIES = [
+  'Rings',
+  'Chains',
+  'Bracelets',
+  'Earrings',
+  'Pendants',
+  'Mangalsutra',
+  'Anklets',
+  'Toe Rings',
+  'Nose Pins',
+  'Necklaces',
+  'Bangles',
+  'Accessories',
+]
+
+const EMPTY_FORM: ProductForm = {
+  name: '',
+  sku: '',
+  barcode: '',
+  category: 'Rings',
+  collection: '',
+  purity: '92.5',
+  supplier: '',
+  grossWeight: '',
+  stoneWeight: '',
+  netWeight: '',
+  makingCharge: '20',
+  gst: '3',
+  silverRate: '',
+  sellingPrice: '',
+  compareAtPrice: '',
+  stock: '',
+  reorderLevel: '5',
+  vendor: '',
+  productType: '',
+  tags: '',
+  image: '',
+  images: [],
+  trackInventory: true,
+  chargeOnTax: true,
+  pushToShopify: true,
+}
+
+function fromProduct(p: Product): ProductForm {
+  return {
+    name: p.name ?? '',
+    sku: p.sku ?? '',
+    barcode: p.barcode ?? '',
+    category: p.category ?? 'Rings',
+    collection: p.collection ?? '',
+    purity: p.purity != null ? String(p.purity) : '92.5',
+    supplier: p.supplier ?? '',
+    grossWeight: p.grossWeight != null ? String(p.grossWeight) : '',
+    stoneWeight: p.stoneWeight != null ? String(p.stoneWeight) : '',
+    netWeight: p.netWeight != null ? String(p.netWeight) : '',
+    makingCharge: p.makingCharge != null ? String(p.makingCharge) : '20',
+    gst: p.gst != null ? String(p.gst) : '3',
+    silverRate: p.silverRate != null ? String(p.silverRate) : '',
+    sellingPrice: p.sellingPrice != null ? String(p.sellingPrice) : '',
+    compareAtPrice: p.compareAtPrice != null ? String(p.compareAtPrice) : '',
+    stock: p.stock != null ? String(p.stock) : '',
+    reorderLevel: p.reorderLevel != null ? String(p.reorderLevel) : '5',
+    vendor: p.vendor ?? '',
+    productType: p.productType ?? '',
+    tags: p.tags ?? '',
+    image: p.image ?? '',
+    images: Array.isArray(p.images) ? p.images : [],
+    trackInventory: p.trackInventory ?? true,
+    chargeOnTax: p.chargeOnTax ?? true,
+    pushToShopify: false,
+  }
+}
+
+function computePrice(form: ProductForm): number {
+  const rate = parseFloat(form.silverRate)
+  const making = parseFloat(form.makingCharge)
+  const net = parseFloat(form.netWeight)
+  const gst = parseFloat(form.gst)
+  if (![rate, making, net, gst].every(Number.isFinite) || net <= 0 || rate <= 0) return NaN
+  return Math.round((rate + making) * net * (1 + gst / 100) * 100) / 100
+}
+
+function buildBody(form: ProductForm, silverRate: number, sellingPrice: number) {
+  return {
+    name: form.name.trim(),
+    sku: form.sku.trim(),
+    barcode: form.barcode.trim() || null,
+    category: form.category,
+    collection: form.collection.trim() || null,
+    purity: parseFloat(form.purity) || null,
+    supplier: form.supplier.trim() || null,
+    grossWeight: parseFloat(form.grossWeight) || null,
+    stoneWeight: parseFloat(form.stoneWeight) || null,
+    netWeight: parseFloat(form.netWeight) || null,
+    makingCharge: parseFloat(form.makingCharge) || null,
+    gst: parseFloat(form.gst) || null,
+    silverRate,
+    sellingPrice,
+    compareAtPrice: parseFloat(form.compareAtPrice) || null,
+    stock: parseInt(form.stock, 10) || 0,
+    reorderLevel: parseInt(form.reorderLevel, 10) || 0,
+    image: form.image.trim() || (form.images[0] ?? null),
+    images: form.images.length > 0 ? form.images : null,
+    vendor: form.vendor.trim() || null,
+    productType: form.productType.trim() || null,
+    tags: form.tags.trim() || null,
+    trackInventory: form.trackInventory,
+    chargeOnTax: form.chargeOnTax,
+  }
+}
+
+function Field({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={cn('space-y-1.5', className)}>
+      <Label>{label}</Label>
+      {children}
+    </div>
+  )
+}
+
+function SectionTitle({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wide text-foreground">{title}</p>
+      {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+    </div>
+  )
+}
+
+export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: ProductDialogProps) {
+  const [form, setForm] = useState<ProductForm>(EMPTY_FORM)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const set = <K extends keyof ProductForm>(key: K, value: ProductForm[K]) => setForm((f) => ({ ...f, [key]: value }))
+
+  useEffect(() => {
+    if (!open) return
+    const initial = mode === 'edit' && product ? fromProduct(product) : EMPTY_FORM
+    const p = computePrice(initial)
+    if (Number.isFinite(p)) initial.sellingPrice = String(Math.round(p * 100) / 100)
+    setForm(initial)
+    setError('')
+  }, [open, mode, product])
+
+  const setPricing = (key: 'silverRate' | 'makingCharge' | 'netWeight' | 'gst', value: string) => {
+    setForm((f) => {
+      const next = { ...f, [key]: value }
+      const p = computePrice(next)
+      if (Number.isFinite(p)) next.sellingPrice = String(Math.round(p * 100) / 100)
+      return next
+    })
+  }
+
+  const computed = computePrice(form)
+  const hasAutoPrice = Number.isFinite(computed)
+  const sellingLocked = hasAutoPrice
+
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const list = Array.from(files).slice(0, 20 - form.images.length)
+    if (list.length === 0) {
+      setError('Maximum 20 images per product')
+      return
+    }
+    setUploading(true)
+    setError('')
+    try {
+      const dataUrls = await Promise.all(
+        list.map(
+          (file) =>
+            new Promise<string>((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(String(reader.result))
+              reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
+              reader.readAsDataURL(file)
+            }),
+        ),
+      )
+      const res = await uploadsApi.uploadImages(dataUrls)
+      const saved = [...form.images, ...res.paths]
+      setForm((f) => ({
+        ...f,
+        images: saved,
+        // First image becomes the primary product photo automatically.
+        image: f.image.trim() || res.paths[0] || f.image,
+      }))
+      if (res.errors?.length) setError(res.errors.join('; '))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Image upload failed')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const removeImage = (path: string) => {
+    setForm((f) => {
+      const images = f.images.filter((x) => x !== path)
+      return { ...f, images, image: f.image === path ? (images[0] ?? '') : f.image }
+    })
+  }
+
+  const submit = async () => {
+    const name = form.name.trim()
+    const sku = form.sku.trim()
+    if (!name || !sku) {
+      setError('Title and SKU are required')
+      return
+    }
+    const silverRate = parseFloat(form.silverRate)
+    if (!Number.isFinite(silverRate) || silverRate <= 0) {
+      setError('A valid silver rate (₹/gm) is required to price the product')
+      return
+    }
+    const sellingPrice = parseFloat(form.sellingPrice) || computePrice(form)
+    if (!Number.isFinite(sellingPrice) || sellingPrice <= 0) {
+      setError('A valid selling price is required')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const body = buildBody(form, silverRate, sellingPrice)
+      let saved: Product
+      if (mode === 'edit' && product) {
+        saved = await dbApi.update<Product>('products', product.id, body)
+      } else {
+        saved = await dbApi.create<Product>('products', {
+          ...body,
+          hsn: '71131130',
+          shopifyStatus: 'not-listed',
+          status: 'active',
+          createdAt: todayIST(),
+        })
+      }
+      let pushed = false
+      const placeHolderId = saved.shopifyId != null && String(saved.shopifyId).trim().startsWith('#')
+      const createListing = mode === 'add' ? form.pushToShopify : (!saved.shopifyId || placeHolderId) && form.pushToShopify
+      if (createListing) {
+        const result = await shopifyApi.pushProducts([saved.id])
+        pushed = result.created > 0 || result.errors.length === 0
+        if (result.created > 0 && form.trackInventory && (saved.stock ?? 0) > 0) {
+          try {
+            await shopifyApi.pushInventory([saved.id])
+          } catch {
+            // Inventory push is best-effort here; it can be retried from the Shopify tools.
+          }
+        }
+      } else if (mode === 'edit' && saved.shopifyId && !String(saved.shopifyId).trim().startsWith('#')) {
+        const priceChanged =
+          Number(saved.sellingPrice ?? 0) !== Number(product?.sellingPrice ?? 0) ||
+          Number(saved.compareAtPrice ?? 0) !== Number(product?.compareAtPrice ?? 0)
+        if (priceChanged) {
+          try {
+            const r = await shopifyApi.updateProductPrice(saved.id)
+            pushed = r.updated === 1
+          } catch {
+            // Best-effort; the local price is saved and can be pushed from Shopify → Price tools.
+          }
+        }
+      }
+      onOpenChange(false)
+      onSaved(saved, pushed)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save product')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{mode === 'edit' ? 'Edit Product' : 'Add Product'}</DialogTitle>
+          <DialogDescription>
+            {mode === 'edit'
+              ? 'Update the product in the billing software. Shopify options are only used when "Push to Shopify" is on.'
+              : 'Create a product in the billing software. Shopify options (title, SKU, inventory tracking, photo, vendor and tags) are pushed when "Push to Shopify" is on.'}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <div className="space-y-3">
+            <SectionTitle title="Basic details" />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Title *" className="col-span-2">
+                <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Silver Classic Ring" />
+              </Field>
+              <Field label="SKU *">
+                <Input value={form.sku} onChange={(e) => set('sku', e.target.value)} placeholder="e.g. SLV-RNG-00001" />
+              </Field>
+              <Field label="Barcode">
+                <Input value={form.barcode} onChange={(e) => set('barcode', e.target.value)} placeholder="12-digit EAN" />
+              </Field>
+              <Field label="Category">
+                <Select
+                  options={[...CATEGORIES, 'Other'].map((c) => ({ value: c, label: c }))}
+                  value={form.category}
+                  onValueChange={(v) => set('category', v)}
+                />
+              </Field>
+              <Field label="Collection">
+                <Select
+                  options={[...CATEGORIES, 'Other'].map((c) => ({ value: c, label: c }))}
+                  value={form.collection}
+                  onValueChange={(v) => set('collection', v)}
+                />
+              </Field>
+              <Field label="Purity %">
+                <Input type="number" step="0.1" value={form.purity} onChange={(e) => set('purity', e.target.value)} />
+              </Field>
+              <Field label="Supplier">
+                <Input value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. Goyal Silver House" />
+              </Field>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <SectionTitle title="Weight & pricing" />
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Gross weight (g)">
+                <Input type="number" step="0.01" value={form.grossWeight} onChange={(e) => set('grossWeight', e.target.value)} />
+              </Field>
+              <Field label="Stone weight (g)">
+                <Input type="number" step="0.01" value={form.stoneWeight} onChange={(e) => set('stoneWeight', e.target.value)} />
+              </Field>
+              <Field label="Net weight (g)">
+                <Input type="number" step="0.01" value={form.netWeight} onChange={(e) => setPricing('netWeight', e.target.value)} />
+              </Field>
+              <Field label="Silver rate (₹/g) *">
+                <Input type="number" step="0.01" value={form.silverRate} onChange={(e) => setPricing('silverRate', e.target.value)} />
+              </Field>
+              <Field label="Making charge (₹/g)">
+                <Input type="number" step="0.01" value={form.makingCharge} onChange={(e) => setPricing('makingCharge', e.target.value)} />
+              </Field>
+              <Field label="GST %">
+                <Input type="number" step="0.1" value={form.gst} onChange={(e) => setPricing('gst', e.target.value)} />
+              </Field>
+              <Field label="Selling price (₹)">
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={form.sellingPrice}
+                  onChange={(e) => set('sellingPrice', e.target.value)}
+                  disabled={sellingLocked}
+                  placeholder={hasAutoPrice ? 'Auto-calculated' : 'Enter price'}
+                />
+              </Field>
+              <Field label="Compare-at price (₹)">
+                <Input type="number" step="0.01" value={form.compareAtPrice} onChange={(e) => set('compareAtPrice', e.target.value)} placeholder="Optional strikethrough" />
+              </Field>
+              <Field label="Stock (pcs)">
+                <Input type="number" step="1" value={form.stock} onChange={(e) => set('stock', e.target.value)} />
+              </Field>
+            </div>
+            {hasAutoPrice ? (
+              <p className="text-[11px] text-muted-foreground">
+                Auto price from rate × net weight + making + GST: <span className="font-semibold text-foreground">₹{computed.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">Enter net weight and silver rate to auto-calculate the selling price.</p>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            <SectionTitle title="Shopify listing" hint={mode === 'edit' ? 'Pushing creates a new Shopify listing only for products not yet listed.' : 'Used when pushing the product to Shopify.'} />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Vendor">
+                <Input value={form.vendor} onChange={(e) => set('vendor', e.target.value)} placeholder="e.g. Opal Line" />
+              </Field>
+              <Field label="Product type">
+                <Input value={form.productType} onChange={(e) => set('productType', e.target.value)} placeholder="e.g. Jewelry" />
+              </Field>
+              <Field label="Tags" className="col-span-2">
+                <Input value={form.tags} onChange={(e) => set('tags', e.target.value)} placeholder="Comma separated, e.g. silver, handmade, gift" />
+              </Field>
+              <Field label="Product images" className="col-span-2">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2">
+                    {form.images.map((path) => {
+                      const preview = safeImageUrl(path) ?? (path.startsWith('/uploads/') ? `${API_ORIGIN}${path}` : undefined)
+                      return (
+                        <div key={path} className="group relative h-16 w-16 overflow-hidden rounded-md border bg-muted">
+                          {preview ? <img src={preview} alt="product" className="h-full w-full object-cover" /> : null}
+                          <button
+                            type="button"
+                            onClick={() => removeImage(path)}
+                            className="absolute inset-0 hidden items-center justify-center bg-black/50 text-white group-hover:flex"
+                            title="Remove image"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading || form.images.length >= 20}
+                      className="flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-md border border-dashed text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground disabled:opacity-50"
+                      title="Upload images (jpg, png, webp)"
+                    >
+                      {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                      <span className="text-[10px]">Add</span>
+                    </button>
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => void handleFiles(e.target.files)}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Up to 20 images. The first one is the main photo. All images are pushed to Shopify when the product is pushed.
+                  </p>
+                </div>
+              </Field>
+              <Field label="Or paste an image URL" className="col-span-2">
+                <Input value={form.image} onChange={(e) => set('image', e.target.value)} placeholder="https://... (Shopify fetches the photo)" />
+              </Field>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                <div>
+                  <p className="text-[13px] font-medium text-foreground">Track inventory</p>
+                  <p className="text-[11px] text-muted-foreground">Shopify manages stock for this product.</p>
+                </div>
+                <Switch checked={form.trackInventory} onCheckedChange={(v) => set('trackInventory', v)} />
+              </div>
+              <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                <div>
+                  <p className="text-[13px] font-medium text-foreground">Charge on tax</p>
+                  <p className="text-[11px] text-muted-foreground">Mark this product as taxable on Shopify. Tax is calculated by Shopify at checkout.</p>
+                </div>
+                <Switch checked={form.chargeOnTax} onCheckedChange={(v) => set('chargeOnTax', v)} />
+              </div>
+              <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                <div>
+                  <p className="text-[13px] font-medium text-foreground">Push to Shopify</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {mode === 'edit' ? 'Create the Shopify listing now if this product is not listed yet.' : 'Create the Shopify listing and push stock immediately.'}
+                  </p>
+                </div>
+                <Switch checked={form.pushToShopify} onCheckedChange={(v) => set('pushToShopify', v)} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="flex items-start gap-2.5 rounded-lg border border-red-200 bg-red-50/60 px-3 py-2 text-sm text-red-700">
+            <span className="mt-0.5 block h-2 w-2 shrink-0 rounded-full bg-red-600" />
+            <p>{error}</p>
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={submit} disabled={saving}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {saving
+              ? 'Saving...'
+              : mode === 'edit'
+                ? 'Save Changes'
+                : form.pushToShopify
+                  ? 'Create & Push to Shopify'
+                  : 'Create Product'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

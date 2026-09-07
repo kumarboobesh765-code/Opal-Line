@@ -1,0 +1,22 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const ENV_PATH = join(process.cwd(), '.env')
+
+export function upsertEnvVar(key: string, value: string): void {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(`^\\s*${escaped}\\s*=`)
+  let lines: string[] = []
+  if (existsSync(ENV_PATH)) {
+    lines = readFileSync(ENV_PATH, 'utf-8').split(/\r?\n/)
+  }
+  const newLine = `${key}=${value}`
+  const index = lines.findIndex((line) => pattern.test(line))
+  if (index >= 0) {
+    lines[index] = newLine
+  } else {
+    if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+    lines.push(newLine)
+  }
+  writeFileSync(ENV_PATH, lines.join('\n').trimEnd() + '\n', { mode: 0o600 })
+}

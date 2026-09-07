@@ -1,0 +1,47 @@
+appId: com.opalline.billing
+productName: Opal Line Billing
+copyright: Copyright © 2026 Opal Line Jewels LLP
+
+directories:
+  output: dist-electron
+  # buildResources: build
+
+files:
+  - electron/dist/**/*
+  - frontend/dist/**/*
+  - "!**/node_modules/**"
+  - "!backend/**"
+  - "!frontend/src/**"
+  - "!**/*.ts"
+  - "!**/tsconfig.json"
+
+asar: false
+
+extraResources:
+  - from: backend/dist
+    to: backend/dist
+  - from: backend/dist/node_modules
+    to: backend/dist/node_modules
+  - from: backend/package.json
+    to: backend/package.json
+  - from: backend/.env
+    to: backend/.env
+  - from: backend/drizzle
+    to: backend/drizzle
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Opal Line Billing
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true

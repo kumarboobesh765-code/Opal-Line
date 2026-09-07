@@ -1,0 +1,139 @@
+import 'dotenv/config'
+import { randomBytes } from 'node:crypto'
+import postgres from 'postgres'
+import argon2 from 'argon2'
+import { drizzle } from 'drizzle-orm/postgres-js'
+import * as schema from './schema'
+import {
+  activityLogs as activityLogSeed,
+  auditLogs as auditLogSeed,
+  bankAccounts as bankAccountSeed,
+  customers as customerSeed,
+  expenses as expenseSeed,
+  inventoryLocations as locationSeed,
+  ledgerEntries as ledgerSeed,
+  payments as paymentSeed,
+  products as productSeed,
+  purchaseInvoices as purchaseInvoiceSeed,
+  purchaseOrders as purchaseOrderSeed,
+  purchaseReturns as purchaseReturnSeed,
+  roleNames,
+  salesInvoiceItems as salesInvoiceItemSeed,
+  salesInvoices as salesInvoiceSeed,
+  salesOrders as salesOrderSeed,
+  salesReturns as salesReturnSeed,
+  settingsSeed,
+  silverRates as silverRateSeed,
+  stockTransfers as stockTransferSeed,
+  suppliers as supplierSeed,
+  syncLogs as syncLogSeed,
+  users as userSeed,
+} from './seedData'
+import { defaultRolePermissions } from '../rbac'
+
+const databaseUrl = process.env.DATABASE_URL
+
+if (!databaseUrl) {
+  console.error('DATABASE_URL is not set. Copy backend/.env.example to backend/.env and fill it in.')
+  process.exit(1)
+}
+
+async function main() {
+  const client = postgres(databaseUrl!, { max: 1 })
+  const db = drizzle(client, { schema })
+
+  console.log('Truncating existing data...')
+  for (const table of [
+    schema.salesInvoiceItems,
+    schema.salesInvoices,
+    schema.salesOrders,
+    schema.purchaseOrders,
+    schema.purchaseInvoices,
+    schema.salesReturns,
+    schema.purchaseReturns,
+    schema.stockTransfers,
+    schema.inventoryLocations,
+    schema.bankAccounts,
+    schema.ledgerEntries,
+    schema.expenses,
+    schema.payments,
+    schema.auditLogs,
+    schema.activityLogs,
+    schema.syncLogs,
+    schema.products,
+    schema.customers,
+    schema.suppliers,
+    schema.silverRates,
+    schema.users,
+    schema.roles,
+    schema.settings,
+    schema.sessions,
+    schema.loginAttempts,
+  ]) {
+    await db.delete(table)
+  }
+
+  console.log('Inserting seed data...')
+  await db.insert(schema.silverRates).values(silverRateSeed)
+  await db.insert(schema.roles).values(
+    roleNames.map((name, i) => ({
+      id: `ROLE${i + 1}`,
+      name,
+      description: `${name} role with default module permissions`,
+      permissions: defaultRolePermissions(name),
+      isSystem: true,
+      createdAt: new Date().toISOString(),
+    })),
+  )
+  await db.insert(schema.products).values(productSeed)
+  await db.insert(schema.customers).values(customerSeed)
+  await db.insert(schema.suppliers).values(supplierSeed)
+  await db.insert(schema.inventoryLocations).values(locationSeed)
+  await db.insert(schema.stockTransfers).values(stockTransferSeed)
+  await db.insert(schema.salesInvoices).values(salesInvoiceSeed)
+  await db.insert(schema.salesInvoiceItems).values(salesInvoiceItemSeed)
+  await db.insert(schema.salesOrders).values(salesOrderSeed)
+  await db.insert(schema.purchaseOrders).values(purchaseOrderSeed)
+  await db.insert(schema.purchaseInvoices).values(purchaseInvoiceSeed)
+  await db.insert(schema.salesReturns).values(salesReturnSeed)
+  await db.insert(schema.purchaseReturns).values(purchaseReturnSeed)
+  await db.insert(schema.bankAccounts).values(bankAccountSeed)
+  await db.insert(schema.ledgerEntries).values(ledgerSeed)
+  await db.insert(schema.expenses).values(expenseSeed)
+  await db.insert(schema.payments).values(paymentSeed)
+  await db.insert(schema.auditLogs).values(auditLogSeed)
+  await db.insert(schema.activityLogs).values(activityLogSeed)
+  await db.insert(schema.syncLogs).values(syncLogSeed)
+  // Seed admin password: never hardcode a real one. Read from env, or generate
+  // a random password and print it once so the first login is possible.
+  const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD?.trim()
+  const defaultPasswordHash = await argon2.hash(seedAdminPassword || `Opal-${randomBytes(6).toString('base64url')}`, { type: argon2.argon2id })
+  if (!seedAdminPassword) {
+    console.log(`Seed admin (arjun) password: ${seedAdminPassword || '(random — set SEED_ADMIN_PASSWORD to choose one)'}`)
+  }
+  const tempPasswordHash = await argon2.hash('Temp@' + randomBytes(8).toString('hex'), { type: argon2.argon2id })
+  await db.insert(schema.users).values(userSeed.map((u, i) => ({ 
+    ...u, 
+    passwordHash: i === 0 ? defaultPasswordHash : tempPasswordHash,
+    requirePasswordChange: true,
+  })))
+  await db.insert(schema.settings).values(settingsSeed)
+
+  const counts = {
+    silverRates: (await db.select().from(schema.silverRates)).length,
+    products: (await db.select().from(schema.products)).length,
+    customers: (await db.select().from(schema.customers)).length,
+    suppliers: (await db.select().from(schema.suppliers)).length,
+    invoices: (await db.select().from(schema.salesInvoices)).length,
+    orders: (await db.select().from(schema.salesOrders)).length,
+    users: (await db.select().from(schema.users)).length,
+  }
+  console.log('Seed complete:', counts)
+
+  await client.end()
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

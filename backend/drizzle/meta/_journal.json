@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786794472852,
+      "tag": "0000_heavy_ronan",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787122458434,
+      "tag": "0001_broken_killraven",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788499900657,
+      "tag": "0002_pretty_zarek",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788767400179,
+      "tag": "0003_add-product-images",
+      "breakpoints": true
+    }
+  ]
+}
