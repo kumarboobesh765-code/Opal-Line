@@ -28,6 +28,7 @@ import type {
   SalesReturn,
   SilverRate,
   SilverRatePoint,
+  ProfitAnalytics,
   StockCategory,
   StockTransfer,
   Supplier,
@@ -393,6 +394,8 @@ export const dbApi = {
     return request(`/db/dashboard/sales-overview?${q.toString()}`)
   },
   getTopProducts: (): Promise<TopProduct[]> => request('/db/dashboard/top-products'),
+  getProfitAnalytics: (months = 12): Promise<ProfitAnalytics> =>
+    request(`/db/dashboard/profit?months=${months}`),
   getPaymentStatus: (): Promise<{ segments: PaymentStatusSegment[]; total: number }> =>
     request('/db/dashboard/payment-status'),
   getSilverRateHistory: async (): Promise<SilverRatePoint[]> => {

@@ -12,6 +12,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  ScanBarcode,
   Search,
   ShoppingBag,
   Trash2,
@@ -159,6 +160,8 @@ export default function SalesOrdersPage() {
   const [note, setNote] = useState('')
   const [syncToShopify, setSyncToShopify] = useState(true)
   const [lineItems, setLineItems] = useState<OrderLineItem[]>([emptyLine()])
+  const [barcodeInput, setBarcodeInput] = useState('')
+  const [scanFeedback, setScanFeedback] = useState<{ ok: boolean; text: string } | null>(null)
 
   const [viewOrder, setViewOrder] = useState<SalesOrder | null>(null)
   const [invoiceSavingId, setInvoiceSavingId] = useState<string | null>(null)
@@ -491,6 +494,33 @@ export default function SalesOrdersPage() {
     )
   }
 
+  // Barcode scan: scanners type the code and press Enter instantly, so a plain
+  // input with an Enter handler works. Matches barcode first, then SKU (exact,
+  // case-insensitive). Re-scanning the same item bumps its quantity.
+  const handleBarcodeScan = () => {
+    const code = barcodeInput.trim()
+    if (!code) return
+    const p = products.find((x) => (x.barcode && x.barcode.trim() === code) || x.sku.toLowerCase() === code.toLowerCase())
+    setBarcodeInput('')
+    if (!p) {
+      setScanFeedback({ ok: false, text: `No product matches "${code}"` })
+      return
+    }
+    setScanFeedback({ ok: true, text: `Added ${p.name}${p.sellingPrice ? ` · ₹${p.sellingPrice.toFixed(2)}` : ''}` })
+    setLineItems((prev) => {
+      const existing = prev.find((li) => li.productId === p.id)
+      if (existing) {
+        return prev.map((li) => (li.key === existing.key ? { ...li, qty: li.qty + 1 } : li))
+      }
+      // Fill the empty first line if it's untouched, otherwise append
+      const firstEmpty = prev.length === 1 && !prev[0].productId && !prev[0].title
+      if (firstEmpty) {
+        return [{ ...prev[0], productId: p.id, title: p.name, sku: p.sku, price: p.sellingPrice ?? 0, qty: 1 }]
+      }
+      return [...prev, { key: crypto.randomUUID(), productId: p.id, title: p.name, sku: p.sku, qty: 1, price: p.sellingPrice ?? 0 }]
+    })
+  }
+
   const updateLineItem = (key: string, patch: Partial<OrderLineItem>) => {
     setLineItems((prev) => prev.map((li) => (li.key === key ? { ...li, ...patch } : li)))
   }
@@ -764,6 +794,30 @@ export default function SalesOrdersPage() {
                     <Plus className="h-3.5 w-3.5" /> Add Item
                   </Button>
                 </div>
+                {!editing ? (
+                  <div className="mb-3">
+                    <div className="flex items-end gap-2">
+                      <div className="min-w-0 flex-1">
+                        <Label className="text-xs text-muted-foreground">Scan barcode / SKU</Label>
+                        <Input
+                          value={barcodeInput}
+                          onChange={(e) => setBarcodeInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleBarcodeScan() } }}
+                          placeholder="Scan or type a barcode / SKU, then press Enter"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <Button variant="outline" size="sm" className="h-9" onClick={handleBarcodeScan} disabled={!barcodeInput.trim()}>
+                        <ScanBarcode className="h-3.5 w-3.5" /> Add
+                      </Button>
+                    </div>
+                    {scanFeedback ? (
+                      <p className={`mt-1.5 text-[11px] ${scanFeedback.ok ? 'text-success-700' : 'text-destructive'}`}>{scanFeedback.text}</p>
+                    ) : (
+                      <p className="mt-1.5 text-[11px] text-muted-foreground">Re-scanning an item increases its quantity.</p>
+                    )}
+                  </div>
+                ) : null}
                   {editing ? (
                     <p className="mb-2 text-[11px] text-muted-foreground">
                       Existing line items are not stored in the ERP. Add items below to change the total, or leave them blank to keep the current value.

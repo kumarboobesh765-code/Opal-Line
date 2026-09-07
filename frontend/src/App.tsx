@@ -10,6 +10,7 @@ import { FileQuestion } from 'lucide-react'
 import LoginPage from '@/pages/Login'
 
 const DashboardPage = lazy(() => import('@/pages/Dashboard'))
+const OwnerInsightsPage = lazy(() => import('@/pages/OwnerInsights'))
 const SilverRatePage = lazy(() => import('@/pages/SilverRate'))
 const SalesInvoicesPage = lazy(() => import('@/pages/SalesInvoices'))
 const InvoiceDetailPage = lazy(() => import('@/pages/InvoiceDetail'))
@@ -87,6 +88,7 @@ function App() {
               }
             >
             <Route path="/" element={guarded('dashboard', <DashboardPage />)} />
+            <Route path="/owner-insights" element={guarded('dashboard', <OwnerInsightsPage />)} />
             <Route path="/silver-rate" element={guarded('silver-rate', <SilverRatePage />)} />
 
             <Route path="/sales/invoices" element={guarded('sales', <SalesInvoicesPage />)} />

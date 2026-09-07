@@ -1,5 +1,5 @@
 import { Router, type Response } from 'express'
-import { and, desc, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, ne, sql } from 'drizzle-orm'
 import { db, schema } from '../db/client'
 import { CONSTANTS } from '../constants'
 
@@ -468,6 +468,124 @@ dashboardRouter.get('/dashboard/inventory-overview', async (_req, res) => {
       inventoryValue: round2(products.reduce((a, p) => a + num(p.stock) * num(p.sellingPrice), 0)),
       lowStock: products.filter((p) => num(p.stock) <= num(p.reorderLevel)).length,
       outOfStock: products.filter((p) => num(p.stock) === 0).length,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFIT ANALYTICS: owner-level profit trends, best sellers, expenses netting
+// ─────────────────────────────────────────────────────────────────────────────
+
+dashboardRouter.get('/dashboard/profit', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const months = Math.min(24, Math.max(3, Number(req.query.months) || 12))
+    const invoices = await loadInvoices()
+    const expenses = await db!.select({ amount: schema.expenses.amount, date: schema.expenses.date, category: schema.expenses.category }).from(schema.expenses)
+    const purchaseInvoices = await db!.select({ cost: schema.purchaseInvoices.cost, date: schema.purchaseInvoices.date }).from(schema.purchaseInvoices)
+
+    // Build the last N months (oldest first) keyed by YYYY-MM in IST
+    const monthKeys: string[] = []
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date()
+      d.setDate(1)
+      d.setMonth(d.getMonth() - i)
+      monthKeys.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`)
+    }
+    const monthOf = (dateVal: unknown) => String(dateVal ?? '').slice(0, 7)
+
+    // Revenue net of returns; COGS approximated from silver value + making charge
+    const returnsByMonth = new Map<string, number>()
+    const returns = await db!.select({ amount: schema.salesReturns.amount, date: schema.salesReturns.date }).from(schema.salesReturns)
+    for (const r of returns) {
+      const m = monthOf(r.date)
+      returnsByMonth.set(m, (returnsByMonth.get(m) ?? 0) + num(r.amount))
+    }
+
+    const monthly = monthKeys.map((m) => {
+      const rows = invoices.filter((i) => monthOf(i.date) === m)
+      const revenue = rows.reduce((a, r) => a + num(r.grandTotal), 0) - (returnsByMonth.get(m) ?? 0)
+      const cogs = rows.reduce((a, r) => a + num(r.silverValue) + num(r.makingCharge), 0)
+      const exp = expenses.filter((e) => monthOf(e.date) === m).reduce((a, e) => a + num(e.amount), 0)
+      const purchases = purchaseInvoices.filter((p) => monthOf(p.date) === m).reduce((a, p) => a + num(p.cost), 0)
+      return {
+        month: m,
+        revenue: round2(revenue),
+        cogs: round2(cogs),
+        grossProfit: round2(revenue - cogs),
+        grossMargin: revenue > 0 ? round2(((revenue - cogs) / revenue) * 100) : 0,
+        expenses: round2(exp),
+        purchases: round2(purchases),
+        netProfit: round2(revenue - cogs - exp),
+        invoices: rows.length,
+      }
+    })
+
+    // Best sellers by profit contribution (uses invoice line items)
+    const itemMap = new Map<string, { name: string; qty: number; revenue: number; profit: number }>()
+    const itemRows = await db!
+      .select({
+        sku: schema.salesInvoiceItems.sku,
+        product: schema.salesInvoiceItems.product,
+        qty: schema.salesInvoiceItems.qty,
+        amount: schema.salesInvoiceItems.amount,
+        weight: schema.salesInvoiceItems.weight,
+        silverRate: schema.salesInvoiceItems.silverRate,
+        makingCharge: schema.salesInvoiceItems.makingCharge,
+        invoiceDate: schema.salesInvoices.date,
+      })
+      .from(schema.salesInvoiceItems)
+      .innerJoin(schema.salesInvoices, eq(schema.salesInvoiceItems.invoiceId, schema.salesInvoices.id))
+    for (const it of itemRows) {
+      const key = String(it.sku ?? it.product ?? '')
+      if (!key) continue
+      const entry = itemMap.get(key) ?? { name: String(it.product ?? key), qty: 0, revenue: 0, profit: 0 }
+      entry.qty += num(it.qty)
+      entry.revenue += num(it.amount)
+      // Item-level profit: amount minus metal value (weight × rate)
+      entry.profit += num(it.amount) - num(it.weight) * num(it.silverRate)
+      itemMap.set(key, entry)
+    }
+    const bestSellers = [...itemMap.entries()]
+      .map(([sku, v]) => ({ sku, name: v.name, qty: v.qty, revenue: round2(v.revenue), profit: round2(v.profit) }))
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 10)
+
+    // Expense breakdown for the period
+    const expenseByCategory = new Map<string, number>()
+    const firstMonth = monthKeys[0]
+    for (const e of expenses) {
+      if (monthOf(e.date) < firstMonth) continue
+      const cat = String(e.category ?? 'Other')
+      expenseByCategory.set(cat, (expenseByCategory.get(cat) ?? 0) + num(e.amount))
+    }
+    const expenseBreakdown = [...expenseByCategory.entries()]
+      .map(([category, amount]) => ({ category, amount: round2(amount) }))
+      .sort((a, b) => b.amount - a.amount)
+
+    const totals = monthly.reduce(
+      (acc, m) => ({
+        revenue: acc.revenue + m.revenue,
+        grossProfit: acc.grossProfit + m.grossProfit,
+        expenses: acc.expenses + m.expenses,
+        netProfit: acc.netProfit + m.netProfit,
+      }),
+      { revenue: 0, grossProfit: 0, expenses: 0, netProfit: 0 },
+    )
+
+    res.json({
+      months: monthly,
+      totals: {
+        revenue: round2(totals.revenue),
+        grossProfit: round2(totals.grossProfit),
+        expenses: round2(totals.expenses),
+        netProfit: round2(totals.netProfit),
+        grossMargin: totals.revenue > 0 ? round2((totals.grossProfit / totals.revenue) * 100) : 0,
+      },
+      bestSellers,
+      expenseBreakdown,
     })
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' })

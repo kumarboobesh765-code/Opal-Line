@@ -49,6 +49,7 @@ export const navSections: NavSection[] = [
     label: 'Main',
     items: [
       { title: 'Dashboard', path: '/', icon: LayoutDashboard },
+      { title: 'Owner Insights', path: '/owner-insights', icon: BarChart3 },
       { title: 'Silver Rate', path: '/silver-rate', icon: Tags },
     ],
   },

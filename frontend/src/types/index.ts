@@ -107,6 +107,33 @@ export interface TopProduct {
   icon: string
 }
 
+export interface ProfitMonthPoint {
+  month: string
+  revenue: number
+  cogs: number
+  grossProfit: number
+  grossMargin: number
+  expenses: number
+  purchases: number
+  netProfit: number
+  invoices: number
+}
+
+export interface BestSellerRow {
+  sku: string
+  name: string
+  qty: number
+  revenue: number
+  profit: number
+}
+
+export interface ProfitAnalytics {
+  months: ProfitMonthPoint[]
+  totals: { revenue: number; grossProfit: number; expenses: number; netProfit: number; grossMargin: number }
+  bestSellers: BestSellerRow[]
+  expenseBreakdown: Array<{ category: string; amount: number }>
+}
+
 export interface PaymentStatusSegment {
   status: 'paid' | 'pending' | 'failed'
   label: string
@@ -243,6 +270,7 @@ export interface Invoice {
 export interface InvoiceItem {
   product: string
   sku: string
+  hsn?: string
   qty: number
   weight: number
   silverRate: number
