@@ -9,6 +9,7 @@ import { actorFromRequest, recordActivity } from '../activity'
 import { logger } from '../logger'
 import { pushRestoredDataToShopify } from '../shopify'
 import { getMasterKey } from '../lib/crypto'
+import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from '../notifications'
 
 export const backupRouter = Router()
 
@@ -1140,6 +1141,61 @@ backupRouter.delete('/files/:fileName', requirePermission('system', 'delete'), a
 // ─────────────────────────────────────────────────────────────────────────────
 // DOWNLOAD: Download a backup file as an attachment
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS: Test email, send daily summary, check low stock
+// ─────────────────────────────────────────────────────────────────────────────
+
+backupRouter.post('/notifications/test', requirePermission('system', 'edit'), async (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim() : process.env.NOTIFICATION_EMAIL?.trim()
+  if (!email) return res.status(400).json({ error: 'No email configured. Set NOTIFICATION_EMAIL in .env or provide email in request.' })
+  try {
+    const sent = await notifyBackupComplete(email, { type: 'Test', tables: 0, fileName: 'test-backup.json', recordCount: 0 })
+    res.json({ ok: sent, email })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to send test email: ' + (err instanceof Error ? err.message : 'Unknown') })
+  }
+})
+
+backupRouter.post('/notifications/low-stock', requirePermission('system', 'view'), async (_req, res) => {
+  const email = process.env.NOTIFICATION_EMAIL?.trim()
+  if (!email) return res.status(400).json({ error: 'NOTIFICATION_EMAIL not configured' })
+  const client = getRawClient()
+  if (!client) return res.status(503).json({ error: 'DB unavailable' })
+  try {
+    const products = await client.unsafe(
+      `SELECT name, sku, stock, reorder_level FROM products WHERE track_inventory != false AND stock IS NOT NULL AND reorder_level IS NOT NULL AND stock <= reorder_level`
+    )
+    if (products.length === 0) return res.json({ ok: true, message: 'No low stock items', count: 0 })
+    const sent = await notifyLowStock(email, products.map((p: any) => ({ name: p.name, sku: p.sku, stock: Number(p.stock), reorderLevel: Number(p.reorder_level) })))
+    res.json({ ok: sent, email, count: products.length })
+  } catch (err) {
+    res.status(500).json({ error: 'Low stock check failed' })
+  }
+})
+
+backupRouter.post('/notifications/daily-summary', requirePermission('system', 'edit'), async (_req, res) => {
+  const email = process.env.NOTIFICATION_EMAIL?.trim()
+  if (!email) return res.status(400).json({ error: 'NOTIFICATION_EMAIL not configured' })
+  const client = getRawClient()
+  if (!client) return res.status(503).json({ error: 'DB unavailable' })
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const [salesResult] = await client.unsafe(`SELECT COALESCE(SUM(grand_total), 0) as total FROM sales_invoices WHERE date::text = $1`, [today])
+    const [ordersResult] = await client.unsafe(`SELECT count(*) as c FROM sales_orders WHERE date::text = $1`, [today])
+    const [pendingResult] = await client.unsafe(`SELECT count(*) as c FROM sales_invoices WHERE payment_status != 'paid'`)
+    const [lowStockResult] = await client.unsafe(`SELECT count(*) as c FROM products WHERE track_inventory != false AND stock IS NOT NULL AND reorder_level IS NOT NULL AND stock <= reorder_level`)
+    const sent = await notifyDailySummary(email, {
+      todaySales: Number(salesResult.total),
+      todayOrders: Number(ordersResult.c),
+      pendingPayments: Number(pendingResult.c),
+      lowStockCount: Number(lowStockResult.c),
+    })
+    res.json({ ok: sent, email })
+  } catch (err) {
+    res.status(500).json({ error: 'Daily summary failed' })
+  }
+})
 
 backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'), (req, res) => {
   const fileName = req.params.fileName

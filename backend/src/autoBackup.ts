@@ -3,6 +3,7 @@ import { unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { exportScopeData, backupDirectory } from './routes/backup'
 import { logger } from './logger'
+import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from './notifications'
 
 export const AUTO_BACKUP_HOUR = 19
 export const AUTO_BACKUP_MINUTE = 0
@@ -53,6 +54,35 @@ async function runAutoBackup(): Promise<void> {
     await writeFile(path.join(dir, fileName), JSON.stringify(payload, null, 2), 'utf8')
     logger.info({ file: fileName, tables: Object.keys(result.data).length }, 'Auto backup completed')
     await pruneOldBackups()
+
+    // Send email notification if configured
+    try {
+      const email = process.env.NOTIFICATION_EMAIL?.trim()
+      if (email) {
+        await notifyBackupComplete(email, {
+          type: 'Full Backup',
+          tables: Object.keys(result.data).length,
+          fileName,
+        })
+        logger.info({ email }, 'Backup notification sent')
+      }
+    } catch (err) { logger.error({ err }, 'Backup notification failed') }
+
+    // Check low stock and send alert
+    try {
+      const email = process.env.NOTIFICATION_EMAIL?.trim()
+      if (email && result.data.products) {
+        const lowStock = (result.data.products as any[]).filter(
+          (p) => p.track_inventory !== false && p.stock != null && p.reorder_level != null && Number(p.stock) <= Number(p.reorder_level)
+        )
+        if (lowStock.length > 0) {
+          await notifyLowStock(email, lowStock.map((p) => ({
+            name: p.name, sku: p.sku, stock: Number(p.stock), reorderLevel: Number(p.reorder_level)
+          })))
+          logger.info({ count: lowStock.length }, 'Low stock notification sent')
+        }
+      }
+    } catch (err) { logger.error({ err }, 'Low stock notification failed') }
   } catch (err) {
     logger.error({ err }, 'Auto backup file write failed')
   }

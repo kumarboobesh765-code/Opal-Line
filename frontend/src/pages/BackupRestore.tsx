@@ -38,6 +38,7 @@ function BackupRestoreContent() {
   const [restoreTarget, setRestoreTarget] = useState<{ type: 'file'; fileName: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [notifBusy, setNotifBusy] = useState<string | null>(null)
 
   const reloadHistory = useCallback(() => {
     backupApi.getHistory().then(setHistory).catch(() => setHistory([])).finally(() => setHistoryLoading(false))
@@ -299,6 +300,53 @@ function BackupRestoreContent() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3 p-5">
+          <div className="flex items-center gap-2">
+            <Lock className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-semibold text-foreground">Email Notifications</h3>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Configure email alerts for backups, low stock, and daily summaries. Requires <code className="rounded bg-muted px-1.5 py-0.5 text-xs">RESEND_API_KEY</code> and <code className="rounded bg-muted px-1.5 py-0.5 text-xs">NOTIFICATION_EMAIL</code> in .env.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" disabled={notifBusy !== null} onClick={async () => {
+              setNotifBusy('test'); setMessage(null)
+              try {
+                const r = await backupApi.testNotification()
+                showMsg(r.ok, r.ok ? `Test email sent to ${r.email}` : 'Failed to send — check RESEND_API_KEY')
+              } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Failed') }
+              finally { setNotifBusy(null) }
+            }}>
+              {notifBusy === 'test' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Send Test Email
+            </Button>
+            <Button size="sm" variant="outline" disabled={notifBusy !== null} onClick={async () => {
+              setNotifBusy('lowstock'); setMessage(null)
+              try {
+                const r = await backupApi.sendLowStockAlert()
+                showMsg(r.ok, r.ok ? `Low stock alert sent (${r.count} items)` : 'Failed to send')
+              } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Failed') }
+              finally { setNotifBusy(null) }
+            }}>
+              {notifBusy === 'lowstock' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Low Stock Alert
+            </Button>
+            <Button size="sm" variant="outline" disabled={notifBusy !== null} onClick={async () => {
+              setNotifBusy('summary'); setMessage(null)
+              try {
+                const r = await backupApi.sendDailySummary()
+                showMsg(r.ok, r.ok ? 'Daily summary sent' : 'Failed to send')
+              } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Failed') }
+              finally { setNotifBusy(null) }
+            }}>
+              {notifBusy === 'summary' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Daily Summary
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

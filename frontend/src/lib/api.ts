@@ -661,4 +661,13 @@ export const backupApi = {
       method: 'POST',
       body: JSON.stringify({ keepLast }),
     }),
+  testNotification: (email?: string): Promise<{ ok: boolean; email: string }> =>
+    request('/backup/notifications/test', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  sendLowStockAlert: (): Promise<{ ok: boolean; count: number }> =>
+    request('/backup/notifications/low-stock', { method: 'POST' }),
+  sendDailySummary: (): Promise<{ ok: boolean }> =>
+    request('/backup/notifications/daily-summary', { method: 'POST' }),
 }
