@@ -280,6 +280,14 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
         { topic, imported: result.imported, updated: result.updated, ok: result.ok },
         'Webhook: orders reimported into database',
       )
+      // Auto-enrich: fetch full customer data via GraphQL for any incomplete orders
+      try {
+        const { enrichOrdersFromShopify } = await import('./shopifyDataEnhance')
+        const enriched = await enrichOrdersFromShopify()
+        logger.info({ enriched: enriched.enriched, failed: enriched.failed }, 'Auto-enrich: orders updated with full customer data')
+      } catch (err) {
+        logger.error({ err }, 'Auto-enrich after order webhook failed')
+      }
     } else if (topic.startsWith('customers/')) {
       await runSync(['customers'])
       logger.info({ topic }, 'Webhook: customers resynced')
@@ -370,6 +378,15 @@ app.post('/api/v1/shopify/sync', requirePermission('shopify', 'create'), validat
         } catch (e) {
           dbResults.orders = e instanceof Error ? e.message : 'failed'
         }
+      }
+      // Auto-enrich after sync: fetch full customer data for incomplete records
+      try {
+        const { enrichOrdersFromShopify, enrichCustomersFromShopify } = await import('./shopifyDataEnhance')
+        const enrichOrders = await enrichOrdersFromShopify()
+        const enrichCust = await enrichCustomersFromShopify()
+        dbResults.enrichment = `orders: ${enrichOrders.enriched} enriched, customers: ${enrichCust.enriched} enriched`
+      } catch (e) {
+        logger.error({ err: e }, 'Post-sync enrichment failed')
       }
     }
 
@@ -930,6 +947,23 @@ const server = app.listen(config.port, async () => {
   // Schedule the daily automated backup (7:00 PM local time).
   startAutoBackup()
   startSilverRateScheduler()
+
+  // Auto-enrich incomplete orders/customers on startup (background, non-blocking)
+  if (isConfigured()) {
+    setTimeout(async () => {
+      try {
+        const { enrichOrdersFromShopify, enrichCustomersFromShopify } = await import('./shopifyDataEnhance')
+        const orderResult = await enrichOrdersFromShopify()
+        const custResult = await enrichCustomersFromShopify()
+        logger.info({
+          ordersEnriched: orderResult.enriched, ordersFailed: orderResult.failed,
+          customersEnriched: custResult.enriched, customersFailed: custResult.failed,
+        }, 'Startup auto-enrich complete')
+      } catch (err) {
+        logger.error({ err }, 'Startup auto-enrich failed')
+      }
+    }, 5000) // 5s delay to let server fully start
+  }
 })
 
 server.on('error', (err) => {
