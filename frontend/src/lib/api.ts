@@ -670,4 +670,7 @@ export const backupApi = {
     request('/backup/notifications/low-stock', { method: 'POST' }),
   sendDailySummary: (): Promise<{ ok: boolean }> =>
     request('/backup/notifications/daily-summary', { method: 'POST' }),
+  downloadInvoicePDF: (invoiceId: string) => {
+    window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank')
+  },
 }

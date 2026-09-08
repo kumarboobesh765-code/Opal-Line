@@ -906,3 +906,18 @@ dbRouter.get('/search', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
+
+// ─── Invoice PDF Download ──────────────────────────────────────────────────
+
+dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const { generateInvoicePDF } = await import('../invoicePdf')
+    const pdf = await generateInvoicePDF(req.params.id)
+    if (!pdf) return res.status(404).json({ error: 'Invoice not found or PDF generation failed' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="invoice-${req.params.id}.pdf"`)
+    res.send(pdf)
+  } catch (err) {
+    res.status(500).json({ error: 'PDF generation failed' })
+  }
+})

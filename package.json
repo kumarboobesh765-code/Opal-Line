@@ -26,7 +26,11 @@
     "start:server": "npm run start -w backend",
     "electron:dev": "npm run build -w frontend && npx tsx electron/main.ts",
     "electron:compile": "cd electron && npx tsc",
-    "electron:build": "node scripts/build-desktop.js"
+    "electron:build": "node scripts/build-desktop.js",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
   },
   "devDependencies": {
     "concurrently": "^10.0.4",
