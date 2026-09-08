@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises'
+import { unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { exportScopeData, backupDirectory } from './routes/backup'
 import { logger } from './logger'
@@ -51,6 +52,7 @@ async function runAutoBackup(): Promise<void> {
     }
     await writeFile(path.join(dir, fileName), JSON.stringify(payload, null, 2), 'utf8')
     logger.info({ file: fileName, tables: Object.keys(result.data).length }, 'Auto backup completed')
+    await pruneOldBackups()
   } catch (err) {
     logger.error({ err }, 'Auto backup file write failed')
   }
@@ -66,10 +68,51 @@ function schedule(): void {
   timer.unref()
 }
 
+const KEEP_BACKUPS = 15
+const PRE_RESTORE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+async function pruneOldBackups(): Promise<void> {
+  try {
+    const dir = backupDirectory()
+    await mkdir(dir, { recursive: true })
+    const names = (await readdir(dir)).filter(n => n.endsWith('.json'))
+    const files: Array<{ name: string; exportedAt: string | null; isPreRestore: boolean }> = []
+    for (const name of names) {
+      try {
+        const raw = await readFile(path.join(dir, name), 'utf8')
+        const parsed = JSON.parse(raw)
+        const meta = parsed._backup as { exportedAt?: string; isPreRestore?: boolean } | undefined
+        files.push({ name, exportedAt: meta?.exportedAt ?? null, isPreRestore: meta?.isPreRestore === true })
+      } catch {
+        files.push({ name, exportedAt: null, isPreRestore: false })
+      }
+    }
+
+    const deletable = files.filter(f => !f.isPreRestore).sort((a, b) => (b.exportedAt ?? '').localeCompare(a.exportedAt ?? ''))
+    const toDelete = deletable.slice(KEEP_BACKUPS)
+
+    const cutoff = new Date(Date.now() - PRE_RESTORE_MAX_AGE_MS).toISOString()
+    const oldPreRestore = files.filter(f => f.isPreRestore && f.exportedAt && f.exportedAt < cutoff)
+
+    const deleted: string[] = []
+    for (const f of [...toDelete, ...oldPreRestore]) {
+      try {
+        unlinkSync(path.join(dir, f.name))
+        deleted.push(f.name)
+      } catch { /* skip */ }
+    }
+    if (deleted.length > 0) {
+      logger.info({ deleted: deleted.length, kept: files.length - deleted.length }, 'Auto-pruned old backups')
+    }
+  } catch (err) {
+    logger.error({ err }, 'Backup auto-prune failed')
+  }
+}
+
 export function startAutoBackup(): void {
   if (timer) return
   schedule()
-  logger.info({ next: istFileStamp(new Date(Date.now() + msUntilNextRun())), timezone: IST_TIMEZONE }, 'Auto backup scheduled (daily 7:00 PM)')
+  logger.info({ next: istFileStamp(new Date(Date.now() + msUntilNextRun())), timezone: IST_TIMEZONE, keepLast: KEEP_BACKUPS }, 'Auto backup scheduled (daily 7:00 PM)')
 }
 
 export function stopAutoBackup(): void {
