@@ -2133,8 +2133,9 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
                 city: city ?? existingCustomer.city,
                 emailVerified: verifiedEmail ?? existingCustomer.emailVerified,
                 shopifyId: existingCustomer.shopifyId ?? customerId,
-                orders: (ordersCount ?? existingCustomer.orders ?? 0) + 1,
-                totalSpent: Math.round((Number(existingCustomer.totalSpent ?? 0) + value) * 100) / 100,
+                // Platform-reported stats are authoritative — never accumulate on top of them.
+                ...(ordersCount != null ? { orders: ordersCount } : {}),
+                ...(cust?.total_spent != null ? { totalSpent: Math.round(Number(cust.total_spent) * 100) / 100 } : {}),
                 status: existingCustomer.status ?? 'active',
               })
               .where(eq(schema.customers.id, existingCustomer.id))
@@ -2150,7 +2151,7 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
                 province: province ?? null,
                 shopifyId: customerId,
                 emailVerified: verifiedEmail,
-                orders: ordersCount ?? 1,
+                orders: ordersCount ?? 0,
                 totalSpent,
                 status: 'active',
                 joined,

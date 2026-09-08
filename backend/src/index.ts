@@ -23,7 +23,9 @@ import { validate, createOrderSchema, updateOrderSchema, silverRateSchema, pushP
 import { logger } from './logger'
 import { CONSTANTS } from './constants'
 import { verifyShopifyWebhook } from './webhooks'
+import { recountCustomerStats } from './customerStats'
 import { startAutoBackup } from './autoBackup'
+import { startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
 
 const app = express()
@@ -664,7 +666,6 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
       const [existing] = identityConditions.length
         ? await tx.select().from(schema.customers).where(or(...identityConditions)).limit(1)
         : []
-      const orderValue = Math.round(value * 100) / 100
       if (existing) {
         await tx
           .update(schema.customers)
@@ -674,8 +675,6 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
             ...(phone ? { phone } : {}),
             ...(customerCity ? { city: customerCity } : {}),
             ...(draft?.customerId ? { shopifyId: draft.customerId } : {}),
-            orders: (existing.orders ?? 0) + 1,
-            totalSpent: Math.round((Number(existing.totalSpent ?? 0) + orderValue) * 100) / 100,
             status: existing.status ?? 'active',
           })
           .where(eq(schema.customers.id, existing.id))
@@ -687,8 +686,8 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
           phone: phone ?? null,
           city: customerCity ?? null,
           shopifyId: draft?.customerId ?? null,
-          orders: 1,
-          totalSpent: orderValue,
+          orders: 0,
+          totalSpent: 0,
           status: 'active',
           joined: now.toISOString().slice(0, 10),
         })
@@ -697,6 +696,14 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to create order'
     return res.status(400).json({ error: msg })
+  }
+
+  // Stats are derived, never accumulated: recount from real orders so the
+  // numbers can never drift from the underlying data.
+  try {
+    await recountCustomerStats('orders')
+  } catch (err) {
+    logger.warn({ err }, 'Customer stats recount failed after order create')
   }
 
   if (affectedProductIds.length > 0) {
@@ -922,6 +929,7 @@ const server = app.listen(config.port, async () => {
   await loadSecretsFromDb()
   // Schedule the daily automated backup (7:00 PM local time).
   startAutoBackup()
+  startSilverRateScheduler()
 })
 
 server.on('error', (err) => {

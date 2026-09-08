@@ -5,6 +5,7 @@ import { db, schema } from '../db/client'
 import { MODULES, MODULE_KEYS, computeUserPermissions, defaultRolePermissions, emptyPermissions } from '../rbac'
 import { requirePermission } from '../rbac'
 import { actorFromRequest, recordActivity } from '../activity'
+import { recountCustomerStatsBoth } from '../customerStats'
 import type { Permissions } from '../types'
 
 export const rbacRouter = Router()
@@ -38,6 +39,27 @@ function sanitizePermissions(value: unknown): Permissions {
 
 rbacRouter.get('/modules', (_req, res) => {
   res.json(MODULES)
+})
+
+// One-time repair: recount customers.orders / total_spent from real order and
+// invoice data. System-editors only — this rewrites derived stats in bulk.
+rbacRouter.post('/customers/recount-stats', requirePermission('system', 'edit'), async (_req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const result = await recountCustomerStatsBoth()
+    const actor = actorFromRequest(_req)
+    void recordActivity({
+      action: 'Recounted Customer Stats',
+      module: 'system',
+      entity: 'Customers',
+      details: `Recounted stats for ${result.orders} local and ${result.invoices} invoice-matched customer(s)`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Recount failed' })
+  }
 })
 
 rbacRouter.get('/roles', requirePermission('system', 'view'), async (_req, res) => {
