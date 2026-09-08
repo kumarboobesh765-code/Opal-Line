@@ -252,6 +252,10 @@ export interface Invoice {
   shopifyOrder: string
   customer: string
   customerEmail: string
+  customerPhone?: string
+  customerGstin?: string
+  customerState?: string
+  customerStateCode?: string
   items: InvoiceItem[]
   silverValue: number
   makingCharge: number
@@ -265,6 +269,11 @@ export interface Invoice {
   paymentId?: string
   status: 'paid' | 'draft' | 'issued' | 'overdue' | 'cancelled' | 'refunded'
   date: string
+  businessName?: string
+  businessGstin?: string
+  businessAddress?: string
+  businessPhone?: string
+  businessEmail?: string
 }
 
 export interface InvoiceItem {

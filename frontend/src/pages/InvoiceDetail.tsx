@@ -60,73 +60,130 @@ export default function InvoiceDetailPage() {
     const w = window.open('', '_blank', 'width=900,height=760')
     if (!w) return
     w.opener = null
-    // GST tax breakup: invoices are intra-state (CGST + SGST each at half the rate)
     const gstRate = Number(invoice.gst) || 0
     const taxable = Math.max(0, Number(invoice.subtotal) - Number(invoice.discount))
     const totalTax = Number(invoice.gstAmount) || 0
     const halfTax = Math.round((totalTax / 2) * 100) / 100
     const hsnCodes = [...new Set(invoice.items.map((i) => i.hsn).filter(Boolean))] as string[]
     const hsnDisplay = hsnCodes.length > 0 ? hsnCodes.join(', ') : '7113'
+    const totalWeight = invoice.items.reduce((a, i) => a + i.weight, 0)
+    const totalQty = invoice.items.reduce((a, i) => a + i.qty, 0)
     const itemRows = invoice.items
       .map(
-        (i) => `<tr>
-          <td>${escapeHtml(i.product)}<br/><small>${escapeHtml(i.sku)}</small></td>
-          <td align="center">${escapeHtml(i.hsn ?? hsnDisplay)}</td>
-          <td align="right">${i.qty}</td>
-          <td align="right">${i.weight.toFixed(2)} gm</td>
-          <td align="right">₹${i.silverRate.toFixed(2)}/g</td>
-          <td align="right">₹${i.makingCharge}/g</td>
-          <td align="right">${i.tax}%</td>
-          <td align="right">₹${i.amount.toFixed(2)}</td>
+        (i, idx) => `<tr style="${idx % 2 === 0 ? 'background:#f8f9fa;' : ''}">
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;">${escapeHtml(i.product)}<br/><span style="color:#6b728b;font-size:9px;">${escapeHtml(i.sku)}</span></td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${escapeHtml(i.hsn ?? hsnDisplay)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">${i.qty}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">${i.weight.toFixed(2)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">₹${i.silverRate.toFixed(2)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">₹${i.makingCharge.toFixed(2)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">${i.tax}%</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;font-weight:600;">₹${i.amount.toFixed(2)}</td>
         </tr>`,
       )
       .join('')
     w.document.write(`<!doctype html><html><head><title>Tax Invoice ${escapeHtml(invoice.number)}</title><style>
-      body{font-family:Arial,sans-serif;color:#111;margin:32px}
-      h1{font-size:20px;margin:0} .sub{color:#64748b;font-size:12px;margin-bottom:4px}
-      .gsthead{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:12px;margin-bottom:16px}
-      .badge{border:1.5px solid #111;padding:4px 12px;font-size:11px;font-weight:bold;letter-spacing:1px}
-      table{width:100%;border-collapse:collapse;font-size:11px;margin-top:16px}
-      th{text-align:left;background:#f1f5f9;padding:7px;border:1px solid #cbd5e1} td{padding:7px;border:1px solid #e2e8f0}
-      small{color:#64748b} .sum{float:right;font-size:12px;margin-top:16px;line-height:1.8;width:46%}
-      .sum table{font-size:11px} .sum b{font-size:15px} .bill{margin-top:24px;font-size:12px}
-      .bill b{display:block;margin-bottom:4px} .taxbreak{margin-top:8px}
-      .note{margin-top:28px;font-size:10px;color:#475569;line-height:1.6}
-      .amountinwords{margin-top:12px;font-size:11px;font-style:italic}
-      @media print{body{margin:12mm}}
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+      *{margin:0;padding:0;box-sizing:border-box;}
+      body{font-family:'Inter',Arial,sans-serif;color:#1f2937;margin:0;padding:24px;background:#fff;}
+      .header-banner{background:#1a1a2e;color:#fff;padding:16px 20px;border-radius:6px;margin-bottom:16px;}
+      .header-banner h1{font-size:20px;font-weight:700;margin-bottom:4px;letter-spacing:0.5px;}
+      .header-banner .sub{color:#a0aec0;font-size:9px;margin-bottom:2px;}
+      .badge{display:inline-block;background:#c8a951;color:#1a1a2e;padding:5px 16px;font-size:10px;font-weight:700;letter-spacing:1.5px;border-radius:3px;}
+      .info-row{display:flex;justify-content:space-between;margin-bottom:16px;}
+      .info-box{background:#f8f9fa;border-radius:4px;padding:12px 14px;flex:1;margin-right:8px;}
+      .info-box:last-child{margin-right:0;}
+      .info-box .label{font-size:8px;font-weight:600;color:#6b728b;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;}
+      .info-box .value{font-size:12px;font-weight:600;color:#1f2937;}
+      .info-box .detail{font-size:10px;color:#6b728b;margin-top:2px;}
+      .billto-row{display:flex;gap:12px;margin-bottom:16px;}
+      .billto-box{background:#f8f9fa;border-radius:4px;padding:12px 14px;flex:1;}
+      .billto-box .label{font-size:8px;font-weight:600;color:#6b728b;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+      .billto-box .name{font-size:13px;font-weight:700;color:#1f2937;margin-bottom:3px;}
+      .billto-box .detail{font-size:10px;color:#6b728b;line-height:1.5;}
+      table.items{width:100%;border-collapse:collapse;margin-bottom:16px;}
+      table.items thead th{background:#1a1a2e;color:#fff;padding:8px 10px;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;text-align:left;}
+      table.items thead th:last-child{text-align:right;}
+      table.items tbody td{padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;}
+      .totals-box{float:right;width:260px;background:#f8f9fa;border-radius:4px;padding:14px;margin-bottom:16px;}
+      .totals-box .row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px;color:#374151;}
+      .totals-box .divider{border-top:1px solid #d1d5db;margin:6px 0;}
+      .totals-box .grand{display:flex;justify-content:space-between;padding:6px 0 0;font-size:14px;font-weight:700;color:#1a1a2e;border-top:2px solid #c8a951;margin-top:6px;padding-top:8px;}
+      .amount-words{background:#fef3c7;border-radius:4px;padding:10px 14px;font-size:10px;color:#92400e;margin:16px 0;clear:both;}
+      .amount-words b{color:#78350f;}
+      .footer{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:16px;}
+      .declaration{font-size:9px;color:#6b728b;line-height:1.6;margin-bottom:16px;max-width:65%;}
+      .signatures{display:flex;justify-content:space-between;margin-top:20px;}
+      .sig-block{text-align:center;width:140px;}
+      .sig-line{border-top:1px solid #d1d5db;margin-top:40px;padding-top:4px;font-size:9px;color:#6b728b;}
+      .gen-footer{text-align:center;font-size:8px;color:#9ca3af;margin-top:16px;padding-top:8px;border-top:1px solid #f3f4f6;}
+      @media print{body{padding:12mm;font-size:10px;}.header-banner{background:#1a1a2e !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}table.items thead th{background:#1a1a2e !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
     </style></head><body>
-      <div class="gsthead">
-        <div>
-          <h1>OPAL LINE JEWELS LLP</h1>
-          <div class="sub">92.5 Sterling Silver Jewellery · GSTIN: ______________ · PAN: ______________</div>
-          <div class="sub">State: ______________ · State Code: __ · E-commerce sale via Shopify</div>
+      <div class="header-banner">
+        <h1>${escapeHtml(invoice.businessName || 'OPAL LINE JEWELS LLP')}</h1>
+        <div class="sub">92.5 Sterling Silver Jewellery · GSTIN: ${escapeHtml(invoice.businessGstin || '27AAACO1234F1Z5')}</div>
+        <div class="sub">State: Maharashtra (27) · E-commerce sale via Shopify</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div class="info-row" style="flex:1;margin-right:16px;">
+          <div class="info-box" style="margin-right:8px;">
+            <div class="label">Invoice No</div>
+            <div class="value">${escapeHtml(invoice.number)}</div>
+          </div>
+          <div class="info-box" style="margin-right:8px;">
+            <div class="label">Date</div>
+            <div class="value">${formatDateTime(invoice.date)}</div>
+          </div>
+          <div class="info-box">
+            <div class="label">Payment</div>
+            <div class="value">${escapeHtml(invoice.paymentMethod)}</div>
+            <div class="detail">${escapeHtml(invoice.paymentStatus)}</div>
+          </div>
         </div>
         <div class="badge">TAX INVOICE</div>
       </div>
-      <div class="bill" style="margin-top:0;display:flex;justify-content:space-between">
-        <div><b>Billed To</b>${escapeHtml(invoice.customer)}<br/>${escapeHtml(invoice.customerEmail) ?? ''}<br/>${escapeHtml(invoice.shopifyOrder ?? '')}</div>
-        <div style="text-align:right"><b>Invoice Details</b>Invoice No: <b>${escapeHtml(invoice.number)}</b><br/>Date: ${formatDateTime(invoice.date)}<br/>Payment: ${escapeHtml(invoice.paymentMethod)} (${escapeHtml(invoice.paymentStatus)})</div>
+      <div class="billto-row">
+        <div class="billto-box">
+          <div class="label">Bill To</div>
+          <div class="name">${escapeHtml(invoice.customer)}</div>
+          <div class="detail">${escapeHtml(invoice.customerEmail) ?? ''}${invoice.customerPhone ? '<br/>' + escapeHtml(invoice.customerPhone) : ''}</div>
+        </div>
+        <div class="billto-box">
+          <div class="label">Order Details</div>
+          <div class="value">${escapeHtml(invoice.shopifyOrder ?? '')}</div>
+          <div class="detail">Intra-state supply · GST @ ${gstRate}%</div>
+        </div>
       </div>
-      <table>
-        <thead><tr><th>Product</th><th align="center">HSN</th><th align="right">Qty</th><th align="right">Weight</th><th align="right">Silver Rate</th><th align="right">Making</th><th align="right">GST</th><th align="right">Amount</th></tr></thead>
+      <table class="items">
+        <thead><tr>
+          <th>Product</th><th style="text-align:center;">HSN</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Weight (g)</th><th style="text-align:right;">Rate (₹/g)</th><th style="text-align:right;">Making (₹)</th><th style="text-align:right;">GST</th><th style="text-align:right;">Amount (₹)</th>
+        </tr></thead>
         <tbody>${itemRows}</tbody>
+        <tfoot><tr style="background:#f8f9fa;font-weight:600;">
+          <td colspan="2" style="padding:8px 10px;border-top:2px solid #1a1a2e;font-size:10px;">Total: ${totalQty} item(s)</td>
+          <td style="padding:8px 10px;border-top:2px solid #1a1a2e;text-align:right;font-size:10px;">${totalQty}</td>
+          <td style="padding:8px 10px;border-top:2px solid #1a1a2e;text-align:right;font-size:10px;">${totalWeight.toFixed(2)} g</td>
+          <td colspan="3"></td>
+          <td style="padding:8px 10px;border-top:2px solid #1a1a2e;text-align:right;font-size:11px;">₹${Number(invoice.subtotal).toFixed(2)}</td>
+        </tr></tfoot>
       </table>
-      <div class="sum">
-        <table class="taxbreak">
-          <tr><td>Taxable Value</td><td align="right">₹${taxable.toFixed(2)}</td></tr>
-          <tr><td>CGST @ ${gstRate / 2}%</td><td align="right">₹${halfTax.toFixed(2)}</td></tr>
-          <tr><td>SGST @ ${gstRate / 2}%</td><td align="right">₹${halfTax.toFixed(2)}</td></tr>
-          <tr><td>Total GST</td><td align="right">₹${totalTax.toFixed(2)}</td></tr>
-          ${Number(invoice.discount) > 0 ? `<tr><td>Discount</td><td align="right">- ₹${Number(invoice.discount).toFixed(2)}</td></tr>` : ''}
-          <tr><td><b>GRAND TOTAL</b></td><td align="right"><b>₹${Number(invoice.grandTotal).toFixed(2)}</b></td></tr>
-        </table>
+      <div class="totals-box">
+        <div class="row"><span>Taxable Value</span><span>₹${taxable.toFixed(2)}</span></div>
+        <div class="row"><span>CGST @ ${gstRate / 2}%</span><span>₹${halfTax.toFixed(2)}</span></div>
+        <div class="row"><span>SGST @ ${gstRate / 2}%</span><span>₹${halfTax.toFixed(2)}</span></div>
+        <div class="row"><span>Total GST</span><span>₹${totalTax.toFixed(2)}</span></div>
+        ${Number(invoice.discount) > 0 ? `<div class="row" style="color:#dc2626;"><span>Discount</span><span>- ₹${Number(invoice.discount).toFixed(2)}</span></div>` : ''}
+        <div class="grand"><span>GRAND TOTAL</span><span>₹${Number(invoice.grandTotal).toFixed(2)}</span></div>
       </div>
-      <div class="amountinwords">Amount in words: ${numberToIndianWords(Number(invoice.grandTotal))} Rupees Only</div>
-      <div class="note">
-        <b>Declaration:</b> We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
-        Goods once sold will only be exchanged as per store policy. This is a computer-generated invoice.<br/><br/>
-        <div style="display:flex;justify-content:space-between;margin-top:24px"><span>Customer Signature: ____________</span><span>For OPAL LINE JEWELS LLP<br/><br/>Authorised Signatory: ____________</span></div>
+      <div class="amount-words"><b>Amount in Words:</b> ${numberToIndianWords(Number(invoice.grandTotal))} Rupees Only</div>
+      <div class="footer">
+        <div class="declaration"><b>Declaration:</b> We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct. Goods once sold will only be exchanged as per store policy. This is a computer-generated invoice.</div>
+        <div class="signatures">
+          <div class="sig-block"><div class="sig-line">Customer Signature</div></div>
+          <div class="sig-block"><div class="sig-line">For ${escapeHtml(invoice.businessName || 'OPAL LINE JEWELS LLP')}<br/><span style="font-size:8px;">Authorised Signatory</span></div></div>
+        </div>
       </div>
+      <div class="gen-footer">Generated by ${escapeHtml(invoice.businessName || 'Opal Line')} ERP · opalline.in</div>
       <script>window.onload=function(){window.focus();window.print();}</script>
     </body></html>`)
     w.document.close()

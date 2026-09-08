@@ -21,9 +21,12 @@ interface InvoiceData {
   customerPhone?: string
   customerEmail?: string
   customerAddress?: string
-  gstin?: string
+  customerGstin?: string
+  customerState?: string
+  customerStateCode?: string
   items: InvoiceItem[]
   subtotal: number
+  discount: number
   cgst: number
   sgst: number
   totalGst: number
@@ -32,11 +35,30 @@ interface InvoiceData {
   businessName: string
   businessAddress: string
   businessGstin: string
+  businessState: string
+  businessStateCode: string
   businessPhone: string
   businessEmail: string
+  paymentMethod: string
+  paymentStatus: string
+  shopifyOrder?: string
 }
 
-function numberToWords(num: number): string {
+// ─── Color palette ────────────────────────────────────────────────
+const COLORS = {
+  primary: '#1a1a2e',
+  accent: '#c8a951',
+  border: '#d1d5db',
+  lightBg: '#f8f9fa',
+  headerBg: '#1a1a2e',
+  headerText: '#ffffff',
+  text: '#1f2937',
+  muted: '#6b7280',
+  success: '#059669',
+  divider: '#e5e7eb',
+}
+
+function numberToIndianWords(num: number): string {
   if (num === 0) return 'Zero'
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
     'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
@@ -60,7 +82,13 @@ function numberToWords(num: number): string {
 }
 
 function formatCurrency(amount: number): string {
-  return '₹' + amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return '\u20B9' + amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function drawRoundedRect(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number, r: number, fill: string) {
+  doc.save()
+  doc.roundedRect(x, y, w, h, r).fill(fill)
+  doc.restore()
 }
 
 export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | null> {
@@ -68,18 +96,11 @@ export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | nu
   if (!client) return null
 
   try {
-    // Fetch invoice with items
-    const invoices = await client.unsafe(
-      `SELECT * FROM sales_invoices WHERE id = $1`, [invoiceId]
-    )
+    const invoices = await client.unsafe(`SELECT * FROM sales_invoices WHERE id = $1`, [invoiceId])
     if (invoices.length === 0) return null
     const inv = invoices[0] as any
 
-    const items = await client.unsafe(
-      `SELECT * FROM sales_invoice_items WHERE invoice_id = $1`, [invoiceId]
-    )
-
-    // Fetch settings
+    const items = await client.unsafe(`SELECT * FROM sales_invoice_items WHERE invoice_id = $1`, [invoiceId])
     const [settings] = await client.unsafe(`SELECT * FROM settings LIMIT 1`) as any[]
 
     const itemData: InvoiceItem[] = items.map((item: any) => ({
@@ -94,33 +115,37 @@ export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | nu
     }))
 
     const subtotal = Number(inv.subtotal || 0)
+    const discount = Number(inv.discount || 0)
     const gstRate = Number(settings?.gst_rate || 3)
-    const totalGst = Number(inv.total_gst || inv.gst || subtotal * gstRate / 100)
-    const cgst = totalGst / 2
-    const sgst = totalGst / 2
-    const grandTotal = Number(inv.grand_total || subtotal + totalGst)
+    const totalGst = Number(inv.total_gst || inv.gst || (subtotal - discount) * gstRate / 100)
+    const cgst = Math.round((totalGst / 2) * 100) / 100
+    const sgst = Math.round((totalGst / 2) * 100) / 100
+    const grandTotal = Number(inv.grand_total || subtotal - discount + totalGst)
 
     const data: InvoiceData = {
       id: inv.id,
       invoiceNumber: inv.invoice_number || inv.id,
-      date: inv.date ? new Date(inv.date).toLocaleDateString('en-IN') : new Date().toLocaleDateString('en-IN'),
+      date: inv.date ? new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
       customerName: inv.customer_name || inv.customer || 'Walk-in Customer',
       customerPhone: inv.customer_phone || inv.phone || undefined,
       customerEmail: inv.customer_email || inv.email || undefined,
       customerAddress: inv.customer_address || inv.address || undefined,
-      gstin: inv.customer_gstin || inv.gstin || undefined,
+      customerGstin: inv.customer_gstin || inv.gstin || undefined,
+      customerState: inv.customer_state || 'Maharashtra',
+      customerStateCode: inv.customer_state_code || '27',
       items: itemData,
-      subtotal,
-      cgst,
-      sgst,
-      totalGst,
-      grandTotal,
-      amountInWords: numberToWords(grandTotal),
+      subtotal, discount, cgst, sgst, totalGst, grandTotal,
+      amountInWords: numberToIndianWords(grandTotal),
       businessName: settings?.business_name || 'Opal Line Jewels LLP',
-      businessAddress: settings?.address || '',
-      businessGstin: settings?.gstin || '',
-      businessPhone: settings?.phone || '',
-      businessEmail: settings?.email || '',
+      businessAddress: settings?.address || 'Shop 4, Nariman Point, Mumbai - 400021',
+      businessGstin: settings?.gstin || '27AAACO1234F1Z5',
+      businessState: 'Maharashtra',
+      businessStateCode: '27',
+      businessPhone: settings?.phone || '+91 98200 00000',
+      businessEmail: settings?.email || 'hello@opalline.in',
+      paymentMethod: inv.payment_method || inv.payment || 'Online',
+      paymentStatus: inv.payment_status || 'paid',
+      shopifyOrder: inv.shopify_order || inv.shopifyOrder || undefined,
     }
 
     return createPDFBuffer(data)
@@ -132,116 +157,216 @@ export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | nu
 
 function createPDFBuffer(data: InvoiceData): Buffer {
   return new Promise((resolve) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 40 })
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 35, bottom: 35, left: 40, right: 40 },
+      info: {
+        Title: `Invoice ${data.invoiceNumber}`,
+        Author: data.businessName,
+        Subject: 'Tax Invoice',
+      },
+    })
     const chunks: Buffer[] = []
     doc.on('data', (chunk: Buffer) => chunks.push(chunk))
     doc.on('end', () => resolve(Buffer.concat(chunks)))
 
-    // ─── HEADER ─────────────────────────────────────────────
-    doc.fontSize(18).font('Helvetica-Bold').text(data.businessName, { align: 'center' })
-    doc.fontSize(9).font('Helvetica')
-    if (data.businessAddress) doc.text(data.businessAddress, { align: 'center' })
-    doc.text(`GSTIN: ${data.businessGstin} | Ph: ${data.businessPhone} | Email: ${data.businessEmail}`, { align: 'center' })
-    doc.moveDown(0.5)
+    const pageW = 595.28 // A4 width in points
+    const left = 40
+    const right = pageW - 40
+    const contentW = right - left
 
-    // Divider
-    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke()
-    doc.moveDown(0.5)
+    // ══════════════════════════════════════════════════════════════
+    // HEADER — Dark banner with business name
+    // ══════════════════════════════════════════════════════════════
+    drawRoundedRect(doc, left, 30, contentW, 52, 4, COLORS.headerBg)
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(COLORS.headerText)
+      .text(data.businessName, left + 16, 38, { width: contentW - 32 })
+    doc.fontSize(8).font('Helvetica').fillColor('#a0aec0')
+      .text(`${data.businessAddress}`, left + 16, 58, { width: contentW - 32 })
+    doc.fontSize(7.5).fillColor('#a0aec0')
+      .text(`GSTIN: ${data.businessGstin}  |  State: ${data.businessState} (${data.businessStateCode})  |  Ph: ${data.businessPhone}  |  ${data.businessEmail}`, left + 16, 68, { width: contentW - 32 })
 
-    // ─── TAX INVOICE title ──────────────────────────────────
-    doc.fontSize(14).font('Helvetica-Bold').text('TAX INVOICE', { align: 'center' })
-    doc.moveDown(0.5)
+    doc.y = 90
 
-    // ─── Invoice details ────────────────────────────────────
-    const leftX = 40
-    const rightX = 320
-    const startY = doc.y
+    // ══════════════════════════════════════════════════════════════
+    // TAX INVOICE badge + Invoice details
+    // ══════════════════════════════════════════════════════════════
+    // Badge
+    drawRoundedRect(doc, right - 110, 88, 110, 22, 3, COLORS.accent)
+    doc.fontSize(10).font('Helvetica-Bold').fillColor(COLORS.primary)
+      .text('TAX INVOICE', right - 110, 92, { width: 110, align: 'center' })
 
-    doc.fontSize(9).font('Helvetica')
-    doc.text(`Invoice No: ${data.invoiceNumber}`, leftX, startY)
-    doc.text(`Date: ${data.date}`, rightX, startY)
+    // Invoice info
+    doc.fontSize(9).font('Helvetica').fillColor(COLORS.text)
+    const infoY = 118
+    doc.font('Helvetica-Bold').text('Invoice No:', left, infoY)
+    doc.font('Helvetica').text(` ${data.invoiceNumber}`, left + 62, infoY)
+    doc.font('Helvetica-Bold').text('Date:', left + 220, infoY)
+    doc.font('Helvetica').text(` ${data.date}`, left + 245, infoY)
 
-    doc.text(`Customer: ${data.customerName}`, leftX, startY + 15)
-    if (data.customerPhone) doc.text(`Phone: ${data.customerPhone}`, rightX, startY + 15)
-    if (data.gstin) doc.text(`Customer GSTIN: ${data.gstin}`, leftX, startY + 30)
-
-    doc.y = startY + 45
-    doc.moveDown(0.5)
-
-    // ─── ITEMS TABLE ────────────────────────────────────────
-    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke()
-    doc.moveDown(0.3)
-
-    const tableTop = doc.y
-    const colWidths = [120, 50, 50, 50, 55, 65, 85]
-    const colX = [45, 165, 215, 265, 315, 375, 455]
-    const headers = ['Description', 'HSN', 'Qty', 'Net Wt(g)', 'Rate(₹/g)', 'Making(₹)', 'Amount(₹)']
-
-    // Table header
-    doc.fontSize(8).font('Helvetica-Bold')
-    headers.forEach((h, i) => doc.text(h, colX[i], tableTop, { width: colWidths[i], align: i === 0 ? 'left' : 'right' }))
-
-    doc.y = tableTop + 12
-    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke()
-    doc.moveDown(0.3)
-
-    // Table rows
-    doc.font('Helvetica').fontSize(8)
-    for (const item of data.items) {
-      const rowY = doc.y
-      doc.text(item.name, colX[0], rowY, { width: colWidths[0] })
-      doc.text(item.hsn, colX[1], rowY, { width: colWidths[1], align: 'right' })
-      doc.text(String(item.quantity), colX[2], rowY, { width: colWidths[2], align: 'right' })
-      doc.text(item.netWeight.toFixed(2), colX[3], rowY, { width: colWidths[3], align: 'right' })
-      doc.text(item.silverRate.toFixed(2), colX[4], rowY, { width: colWidths[4], align: 'right' })
-      doc.text(formatCurrency(item.makingCharge), colX[5], rowY, { width: colWidths[5], align: 'right' })
-      doc.text(formatCurrency(item.amount), colX[6], rowY, { width: colWidths[6], align: 'right' })
-      doc.y = rowY + 14
+    doc.font('Helvetica-Bold').text('Payment:', left, infoY + 14)
+    doc.font('Helvetica').text(` ${data.paymentMethod} (${data.paymentStatus})`, left + 52, infoY + 14)
+    if (data.shopifyOrder) {
+      doc.font('Helvetica-Bold').text('Order:', left + 220, infoY + 14)
+      doc.font('Helvetica').text(` ${data.shopifyOrder}`, left + 245, infoY + 14)
     }
 
-    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke()
-    doc.moveDown(0.5)
+    doc.y = infoY + 34
 
-    // ─── TOTALS ─────────────────────────────────────────────
-    const totalsX = 380
-    const totalsValX = 480
+    // ══════════════════════════════════════════════════════════════
+    // BILL TO / SHIP TO
+    // ══════════════════════════════════════════════════════════════
+    const billY = doc.y
+    drawRoundedRect(doc, left, billY, contentW, 52, 3, COLORS.lightBg)
 
-    doc.fontSize(9).font('Helvetica')
-    doc.text('Subtotal:', totalsX, doc.y, { width: 90, align: 'left' })
-    doc.text(formatCurrency(data.subtotal), totalsValX, doc.y - 12, { width: 80, align: 'right' })
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(COLORS.muted)
+      .text('BILL TO', left + 10, billY + 6)
+    doc.fontSize(9).font('Helvetica-Bold').fillColor(COLORS.text)
+      .text(data.customerName, left + 10, billY + 18, { width: 200 })
+    doc.fontSize(8).font('Helvetica').fillColor(COLORS.muted)
+    let custDetails = ''
+    if (data.customerPhone) custDetails += data.customerPhone
+    if (data.customerEmail) custDetails += (custDetails ? '  |  ' : '') + data.customerEmail
+    if (custDetails) doc.text(custDetails, left + 10, billY + 32, { width: 200 })
+    if (data.customerGstin) doc.text(`GSTIN: ${data.customerGstin}`, left + 10, billY + 44, { width: 200 })
 
-    doc.text(`CGST (${(data.totalGst / data.subtotal * 100 / 2).toFixed(1)}%):`, totalsX, doc.y, { width: 90, align: 'left' })
-    doc.text(formatCurrency(data.cgst), totalsValX, doc.y - 12, { width: 80, align: 'right' })
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(COLORS.muted)
+      .text('STATE', left + 300, billY + 6)
+    doc.fontSize(8).font('Helvetica').fillColor(COLORS.text)
+      .text(`${data.customerState} (${data.customerStateCode})`, left + 300, billY + 18)
 
-    doc.text(`SGST (${(data.totalGst / data.subtotal * 100 / 2).toFixed(1)}%):`, totalsX, doc.y, { width: 90, align: 'left' })
-    doc.text(formatCurrency(data.sgst), totalsValX, doc.y - 12, { width: 80, align: 'right' })
+    doc.y = billY + 60
 
-    doc.text('Total GST:', totalsX, doc.y, { width: 90, align: 'left' })
-    doc.text(formatCurrency(data.totalGst), totalsValX, doc.y - 12, { width: 80, align: 'right' })
+    // ══════════════════════════════════════════════════════════════
+    // ITEMS TABLE
+    // ══════════════════════════════════════════════════════════════
+    doc.y += 4
+    const tableTop = doc.y
 
-    doc.moveTo(380, doc.y).lineTo(555, doc.y).stroke()
-    doc.moveDown(0.3)
+    // Table header
+    drawRoundedRect(doc, left, tableTop, contentW, 18, 2, COLORS.headerBg)
+    const cols = [
+      { label: 'Description', x: left + 6, w: 140, align: 'left' as const },
+      { label: 'HSN', x: left + 150, w: 45, align: 'center' as const },
+      { label: 'Qty', x: left + 198, w: 35, align: 'center' as const },
+      { label: 'Net Wt (g)', x: left + 236, w: 55, align: 'right' as const },
+      { label: 'Rate (\u20B9/g)', x: left + 294, w: 55, align: 'right' as const },
+      { label: 'Making (\u20B9)', x: left + 352, w: 60, align: 'right' as const },
+      { label: 'Amount (\u20B9)', x: left + 416, w: 80, align: 'right' as const },
+    ]
 
-    doc.fontSize(11).font('Helvetica-Bold')
-    doc.text('Grand Total:', totalsX, doc.y, { width: 90, align: 'left' })
-    doc.text(formatCurrency(data.grandTotal), totalsValX, doc.y - 14, { width: 80, align: 'right' })
+    doc.fontSize(7.5).font('Helvetica-Bold').fillColor(COLORS.headerText)
+    for (const col of cols) {
+      doc.text(col.label, col.x, tableTop + 5, { width: col.w, align: col.align })
+    }
 
-    doc.moveDown(1)
+    doc.y = tableTop + 22
 
-    // ─── AMOUNT IN WORDS ────────────────────────────────────
-    doc.fontSize(8).font('Helvetica')
-    doc.text(`Amount in Words: ${data.amountInWords}`, 40, doc.y, { width: 515 })
+    // Table rows with alternating backgrounds
+    doc.font('Helvetica').fontSize(8).fillColor(COLORS.text)
+    for (let i = 0; i < data.items.length; i++) {
+      const item = data.items[i]
+      const rowY = doc.y
 
-    doc.moveDown(1.5)
+      // Alternating row background
+      if (i % 2 === 0) {
+        doc.save()
+        doc.rect(left, rowY - 2, contentW, 16).fill(COLORS.lightBg)
+        doc.restore()
+      }
 
-    // ─── FOOTER ─────────────────────────────────────────────
-    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke()
-    doc.moveDown(0.5)
-    doc.fontSize(8).font('Helvetica')
-    doc.text('Terms: Payment due within 30 days. Goods once sold will not be returned.', { align: 'center' })
-    doc.text('Thank you for your business!', { align: 'center' })
-    doc.moveDown(1)
-    doc.text(`Generated by ${data.businessName} ERP`, { align: 'center' })
+      doc.fillColor(COLORS.text)
+      doc.text(item.name, cols[0].x, rowY, { width: cols[0].w, align: cols[0].align })
+      doc.text(item.hsn, cols[1].x, rowY, { width: cols[1].w, align: cols[1].align })
+      doc.text(String(item.quantity), cols[2].x, rowY, { width: cols[2].w, align: cols[2].align })
+      doc.text(item.netWeight.toFixed(2), cols[3].x, rowY, { width: cols[3].w, align: cols[3].align })
+      doc.text(formatCurrency(item.silverRate), cols[4].x, rowY, { width: cols[4].w, align: cols[4].align })
+      doc.text(formatCurrency(item.makingCharge), cols[5].x, rowY, { width: cols[5].w, align: cols[5].align })
+      doc.font('Helvetica-Bold').text(formatCurrency(item.amount), cols[6].x, rowY, { width: cols[6].w, align: cols[6].align })
+      doc.font('Helvetica')
+
+      doc.y = rowY + 16
+    }
+
+    // Table bottom border
+    doc.save().moveTo(left, doc.y).lineTo(right, doc.y).lineWidth(0.5).stroke(COLORS.border).restore()
+    doc.y += 8
+
+    // ══════════════════════════════════════════════════════════════
+    // TOTALS — Right-aligned box
+    // ══════════════════════════════════════════════════════════════
+    const totalsX = left + 300
+    const totalsW = contentW - 300
+    const totalsY = doc.y
+
+    drawRoundedRect(doc, totalsX, totalsY, totalsW, data.discount > 0 ? 95 : 80, 3, COLORS.lightBg)
+
+    const labelX = totalsX + 10
+    const valX = totalsX + totalsW - 10
+    let ty = totalsY + 8
+
+    const gstRateHalf = data.subtotal > 0 ? ((data.totalGst / (data.subtotal - data.discount)) * 100 / 2).toFixed(1) : '1.5'
+
+    doc.fontSize(8).font('Helvetica').fillColor(COLORS.text)
+    doc.text('Taxable Value', labelX, ty, { width: 140 }); doc.text(formatCurrency(data.subtotal - data.discount), valX - 80, ty, { width: 80, align: 'right' }); ty += 14
+    doc.text(`CGST @ ${gstRateHalf}%`, labelX, ty, { width: 140 }); doc.text(formatCurrency(data.cgst), valX - 80, ty, { width: 80, align: 'right' }); ty += 14
+    doc.text(`SGST @ ${gstRateHalf}%`, labelX, ty, { width: 140 }); doc.text(formatCurrency(data.sgst), valX - 80, ty, { width: 80, align: 'right' }); ty += 14
+
+    if (data.discount > 0) {
+      doc.fillColor('#dc2626').text('Discount', labelX, ty, { width: 140 })
+      doc.text(`- ${formatCurrency(data.discount)}`, valX - 80, ty, { width: 80, align: 'right' }); ty += 14
+    }
+
+    // Grand total — highlighted
+    ty += 2
+    doc.save().moveTo(labelX, ty - 2).lineTo(valX, ty - 2).lineWidth(1).stroke(COLORS.accent).restore()
+    ty += 4
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(COLORS.primary)
+    doc.text('GRAND TOTAL', labelX, ty, { width: 140 })
+    doc.fillColor(COLORS.accent).text(formatCurrency(data.grandTotal), valX - 80, ty, { width: 80, align: 'right' })
+
+    doc.y = Math.max(doc.y, ty + 20)
+
+    // ══════════════════════════════════════════════════════════════
+    // AMOUNT IN WORDS
+    // ══════════════════════════════════════════════════════════════
+    doc.y += 4
+    drawRoundedRect(doc, left, doc.y, contentW, 20, 2, '#fef3c7')
+    doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#92400e')
+      .text('Amount in Words:', left + 8, doc.y + 5)
+    doc.fontSize(7.5).font('Helvetica').fillColor('#78350f')
+      .text(data.amountInWords, left + 95, doc.y + 5 - 14, { width: contentW - 110 })
+
+    doc.y += 28
+
+    // ══════════════════════════════════════════════════════════════
+    // DECLARATION + SIGNATURES
+    // ══════════════════════════════════════════════════════════════
+    doc.save().moveTo(left, doc.y).lineTo(right, doc.y).lineWidth(0.5).stroke(COLORS.divider).restore()
+    doc.y += 8
+
+    doc.fontSize(7).font('Helvetica').fillColor(COLORS.muted)
+    doc.text('Declaration: We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct. Goods once sold will only be exchanged as per store policy. This is a computer-generated invoice.', left, doc.y, { width: contentW * 0.65 })
+
+    // Signature area
+    const sigY = doc.y + 30
+    doc.fontSize(8).font('Helvetica').fillColor(COLORS.text)
+    doc.text('Customer Signature', left, sigY, { width: 120, align: 'center' })
+    doc.save().moveTo(left + 20, sigY + 14).lineTo(left + 100, sigY + 14).lineWidth(0.5).stroke(COLORS.border).restore()
+
+    doc.text(`For ${data.businessName}`, left + contentW - 140, sigY, { width: 140, align: 'center' })
+    doc.save().moveTo(left + contentW - 120, sigY + 14).lineTo(left + contentW - 20, sigY + 14).lineWidth(0.5).stroke(COLORS.border).restore()
+    doc.fontSize(7).fillColor(COLORS.muted).text('Authorised Signatory', left + contentW - 140, sigY + 18, { width: 140, align: 'center' })
+
+    doc.y = sigY + 35
+
+    // ══════════════════════════════════════════════════════════════
+    // FOOTER
+    // ══════════════════════════════════════════════════════════════
+    doc.save().moveTo(left, doc.y).lineTo(right, doc.y).lineWidth(0.3).stroke(COLORS.divider).restore()
+    doc.y += 6
+    doc.fontSize(6.5).font('Helvetica').fillColor(COLORS.muted)
+      .text(`Generated by ${data.businessName} ERP  |  opalline.in  |  This is a computer-generated invoice`, left, doc.y, { width: contentW, align: 'center' })
 
     doc.end()
   }) as any
@@ -258,14 +383,12 @@ export async function emailInvoicePDF(invoiceId: string, recipientEmail: string)
   const [inv] = await client.unsafe(`SELECT invoice_number FROM sales_invoices WHERE id = $1`, [invoiceId]) as any[]
   const invNumber = inv?.invoice_number || invoiceId
 
-  // For now, send as HTML email with invoice details (Resend doesn't support attachments directly via simple API)
-  // The PDF is available via the download endpoint
   return sendEmail({
     to: recipientEmail,
     subject: `Invoice ${invNumber} — Opal Line`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #16a34a;">📄 Invoice ${invNumber}</h2>
+        <h2 style="color: #1a1a2e;">\uD83D\uDCC4 Invoice ${invNumber}</h2>
         <p>Please find your invoice attached. You can also download it from the ERP.</p>
         <p style="color: #999; font-size: 12px;">Opal Line ERP — Invoice Notification</p>
       </div>
