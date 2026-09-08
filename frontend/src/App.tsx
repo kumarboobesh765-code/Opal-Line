@@ -35,6 +35,7 @@ const ShopifyInventoryPage = lazy(() => import('@/pages/ShopifyInventory'))
 const ShopifyCustomersPage = lazy(() => import('@/pages/ShopifyCustomers'))
 const ShopifyPricePage = lazy(() => import('@/pages/ShopifyPrice'))
 const ShopifySyncLogsPage = lazy(() => import('@/pages/ShopifySyncLogs'))
+const ShopifyDataImportPage = lazy(() => import('@/pages/ShopifyDataImport'))
 const ExpensesPage = lazy(() => import('@/pages/Expenses'))
 const PaymentsPage = lazy(() => import('@/pages/Payments'))
 const BankAccountsPage = lazy(() => import('@/pages/BankAccounts'))
@@ -127,6 +128,7 @@ function App() {
             <Route path="/shopify/customers" element={guarded('shopify', <ShopifyCustomersPage />)} />
             <Route path="/shopify/price" element={guarded('shopify', <ShopifyPricePage />)} />
             <Route path="/shopify/logs" element={guarded('shopify', <ShopifySyncLogsPage />)} />
+            <Route path="/shopify/data-import" element={guarded('shopify', <ShopifyDataImportPage />)} />
 
             <Route path="/system/users" element={guarded('system', <UsersPage />)} />
             <Route path="/system/backup" element={guarded('system', <BackupRestorePage />)} />

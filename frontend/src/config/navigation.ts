@@ -27,6 +27,7 @@ import {
   Undo2,
   UserCog,
   Users,
+  Upload,
   UsersRound,
   Wallet,
   type LucideIcon,
@@ -110,6 +111,7 @@ export const navSections: NavSection[] = [
       { title: 'Customers Sync', path: '/shopify/customers', icon: UsersRound },
       { title: 'Price Sync', path: '/shopify/price', icon: Tags },
       { title: 'Sync Logs', path: '/shopify/logs', icon: RefreshCcw },
+      { title: 'Data Import', path: '/shopify/data-import', icon: Upload },
     ],
   },
   {

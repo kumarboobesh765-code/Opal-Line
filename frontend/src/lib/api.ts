@@ -702,4 +702,20 @@ export const backupApi = {
     request('/backup/whatsapp/send-shipping', {
       method: 'POST', body: JSON.stringify({ phoneNumber, orderNumber, ...opts }),
     }),
+  enrichCustomers: (): Promise<{ ok: boolean; enriched: number; failed: number }> =>
+    request('/backup/shopify/enrich-customers', { method: 'POST' }),
+  enrichOrders: (): Promise<{ ok: boolean; enriched: number; failed: number }> =>
+    request('/backup/shopify/enrich-orders', { method: 'POST' }),
+  parseCSV: (csv: string): Promise<{ ok: boolean; rows: Record<string, string>[]; count: number; headers: string[] }> =>
+    request('/backup/shopify/parse-csv', {
+      method: 'POST', body: JSON.stringify({ csv }),
+    }),
+  importCustomersCSV: (rows: Record<string, string>[]): Promise<{ ok: boolean; imported: number; updated: number; errors: string[] }> =>
+    request('/backup/shopify/import-customers', {
+      method: 'POST', body: JSON.stringify({ rows }),
+    }),
+  importOrdersCSV: (rows: Record<string, string>[]): Promise<{ ok: boolean; imported: number; updated: number; errors: string[] }> =>
+    request('/backup/shopify/import-orders', {
+      method: 'POST', body: JSON.stringify({ rows }),
+    }),
 }

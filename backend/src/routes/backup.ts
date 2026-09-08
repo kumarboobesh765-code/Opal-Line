@@ -1262,6 +1262,78 @@ backupRouter.post('/whatsapp/send-low-stock', requirePermission('system', 'edit'
   res.json({ ok: sent, phoneNumber, count: products.length })
 })
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SHOPIFY DATA ENHANCEMENT: Enrich customers/orders, CSV import
+// ─────────────────────────────────────────────────────────────────────────────
+
+backupRouter.post('/shopify/enrich-customers', requirePermission('system', 'edit'), async (_req, res) => {
+  try {
+    const { enrichCustomersFromShopify } = await import('../shopifyDataEnhance')
+    const result = await enrichCustomersFromShopify()
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(500).json({ error: 'Customer enrichment failed: ' + (err instanceof Error ? err.message : 'Unknown') })
+  }
+})
+
+backupRouter.post('/shopify/enrich-orders', requirePermission('system', 'edit'), async (_req, res) => {
+  try {
+    const { enrichOrdersFromShopify } = await import('../shopifyDataEnhance')
+    const result = await enrichOrdersFromShopify()
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(500).json({ error: 'Order enrichment failed: ' + (err instanceof Error ? err.message : 'Unknown') })
+  }
+})
+
+backupRouter.post('/shopify/import-customers', requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const { importCustomersFromCSV } = await import('../shopifyDataEnhance')
+    const rows = req.body?.rows
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'rows array is required (each row is an object with name, email, phone, etc.)' })
+    }
+    const result = await importCustomersFromCSV(rows)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(500).json({ error: 'Customer import failed: ' + (err instanceof Error ? err.message : 'Unknown') })
+  }
+})
+
+backupRouter.post('/shopify/import-orders', requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const { importOrdersFromCSV } = await import('../shopifyDataEnhance')
+    const rows = req.body?.rows
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'rows array is required' })
+    }
+    const result = await importOrdersFromCSV(rows)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    res.status(500).json({ error: 'Order import failed: ' + (err instanceof Error ? err.message : 'Unknown') })
+  }
+})
+
+backupRouter.post('/shopify/parse-csv', requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const { csv } = req.body ?? {}
+    if (typeof csv !== 'string') return res.status(400).json({ error: 'csv string is required' })
+    const lines = csv.trim().split('\n')
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV must have header + at least 1 data row' })
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
+    const rows: Record<string, string>[] = []
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''))
+      const row: Record<string, string> = {}
+      headers.forEach((h, idx) => { row[h] = values[idx] || '' })
+      rows.push(row)
+    }
+    res.json({ ok: true, rows, count: rows.length, headers })
+  } catch (err) {
+    res.status(400).json({ error: 'CSV parse failed: ' + (err instanceof Error ? err.message : 'Unknown') })
+  }
+})
+
 backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'), (req, res) => {
   const fileName = req.params.fileName
   if (!fileName || !fileName.endsWith('.json')) {
