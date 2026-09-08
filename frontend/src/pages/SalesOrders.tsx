@@ -58,18 +58,33 @@ const statusMeta: Record<OrderStatus, { label: string; variant: 'success' | 'war
   refunded: { label: 'Refunded', variant: 'muted' },
 }
 
-const paymentMeta = {
-  paid: { label: 'Paid', variant: 'success' as const },
-  pending: { label: 'Pending', variant: 'warning' as const },
-  refunded: { label: 'Refunded', variant: 'muted' as const },
+const paymentMeta: Record<string, { label: string; variant: 'success' | 'warning' | 'muted' | 'info' }> = {
+  paid: { label: 'Paid', variant: 'success' },
+  pending: { label: 'Pending', variant: 'warning' },
+  refunded: { label: 'Refunded', variant: 'muted' },
+  Online: { label: 'Paid', variant: 'success' },
+  online: { label: 'Paid', variant: 'success' },
+  partially_paid: { label: 'Partial', variant: 'warning' },
+  partially_refunded: { label: 'Partial Refund', variant: 'info' },
+  voided: { label: 'Voided', variant: 'muted' },
 }
 
-const fulfillmentMeta = {
-  unfulfilled: { label: 'Unfulfilled', variant: 'muted' as const },
-  partial: { label: 'Partial', variant: 'warning' as const },
-  fulfilled: { label: 'Fulfilled', variant: 'success' as const },
-  processing: { label: 'Processing', variant: 'warning' as const },
-  returned: { label: 'Returned', variant: 'muted' as const },
+function getPaymentMeta(val: string) {
+  return paymentMeta[val] ?? { label: val || 'Unknown', variant: 'muted' as const }
+}
+
+const fulfillmentMeta: Record<string, { label: string; variant: 'success' | 'warning' | 'muted' | 'info' }> = {
+  unfulfilled: { label: 'Unfulfilled', variant: 'muted' },
+  pending: { label: 'Unfulfilled', variant: 'muted' },
+  partial: { label: 'Partial', variant: 'warning' },
+  fulfilled: { label: 'Fulfilled', variant: 'success' },
+  processing: { label: 'Processing', variant: 'warning' },
+  returned: { label: 'Returned', variant: 'muted' },
+  restocked: { label: 'Restocked', variant: 'info' },
+}
+
+function getFulfillmentMeta(val: string) {
+  return fulfillmentMeta[val] ?? { label: val || 'Unknown', variant: 'muted' as const }
 }
 
 interface OrderLineItem {
@@ -367,7 +382,7 @@ export default function SalesOrdersPage() {
         header: 'Payment',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const p = paymentMeta[row.original.payment]
+          const p = getPaymentMeta(row.original.payment)
           return <Badge variant={p.variant} dot>{p.label}</Badge>
         },
       },
@@ -376,7 +391,7 @@ export default function SalesOrdersPage() {
         header: 'Fulfillment',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const f = fulfillmentMeta[row.original.fulfillment]
+          const f = getFulfillmentMeta(row.original.fulfillment)
           return <Badge variant={f.variant}>{f.label}</Badge>
         },
       },

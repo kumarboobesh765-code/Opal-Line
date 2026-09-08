@@ -599,7 +599,11 @@ app.post('/api/v1/shopify/orders/sync', requirePermission('shopify', 'create'), 
 })
 
 app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create'), validate(createOrderSchema), async (req, res) => {
-  const { customer, email, phone, payment, fulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
+  const { customer, email, phone, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
+
+  // Normalize payment and fulfillment values to handle non-standard values from Shopify/webhooks
+  const payment = rawPayment === 'Online' || rawPayment === 'online' ? 'paid' : (rawPayment ?? 'pending')
+  const fulfillment = rawFulfillment === 'pending' ? 'unfulfilled' : (rawFulfillment ?? 'unfulfilled')
 
   const value = items.reduce((sum: number, li: { price: number; quantity: number }) => sum + (Number.isFinite(li.price) ? li.price : 0) * li.quantity, 0)
   const itemCount = items.reduce((sum: number, li: { quantity: number }) => sum + li.quantity, 0)
@@ -755,7 +759,11 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
       .limit(1)
     if (!existing) return res.status(404).json({ error: 'Order not found' })
 
-    const { customer, email, phone, payment, fulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
+    const { customer, email, phone, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
+
+    // Normalize payment and fulfillment values
+    const payment = rawPayment === 'Online' || rawPayment === 'online' ? 'paid' : rawPayment
+    const fulfillment = rawFulfillment === 'pending' ? 'unfulfilled' : rawFulfillment
 
     let value = Number(existing.value ?? 0)
     let itemCount = Number(existing.items ?? 0)
