@@ -158,6 +158,55 @@ const oneOf = (table: any, idCol: any) =>
 const s = schema
 
 dbRouter.get('/products', listOf(s.products, s.products.name))
+
+// Barcode / QR Code labels (must be before /products/:id to avoid param capture)
+dbRouter.get('/products/labels/presets', requirePermission('inventory', 'view'), (_req, res) => {
+  const { LABEL_PRESETS } = require('../barcodeLabels')
+  res.json(Object.entries(LABEL_PRESETS).map(([key, val]) => ({ key, ...(val as any) })))
+})
+
+dbRouter.get('/products/labels', requirePermission('inventory', 'view'), async (req, res) => {
+  try {
+    const { fetchAllProductLabels, generateLabelsPDF, LABEL_PRESETS } = await import('../barcodeLabels')
+    const preset = String(req.query.preset || 'zlabel-50x30')
+    const showPrice = req.query.price !== 'false'
+    const showWeight = req.query.weight !== 'false'
+    const showQR = req.query.qr !== 'false'
+    const products = await fetchAllProductLabels()
+    if (products.length === 0) return res.status(404).json({ error: 'No products found' })
+    const opts = LABEL_PRESETS[preset] ?? {}
+    const pdf = await generateLabelsPDF(products, { ...opts, showPrice, showWeight, showQR, businessName: 'Opal Line' })
+    if (!pdf) return res.status(500).json({ error: 'Label generation failed' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="product-labels-${Date.now()}.pdf"`)
+    res.send(pdf)
+  } catch (err) {
+    res.status(500).json({ error: 'Label generation failed' })
+  }
+})
+
+dbRouter.post('/products/labels', requirePermission('inventory', 'view'), async (req, res) => {
+  try {
+    const { fetchProductLabels, generateLabelsPDF, LABEL_PRESETS } = await import('../barcodeLabels')
+    const ids: string[] = req.body?.productIds ?? []
+    const preset = String(req.body?.preset || 'zlabel-50x30')
+    const showPrice = req.body?.showPrice !== false
+    const showWeight = req.body?.showWeight !== false
+    const showQR = req.body?.showQR !== false
+    if (ids.length === 0) return res.status(400).json({ error: 'productIds is required' })
+    const products = await fetchProductLabels(ids)
+    if (products.length === 0) return res.status(404).json({ error: 'Products not found' })
+    const opts = LABEL_PRESETS[preset] ?? {}
+    const pdf = await generateLabelsPDF(products, { ...opts, showPrice, showWeight, showQR, businessName: 'Opal Line' })
+    if (!pdf) return res.status(500).json({ error: 'Label generation failed' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="product-labels-${Date.now()}.pdf"`)
+    res.send(pdf)
+  } catch (err) {
+    res.status(500).json({ error: 'Label generation failed' })
+  }
+})
+
 dbRouter.get('/products/:id', oneOf(s.products, s.products.id))
 
 dbRouter.get('/customers', listOf(s.customers, s.customers.name))
@@ -921,3 +970,5 @@ dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req
     res.status(500).json({ error: 'PDF generation failed' })
   }
 })
+
+

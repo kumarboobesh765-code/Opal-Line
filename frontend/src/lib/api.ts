@@ -673,4 +673,33 @@ export const backupApi = {
   downloadInvoicePDF: (invoiceId: string) => {
     window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank')
   },
+  downloadAllLabels: (opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.preset) params.set('preset', opts.preset)
+    if (opts?.showPrice === false) params.set('price', 'false')
+    if (opts?.showWeight === false) params.set('weight', 'false')
+    if (opts?.showQR === false) params.set('qr', 'false')
+    window.open(`${API_BASE}/db/products/labels?${params.toString()}`, '_blank')
+  },
+  downloadProductLabels: (productIds: string[], opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) =>
+    request<Blob>('/db/products/labels', {
+      method: 'POST',
+      body: JSON.stringify({ productIds, ...opts }),
+    }),
+  getLabelPresets: (): Promise<Array<{ key: string; width: number; height: number; columns: number; rows: number }>> =>
+    request('/db/products/labels/presets'),
+  whatsappStatus: (): Promise<{ configured: boolean }> =>
+    request('/backup/whatsapp/status'),
+  sendInvoiceWhatsApp: (phoneNumber: string, invoiceId: string): Promise<{ ok: boolean }> =>
+    request('/backup/whatsapp/send-invoice', {
+      method: 'POST', body: JSON.stringify({ phoneNumber, invoiceId }),
+    }),
+  sendOrderWhatsApp: (phoneNumber: string, orderNumber: string, opts?: { customerName?: string; totalAmount?: number; itemCount?: number }): Promise<{ ok: boolean }> =>
+    request('/backup/whatsapp/send-order', {
+      method: 'POST', body: JSON.stringify({ phoneNumber, orderNumber, ...opts }),
+    }),
+  sendShippingWhatsApp: (phoneNumber: string, orderNumber: string, opts?: { customerName?: string; trackingId?: string; carrier?: string }): Promise<{ ok: boolean }> =>
+    request('/backup/whatsapp/send-shipping', {
+      method: 'POST', body: JSON.stringify({ phoneNumber, orderNumber, ...opts }),
+    }),
 }

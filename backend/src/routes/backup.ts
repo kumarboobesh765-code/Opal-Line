@@ -10,6 +10,7 @@ import { logger } from '../logger'
 import { pushRestoredDataToShopify } from '../shopify'
 import { getMasterKey } from '../lib/crypto'
 import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from '../notifications'
+import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateWhatsApp, sendLowStockWhatsApp, sendPaymentReminderWhatsApp, isWhatsAppConfigured } from '../whatsapp'
 
 export const backupRouter = Router()
 
@@ -1195,6 +1196,70 @@ backupRouter.post('/notifications/daily-summary', requirePermission('system', 'e
   } catch (err) {
     res.status(500).json({ error: 'Daily summary failed' })
   }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHATSAPP: Send invoice, order, and notification messages
+// ─────────────────────────────────────────────────────────────────────────────
+
+backupRouter.get('/whatsapp/status', requirePermission('system', 'view'), (_req, res) => {
+  res.json({ configured: isWhatsAppConfigured() })
+})
+
+backupRouter.post('/whatsapp/send-invoice', requirePermission('sales', 'create'), async (req, res) => {
+  if (!isWhatsAppConfigured()) return res.status(400).json({ error: 'WhatsApp not configured. Set WHATSAPP_API_KEY in .env' })
+  const { phoneNumber, invoiceId } = req.body ?? {}
+  if (!phoneNumber || !invoiceId) return res.status(400).json({ error: 'phoneNumber and invoiceId required' })
+  const client = getRawClient()
+  if (!client) return res.status(503).json({ error: 'DB unavailable' })
+  try {
+    const [inv] = await client.unsafe(`SELECT * FROM sales_invoices WHERE id = $1`, [invoiceId]) as any[]
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' })
+    const items = await client.unsafe(`SELECT count(*) as c FROM sales_invoice_items WHERE invoice_id = $1`, [invoiceId])
+    const sent = await sendInvoiceWhatsApp(phoneNumber, {
+      invoiceNumber: inv.invoice_number || invoiceId,
+      customerName: inv.customer_name || inv.customer || 'Customer',
+      grandTotal: Number(inv.grand_total || 0),
+      itemCount: Number(items[0]?.c || 0),
+    })
+    res.json({ ok: sent, phoneNumber })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to send WhatsApp' })
+  }
+})
+
+backupRouter.post('/whatsapp/send-order', requirePermission('sales', 'create'), async (req, res) => {
+  if (!isWhatsAppConfigured()) return res.status(400).json({ error: 'WhatsApp not configured' })
+  const { phoneNumber, orderNumber, customerName, totalAmount, itemCount } = req.body ?? {}
+  if (!phoneNumber || !orderNumber) return res.status(400).json({ error: 'phoneNumber and orderNumber required' })
+  const sent = await sendOrderConfirmationWhatsApp(phoneNumber, {
+    orderNumber, customerName: customerName || 'Customer', totalAmount: Number(totalAmount || 0), itemCount: Number(itemCount || 0),
+  })
+  res.json({ ok: sent, phoneNumber })
+})
+
+backupRouter.post('/whatsapp/send-shipping', requirePermission('sales', 'create'), async (req, res) => {
+  if (!isWhatsAppConfigured()) return res.status(400).json({ error: 'WhatsApp not configured' })
+  const { phoneNumber, orderNumber, customerName, trackingId, carrier } = req.body ?? {}
+  if (!phoneNumber || !orderNumber) return res.status(400).json({ error: 'phoneNumber and orderNumber required' })
+  const sent = await sendShippingUpdateWhatsApp(phoneNumber, {
+    orderNumber, customerName: customerName || 'Customer', trackingId, carrier,
+  })
+  res.json({ ok: sent, phoneNumber })
+})
+
+backupRouter.post('/whatsapp/send-low-stock', requirePermission('system', 'edit'), async (req, res) => {
+  if (!isWhatsAppConfigured()) return res.status(400).json({ error: 'WhatsApp not configured' })
+  const { phoneNumber } = req.body ?? {}
+  if (!phoneNumber) return res.status(400).json({ error: 'phoneNumber required' })
+  const client = getRawClient()
+  if (!client) return res.status(503).json({ error: 'DB unavailable' })
+  const products = await client.unsafe(
+    `SELECT name, stock FROM products WHERE track_inventory != false AND stock IS NOT NULL AND reorder_level IS NOT NULL AND stock <= reorder_level`
+  )
+  if (products.length === 0) return res.json({ ok: true, message: 'No low stock items', count: 0 })
+  const sent = await sendLowStockWhatsApp(phoneNumber, products.map((p: any) => ({ name: p.name, stock: Number(p.stock) })))
+  res.json({ ok: sent, phoneNumber, count: products.length })
 })
 
 backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'), (req, res) => {
