@@ -653,4 +653,12 @@ export const backupApi = {
     }),
   deleteFile: (fileName: string): Promise<{ ok: boolean }> =>
     request<{ ok: boolean }>(`/backup/files/${encodeURIComponent(fileName)}`, { method: 'DELETE' }),
+  downloadFile: (fileName: string) => {
+    window.open(`${API_BASE}/backup/files/${encodeURIComponent(fileName)}/download`, '_blank')
+  },
+  cleanup: (keepLast = 10): Promise<{ ok: boolean; deleted: string[]; kept: number }> =>
+    request(`/backup/cleanup`, {
+      method: 'POST',
+      body: JSON.stringify({ keepLast }),
+    }),
 }

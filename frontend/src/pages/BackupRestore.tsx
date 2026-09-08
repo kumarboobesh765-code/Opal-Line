@@ -37,6 +37,7 @@ function BackupRestoreContent() {
   const [restoreOpts, setRestoreOpts] = useState<{ restoreSilverRate: boolean; skipShopify: boolean; createSafetyBackup: boolean; tables: string[] }>({ restoreSilverRate: false, skipShopify: false, createSafetyBackup: true, tables: [] })
   const [restoreTarget, setRestoreTarget] = useState<{ type: 'file'; fileName: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [cleanupBusy, setCleanupBusy] = useState(false)
 
   const reloadHistory = useCallback(() => {
     backupApi.getHistory().then(setHistory).catch(() => setHistory([])).finally(() => setHistoryLoading(false))
@@ -118,6 +119,16 @@ function BackupRestoreContent() {
       reloadFiles()
     } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Delete failed') }
     finally { setDeleting(null) }
+  }
+
+  const doCleanup = async () => {
+    setCleanupBusy(true); setMessage(null)
+    try {
+      const result = await backupApi.cleanup(10)
+      showMsg(true, `Cleanup done: deleted ${result.deleted.length} backup(s), kept ${result.kept}.`)
+      reloadFiles()
+    } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Cleanup failed') }
+    finally { setCleanupBusy(false) }
   }
 
   const ordered = ['products', 'customers', 'orders', 'inventory', 'sales-reports', 'gst-reports', 'dashboard', 'full']
@@ -237,8 +248,14 @@ function BackupRestoreContent() {
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
-            Stored backups including daily auto-backups. Select a file to validate, dry-run, restore, or delete.
+            Stored backups including daily auto-backups. Select a file to validate, dry-run, restore, or download.
           </p>
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={doCleanup} disabled={cleanupBusy || busy !== null} className="text-xs">
+              {cleanupBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Cleanup Old Backups
+            </Button>
+          </div>
           {filesLoading ? (
             <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
           ) : files.length === 0 ? (
@@ -256,6 +273,10 @@ function BackupRestoreContent() {
                 <Button size="sm" onClick={() => selectedFile && startRestoreFlow(selectedFile)} disabled={!selectedFile || busy !== null}>
                   {busy?.startsWith('restore-') || busy?.startsWith('validate-') || busy?.startsWith('dryrun-') ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                   Validate & Restore
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => selectedFile && backupApi.downloadFile(selectedFile)} disabled={!selectedFile}>
+                  <Download className="h-4 w-4" />
+                  Download
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => selectedFile && deleteFile(selectedFile)} disabled={!selectedFile || deleting !== null || busy !== null} className="text-red-600 hover:text-red-700">
                   {deleting === selectedFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}

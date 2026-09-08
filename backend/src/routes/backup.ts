@@ -309,14 +309,24 @@ async function validateBackupFile(filePath: string): Promise<BackupValidation> {
   let parsed: Record<string, unknown>
   try {
     const testParsed = JSON.parse(raw)
-    // Check if it's a raw encrypted string (base64 with GCM tag)
-    if (typeof testParsed === 'string' && testParsed.length > 100) {
+    // Handle { _encrypted: true, payload: '...' } wrapper from /export-encrypted
+    if (testParsed && typeof testParsed === 'object' && '_encrypted' in testParsed && typeof (testParsed as any).payload === 'string') {
+      try {
+        const decrypted = decryptBackup((testParsed as any).payload)
+        parsed = JSON.parse(decrypted) as Record<string, unknown>
+        result.warnings.push('Backup file is encrypted (decrypted successfully)')
+      } catch {
+        result.valid = false
+        result.errors.push('Could not decrypt backup file — may be corrupted or wrong key')
+        return result
+      }
+    // Handle raw encrypted string (base64 with GCM tag, no wrapper)
+    } else if (typeof testParsed === 'string' && testParsed.length > 100) {
       try {
         const decrypted = decryptBackup(testParsed)
         parsed = JSON.parse(decrypted) as Record<string, unknown>
         result.warnings.push('Backup file is encrypted (decrypted successfully)')
       } catch {
-        // Not a valid encrypted backup, treat as invalid
         result.valid = false
         result.errors.push('Could not decrypt backup file — may be corrupted or wrong key')
         return result
@@ -376,6 +386,10 @@ async function validateBackupFile(filePath: string): Promise<BackupValidation> {
 
   if (result.totalRecords === 0) {
     result.warnings.push('Backup contains no records')
+  }
+
+  if (result.errors.length > 0) {
+    result.valid = false
   }
 
   return result
@@ -488,6 +502,12 @@ async function compareBackups(file1: string, file2: string): Promise<BackupDiff>
   const readBackup = async (fileName: string): Promise<Record<string, unknown[]>> => {
     const raw = await readFile(path.join(backupDirectory(), path.basename(fileName)), 'utf8')
     const parsed = JSON.parse(raw)
+    // Handle encrypted backups
+    if (parsed && typeof parsed === 'object' && '_encrypted' in parsed && typeof (parsed as any).payload === 'string') {
+      const decrypted = decryptBackup((parsed as any).payload)
+      const decryptedParsed = JSON.parse(decrypted) as Record<string, unknown>
+      return (decryptedParsed.data ?? decryptedParsed) as Record<string, unknown[]>
+    }
     return (parsed.data ?? parsed) as Record<string, unknown[]>
   }
 
@@ -1114,5 +1134,79 @@ backupRouter.delete('/files/:fileName', requirePermission('system', 'delete'), a
     res.json({ ok: true, fileName })
   } catch (err) {
     res.status(500).json({ error: 'Could not delete backup file' })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOWNLOAD: Download a backup file as an attachment
+// ─────────────────────────────────────────────────────────────────────────────
+
+backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'), (req, res) => {
+  const fileName = req.params.fileName
+  if (!fileName || !fileName.endsWith('.json')) {
+    return res.status(400).json({ error: 'Invalid file name' })
+  }
+  const filePath = path.join(backupDirectory(), path.basename(fileName))
+  if (!existsSync(filePath)) {
+    return res.status(404).json({ error: 'Backup file not found' })
+  }
+  res.download(filePath, fileName)
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLEANUP: Prune old backup files (keep last N per scope type)
+// ─────────────────────────────────────────────────────────────────────────────
+
+backupRouter.post('/cleanup', requirePermission('system', 'edit'), async (req, res) => {
+  const keepLast = typeof req.body?.keepLast === 'number' && req.body.keepLast > 0 ? req.body.keepLast : 10
+  try {
+    const dir = backupDirectory()
+    await mkdir(dir, { recursive: true })
+    const names = (await readdir(dir)).filter((n) => n.endsWith('.json'))
+
+    const files: Array<{ fileName: string; exportedAt: string | null; isPreRestore: boolean }> = []
+    for (const name of names) {
+      try {
+        const raw = await readFile(path.join(dir, name), 'utf8')
+        const parsed = JSON.parse(raw)
+        const meta = parsed._backup as { exportedAt?: string; isPreRestore?: boolean } | undefined
+        files.push({ fileName: name, exportedAt: meta?.exportedAt ?? null, isPreRestore: meta?.isPreRestore === true })
+      } catch {
+        files.push({ fileName: name, exportedAt: null, isPreRestore: false })
+      }
+    }
+
+    // Keep the newest files, delete the oldest beyond keepLast
+    const deletable = files.filter(f => !f.isPreRestore).sort((a, b) => (b.exportedAt ?? '').localeCompare(a.exportedAt ?? ''))
+    const toDelete = deletable.slice(keepLast)
+
+    // Always delete pre-restore backups older than 7 days
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const oldPreRestore = files.filter(f => f.isPreRestore && f.exportedAt && f.exportedAt < cutoff)
+
+    const deleted: string[] = []
+    for (const f of [...toDelete, ...oldPreRestore]) {
+      try {
+        const { unlinkSync } = await import('node:fs')
+        unlinkSync(path.join(dir, f.fileName))
+        deleted.push(f.fileName)
+      } catch { /* skip */ }
+    }
+
+    if (deleted.length > 0) {
+      const actor = actorFromRequest(req)
+      void recordActivity({
+        action: 'Cleaned Up Backups',
+        module: 'system',
+        entity: 'Backup Cleanup',
+        details: `Deleted ${deleted.length} backup(s), kept ${files.length - deleted.length}`,
+        userId: actor.userId,
+        ip: actor.ip,
+      })
+    }
+
+    res.json({ ok: true, deleted, kept: files.length - deleted.length, keepLast })
+  } catch (err) {
+    res.status(500).json({ error: 'Cleanup failed: ' + (err instanceof Error ? err.message : 'Unknown error') })
   }
 })
