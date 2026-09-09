@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import { ImapFlow } from 'imapflow'
 import { simpleParser, type ParsedMail } from 'mailparser'
-import { eq } from 'drizzle-orm'
+import { eq, or } from 'drizzle-orm'
 import { db } from './db/client'
 import * as schema from './db/schema'
 import { decryptSecret } from './lib/crypto'
@@ -284,6 +284,49 @@ function normalizePayment(raw: string): string {
   return 'paid'
 }
 
+/**
+ * Ensure a customer record exists for the parsed order data.
+ * Identity keys only (email/phone) — never name — so distinct customers with
+ * the same name are not merged. Stats are derived afterwards via recount.
+ */
+async function ensureCustomerFromEmail(d: OrderEmailData): Promise<void> {
+  if (!db) return
+  const email = d.email || null
+  const phone = d.phone || null
+  if (!email && !phone) return
+  const identityConditions = []
+  if (email) identityConditions.push(eq(schema.customers.email, email))
+  if (phone) identityConditions.push(eq(schema.customers.phone, phone))
+  const [existing] = await db.select().from(schema.customers).where(or(...identityConditions)).limit(1)
+  const city = d.billing?.city || d.shipping?.city || null
+  if (existing) {
+    await db
+      .update(schema.customers)
+      .set({
+        name: d.customerName && d.customerName !== 'Guest' ? d.customerName : undefined,
+        ...(email ? { email } : {}),
+        ...(phone ? { phone } : {}),
+        ...(city ? { city } : {}),
+      })
+      .where(eq(schema.customers.id, existing.id))
+    return
+  }
+  await db
+    .insert(schema.customers)
+    .values({
+      id: `email-cust-${d.orderNumber}-${Date.now()}`,
+      name: d.customerName || 'Guest',
+      email,
+      phone,
+      city,
+      orders: 0,
+      totalSpent: 0,
+      status: 'active',
+      joined: new Date().toISOString().slice(0, 10),
+    })
+    .onConflictDoNothing()
+}
+
 /** Merge parsed email data into sales_orders, creating the order if missing. */
 export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: boolean; created: boolean }> {
   if (!db) throw new Error('Database is not configured')
@@ -324,6 +367,7 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
         shippingAddress: newAddr && shippingAddress ? shippingAddress : undefined,
       })
       .where(eq(schema.salesOrders.shopifyId, shopifyId))
+    await ensureCustomerFromEmail(d)
     return { updated: true, created: false }
   }
 
@@ -347,6 +391,7 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
       shippingAddress: shippingAddress ?? undefined,
     })
     .onConflictDoNothing()
+  await ensureCustomerFromEmail(d)
   return { updated: false, created: true }
 }
 
