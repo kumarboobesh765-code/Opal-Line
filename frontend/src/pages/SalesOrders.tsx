@@ -1015,6 +1015,34 @@ export default function SalesOrdersPage() {
               <DetailRow label="Status" value={statusMeta[viewOrder.status].label} />
               <DetailRow label="Order Date" value={formatDate(viewOrder.date)} />
               {viewOrder.tags ? <DetailRow label="Tags" value={viewOrder.tags.split(',').join(', ')} /> : null}
+              {viewOrder.billingAddress && (viewOrder.billingAddress.name || viewOrder.billingAddress.address1) ? (
+                <div className="border-b border-border/60 py-2">
+                  <span className="text-muted-foreground">Billing Address</span>
+                  <div className="mt-1 space-y-0.5 text-right text-sm">
+                    {viewOrder.billingAddress.name ? <p className="font-medium text-foreground">{viewOrder.billingAddress.name}</p> : null}
+                    {viewOrder.billingAddress.phone ? <p className="text-muted-foreground">{viewOrder.billingAddress.phone}</p> : null}
+                    {viewOrder.billingAddress.address1 ? <p className="text-foreground">{viewOrder.billingAddress.address1}{viewOrder.billingAddress.address2 ? `, ${viewOrder.billingAddress.address2}` : ''}</p> : null}
+                    {[viewOrder.billingAddress.city, viewOrder.billingAddress.province, viewOrder.billingAddress.zip].filter(Boolean).length > 0 ? (
+                      <p className="text-foreground">{[viewOrder.billingAddress.city, viewOrder.billingAddress.province, viewOrder.billingAddress.zip].filter(Boolean).join(', ')}</p>
+                    ) : null}
+                    {viewOrder.billingAddress.country ? <p className="text-muted-foreground">{viewOrder.billingAddress.country}</p> : null}
+                  </div>
+                </div>
+              ) : null}
+              {viewOrder.shippingAddress && (viewOrder.shippingAddress.name || viewOrder.shippingAddress.address1) ? (
+                <div className="border-b border-border/60 py-2">
+                  <span className="text-muted-foreground">Shipping Address</span>
+                  <div className="mt-1 space-y-0.5 text-right text-sm">
+                    {viewOrder.shippingAddress.name ? <p className="font-medium text-foreground">{viewOrder.shippingAddress.name}</p> : null}
+                    {viewOrder.shippingAddress.phone ? <p className="text-muted-foreground">{viewOrder.shippingAddress.phone}</p> : null}
+                    {viewOrder.shippingAddress.address1 ? <p className="text-foreground">{viewOrder.shippingAddress.address1}{viewOrder.shippingAddress.address2 ? `, ${viewOrder.shippingAddress.address2}` : ''}</p> : null}
+                    {[viewOrder.shippingAddress.city, viewOrder.shippingAddress.province, viewOrder.shippingAddress.zip].filter(Boolean).length > 0 ? (
+                      <p className="text-foreground">{[viewOrder.shippingAddress.city, viewOrder.shippingAddress.province, viewOrder.shippingAddress.zip].filter(Boolean).join(', ')}</p>
+                    ) : null}
+                    {viewOrder.shippingAddress.country ? <p className="text-muted-foreground">{viewOrder.shippingAddress.country}</p> : null}
+                  </div>
+                </div>
+              ) : null}
               {viewOrder.lineItems && viewOrder.lineItems.length > 0 ? (
                 <div className="border-b border-border/60 py-2">
                   <div className="mb-1.5 flex items-center justify-between">

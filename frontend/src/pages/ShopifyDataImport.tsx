@@ -18,7 +18,7 @@ export default function ShopifyDataImportPage() {
   const [parsedHeaders, setParsedHeaders] = useState<string[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [result, setResult] = useState<{ imported: number; updated: number; errors: string[] } | null>(null)
-  const [enrichResult, setEnrichResult] = useState<{ enriched: number; failed: number } | null>(null)
+  const [enrichResult, setEnrichResult] = useState<{ enriched: number; failed: number; skipped?: number } | null>(null)
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -137,7 +137,7 @@ export default function ShopifyDataImportPage() {
                 <Check className="inline h-4 w-4" /> Enrichment complete
               </p>
               <p className="text-success-700/80">
-                {enrichResult.enriched} enriched, {enrichResult.failed} failed
+                {enrichResult.enriched} enriched, {enrichResult.failed} failed{enrichResult.skipped ? `, ${enrichResult.skipped} skipped` : ''}
               </p>
             </div>
           )}

@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: opal_line
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${PGPASSWORD:-REDACTED}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?Set PGPASSWORD in .env}
     ports:
       - "5432:5432"
     volumes:
@@ -29,12 +29,12 @@ services:
       - "4000:4000"
     environment:
       PORT: 4000
-      DATABASE_URL: postgresql://postgres:${PGPASSWORD:-REDACTED}@db:5432/opal_line
+      DATABASE_URL: postgresql://postgres:${PGPASSWORD:?Set PGPASSWORD in .env}@db:5432/opal_line
       PGHOST: db
       PGPORT: 5432
       PGDATABASE: opal_line
       PGUSER: postgres
-      PGPASSWORD: ${PGPASSWORD:-REDACTED}
+      PGPASSWORD: ${PGPASSWORD:?Set PGPASSWORD in .env}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       SHOPIFY_STORE_URL: ${SHOPIFY_STORE_URL:-}
       SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}

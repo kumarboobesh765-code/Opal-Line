@@ -42,6 +42,7 @@ export interface SyncCustomer {
   lastName: string
   phone: string | null
   city: string | null
+  province: string | null
   ordersCount: number
   totalSpent: string
   createdAt: string

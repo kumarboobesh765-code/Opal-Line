@@ -135,6 +135,7 @@ const PUBLIC_AUTH_PATHS = new Set([
   '/api/v1/auth/verify-email',
   '/api/v1/auth/resend-verification',
   '/api/v1/webhooks/shopify',
+  '/api/v1/shopify/flow-webhook',
 ])
 
 const csrfProtection = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -289,8 +290,12 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
         logger.error({ err }, 'Auto-enrich after order webhook failed')
       }
     } else if (topic.startsWith('customers/')) {
-      await runSync(['customers'])
-      logger.info({ topic }, 'Webhook: customers resynced')
+      const { importShopifyCustomers } = await import('./shopify')
+      const result = await importShopifyCustomers()
+      logger.info(
+        { topic, imported: result.imported, updated: result.updated, ok: result.ok },
+        'Webhook: customers imported into database',
+      )
     } else {
       logger.debug({ topic }, 'Webhook topic ignored (no handler)')
     }
@@ -313,6 +318,107 @@ app.use('/api/v1/rbac', requireAuth, rbacRouter)
 app.use('/api/v1/backup', requireAuth, enforceRbac, backupRouter)
 app.use('/api/v1/auth', authRouter)
 app.use('/api/v1/silver', requireAuth, enforceRbac)
+
+// Shopify Flow webhook — must be BEFORE requireAuth since it's called from Shopify servers (no browser session)
+app.post('/api/v1/shopify/flow-webhook', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const body = req.body
+    if (!body || !body.order_name) {
+      res.status(400).json({ ok: false, error: 'order_name is required' })
+      return
+    }
+
+    const { db } = await import('./db/client')
+    const schema = await import('./db/schema')
+    const { eq } = await import('drizzle-orm')
+    if (!db) {
+      res.status(503).json({ ok: false, error: 'Database unavailable' })
+      return
+    }
+
+    const orderName = String(body.order_name).trim()
+    const customerName = [body.customer_first_name, body.customer_last_name].filter(Boolean).join(' ').trim()
+    const customerEmail = body.customer_email || body.email || null
+    const customerPhone = body.customer_phone || body.phone || null
+
+    const billingAddress = (body.billing_address1 || body.billing_city) ? {
+      name: customerName,
+      address1: body.billing_address1 || '',
+      address2: body.billing_address2 || '',
+      city: body.billing_city || '',
+      province: body.billing_province || '',
+      zip: body.billing_zip || '',
+      country: body.billing_country || '',
+      phone: customerPhone || '',
+    } : null
+
+    const shippingAddress = (body.shipping_address1 || body.shipping_city) ? {
+      name: customerName,
+      address1: body.shipping_address1 || '',
+      address2: body.shipping_address2 || '',
+      city: body.shipping_city || '',
+      province: body.shipping_province || '',
+      zip: body.shipping_zip || '',
+      country: body.shipping_country || '',
+      phone: customerPhone || '',
+    } : null
+
+    const updates: Record<string, any> = {}
+    if (customerName) updates.customer = customerName
+    if (billingAddress) updates.billingAddress = billingAddress
+    if (shippingAddress) updates.shippingAddress = shippingAddress
+
+    if (Object.keys(updates).length > 0) {
+      await db
+        .update(schema.salesOrders)
+        .set({
+          ...(updates.customer ? { customer: updates.customer } : {}),
+          ...(updates.billingAddress ? { billingAddress: updates.billingAddress } : {}),
+          ...(updates.shippingAddress ? { shippingAddress: updates.shippingAddress } : {}),
+        })
+        .where(eq(schema.salesOrders.shopifyId, orderName))
+    }
+
+    if (customerName || customerEmail || customerPhone) {
+      const existing = customerEmail
+        ? await db.select().from(schema.customers).where(eq(schema.customers.email, customerEmail)).limit(1)
+        : customerPhone
+          ? await db.select().from(schema.customers).where(eq(schema.customers.phone, customerPhone)).limit(1)
+          : []
+
+      if (existing.length > 0) {
+        await db
+          .update(schema.customers)
+          .set({
+            name: existing[0].name === 'Guest' || !existing[0].name ? customerName || existing[0].name : existing[0].name,
+            email: customerEmail ?? existing[0].email,
+            phone: customerPhone ?? existing[0].phone,
+            city: billingAddress?.city || existing[0].city,
+            province: billingAddress?.province || existing[0].province,
+          })
+          .where(eq(schema.customers.id, existing[0].id))
+      } else if (customerName) {
+        await db.insert(schema.customers).values({
+          id: `C-flow-${Date.now()}`,
+          name: customerName,
+          email: customerEmail,
+          phone: customerPhone,
+          city: billingAddress?.city || null,
+          province: billingAddress?.province || null,
+          status: 'active',
+        }).onConflictDoNothing()
+      }
+    }
+
+    logger.info({ orderName, customerName }, 'Flow webhook processed')
+    res.json({ ok: true, order: orderName, customer: customerName })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'Flow webhook failed')
+    res.status(500).json({ ok: false, error: message })
+  }
+})
+
 app.use('/api/v1/shopify', requireAuth, enforceRbac)
 
 app.get('/api/v1/shopify/status', requireAuth, (_req, res) => {
@@ -598,6 +704,49 @@ app.post('/api/v1/shopify/orders/sync', requirePermission('shopify', 'create'), 
   }
 })
 
+app.post('/api/v1/shopify/customers/sync', requirePermission('shopify', 'create'), async (req, res) => {
+  try {
+    const { importShopifyCustomers } = await import('./shopify')
+    const result = await importShopifyCustomers()
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Imported Shopify Customers',
+      module: 'shopify',
+      entity: 'Customers',
+      details: result.ok ? `${result.imported ?? 0} imported, ${result.updated ?? 0} updated` : `Customer sync failed: ${result.errors?.join('; ') ?? 'unknown error'}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.status(result.ok ? 200 : 502).json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ ok: false, imported: 0, updated: 0, errors: [message], message: 'Shopify customer sync failed' })
+  }
+})
+
+app.post('/api/v1/shopify/enrich', requirePermission('shopify', 'view'), async (req, res) => {
+  try {
+    const { enrichAllIncompleteOrders } = await import('./shopifyDataEnhance')
+    const result = await enrichAllIncompleteOrders()
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Enriched Shopify Orders',
+      module: 'shopify',
+      entity: 'Orders',
+      details: `${result.enriched} enriched, ${result.failed} failed, ${result.skipped} skipped`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(500).json({ ok: false, enriched: 0, failed: 0, skipped: 0, errors: [message], message: 'Enrichment failed' })
+  }
+})
+
+// Shopify Flow webhook — receives full order + customer data from a Shopify Flow
+// This bypasses the Admin API PII limitations on development stores.
+// The Flow sends: order name, customer name, email, phone, billing/shipping addresses
 app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create'), validate(createOrderSchema), async (req, res) => {
   const { customer, email, phone, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
 

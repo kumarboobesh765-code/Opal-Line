@@ -274,6 +274,14 @@ export const shopifyApi = {
     request<{ ok: boolean; imported: number; updated: number; errors: string[]; message?: string }>('/shopify/orders/sync', {
       method: 'POST',
     }),
+  syncCustomers: () =>
+    request<{ ok: boolean; imported: number; updated: number; errors: string[]; message?: string }>('/shopify/customers/sync', {
+      method: 'POST',
+    }),
+  enrichOrders: () =>
+    request<{ ok: boolean; enriched: number; failed: number; skipped: number; errors: string[]; message?: string }>('/shopify/enrich', {
+      method: 'POST',
+    }),
   getProducts: () => request<{ syncedAt: string | null; data: SyncProduct[] }>('/shopify/products'),
   getCustomers: () => request<{ syncedAt: string | null; data: SyncCustomer[] }>('/shopify/customers'),
   getInventory: () => request<{ syncedAt: string | null; data: SyncInventory[] }>('/shopify/inventory'),

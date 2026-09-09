@@ -277,6 +277,7 @@ export function normalizeCustomer(raw: any): SyncCustomer {
     lastName: raw.last_name ?? '',
     phone: raw.phone ?? null,
     city: raw.default_address?.city ?? null,
+    province: raw.default_address?.province ?? null,
     ordersCount: raw.orders_count ?? 0,
     totalSpent: raw.total_spent ?? '0',
     createdAt: raw.created_at ?? '',
@@ -2003,7 +2004,13 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
       if (!shopifyId) continue
 
       const customerId = o.customer?.id ? String(o.customer.id) : undefined
-      const customerName = o.customer ? `${o.customer.first_name ?? ''} ${o.customer.last_name ?? ''}`.trim() : 'Guest'
+      // Shopify order REST API often has minimal customer object {id, email} without first_name/last_name.
+      // The actual customer name is on billing_address. Fall back through: customer → billing_address → email → 'Guest'.
+      // Some dev stores return literal "undefined" strings — treat those as empty.
+      const safeStr = (v: unknown) => (typeof v === 'string' && v !== 'undefined' && v.trim()) ? v.trim() : ''
+      const custFirstName = safeStr(o.customer?.first_name) || safeStr(o.billing_address?.first_name) || ''
+      const custLastName = safeStr(o.customer?.last_name) || safeStr(o.billing_address?.last_name) || ''
+      let customerName = `${custFirstName} ${custLastName}`.trim() || (safeStr(o.customer?.email) || safeStr(o.billing_address?.email) || 'Guest')
       const value = Math.round(Number(o.total_price ?? 0) * 100) / 100
       const items = o.line_items?.reduce((sum: number, li: any) => sum + Number(li.quantity ?? 0), 0) ?? 0
       const date = new Date(o.created_at ?? Date.now()).toISOString()
@@ -2022,6 +2029,34 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
       const currency = String(o.currency ?? 'INR') || 'INR'
       const discount = Math.round(Number(o.total_discounts ?? 0) * 100) / 100
 
+      const billingAddress = o.billing_address ? (() => {
+        const addr = {
+          name: `${safeStr(o.billing_address.first_name)} ${safeStr(o.billing_address.last_name)}`.trim(),
+          address1: safeStr(o.billing_address.address1),
+          address2: safeStr(o.billing_address.address2),
+          city: safeStr(o.billing_address.city),
+          province: safeStr(o.billing_address.province),
+          zip: safeStr(o.billing_address.zip),
+          country: safeStr(o.billing_address.country),
+          phone: safeStr(o.billing_address.phone),
+        }
+        // Only return if at least one field has actual data
+        return (addr.name || addr.address1 || addr.city || addr.phone) ? addr : null
+      })() : null
+      const shippingAddress = o.shipping_address ? (() => {
+        const addr = {
+          name: `${safeStr(o.shipping_address.first_name)} ${safeStr(o.shipping_address.last_name)}`.trim(),
+          address1: safeStr(o.shipping_address.address1),
+          address2: safeStr(o.shipping_address.address2),
+          city: safeStr(o.shipping_address.city),
+          province: safeStr(o.shipping_address.province),
+          zip: safeStr(o.shipping_address.zip),
+          country: safeStr(o.shipping_address.country),
+          phone: safeStr(o.shipping_address.phone),
+        }
+        return (addr.name || addr.address1 || addr.city || addr.phone) ? addr : null
+      })() : null
+
       if (knownShopifyIds.has(shopifyId)) {
         await db
           .update(schema.salesOrders)
@@ -2036,6 +2071,8 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
             currency,
             discount,
             lineItems: lineItems.length > 0 ? lineItems : undefined,
+            billingAddress: billingAddress ?? undefined,
+            shippingAddress: shippingAddress ?? undefined,
           })
           .where(eq(schema.salesOrders.shopifyId, shopifyId))
         updated++
@@ -2060,6 +2097,8 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
                 currency,
                 discount,
                 lineItems: lineItems.length > 0 ? lineItems : null,
+                billingAddress: billingAddress ?? undefined,
+                shippingAddress: shippingAddress ?? undefined,
               })
               .onConflictDoNothing()
 
@@ -2092,9 +2131,15 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
           const ordersCount = cust ? Number(cust.orders_count ?? 0) : null
           const totalSpent = cust ? Math.round(Number(cust.total_spent ?? value) * 100) / 100 : value
           const joined = cust?.created_at ? new Date(cust.created_at).toISOString().slice(0, 10) : date.slice(0, 10)
-          const label = customerName && customerName !== 'Guest' ? customerName : `Shopify Customer #${customerId}`
-          const customerEmail = o.customer?.email ?? null
-          const customerPhone = o.customer?.phone ?? null
+          // Prefer full customer object name > order billing_address name > email > fallback
+          const custFullName = cust ? `${cust.first_name ?? ''} ${cust.last_name ?? ''}`.trim() : ''
+          const label = custFullName || customerName || `Shopify Customer #${customerId}`
+          // Also upgrade the order's customer field if we got a better name from the customer stats
+          if (custFullName && custFullName !== customerName) {
+            customerName = custFullName
+          }
+          const customerEmail = o.customer?.email ?? cust?.email ?? null
+          const customerPhone = o.customer?.phone ?? cust?.phone ?? null
 
           let existingCustomer = null
           if (customerEmail) {
@@ -2175,5 +2220,108 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
     const msg = err instanceof Error ? err.message : 'Unknown error'
     await persistLog({ entity: 'Order', direction: 'in', action: 'Orders Synced', status: 'failed', error: msg })
     return { ok: false, imported: 0, updated: 0, errors: [msg], message: 'Shopify order sync failed' }
+  }
+}
+
+export interface ShopifyCustomersImportResult {
+  ok: boolean
+  imported: number
+  updated: number
+  errors: string[]
+  message?: string
+}
+
+export async function importShopifyCustomers(): Promise<ShopifyCustomersImportResult> {
+  if (!isConfigured()) {
+    return { ok: false, imported: 0, updated: 0, errors: ['Shopify is not configured'], message: 'Shopify is not configured' }
+  }
+  if (!db) {
+    return { ok: false, imported: 0, updated: 0, errors: ['Database is not configured'], message: 'Database is not configured' }
+  }
+
+  try {
+    const raw = await paginate<any>('customers', 'limit=250')
+    const existing = await db.select().from(schema.customers)
+    const knownByShopifyId = new Map(existing.filter((r) => r.shopifyId).map((r) => [r.shopifyId!, r]))
+    const knownByEmail = new Map(existing.filter((r) => r.email).map((r) => [r.email!, r]))
+    const knownByPhone = new Map(existing.filter((r) => r.phone).map((r) => [r.phone!, r]))
+
+    let imported = 0
+    let updated = 0
+    const errors: string[] = []
+
+    for (const c of raw) {
+      const shopifyId = String(c.id ?? '')
+      const firstName = String(c.first_name ?? '').trim()
+      const lastName = String(c.last_name ?? '').trim()
+      const name = `${firstName} ${lastName}`.trim() || `Shopify Customer #${shopifyId}`
+      const email = c.email ?? null
+      const phone = c.phone ?? null
+      const city = c.default_address?.city ?? c.addresses?.[0]?.city ?? null
+      const province = c.default_address?.province ?? c.addresses?.[0]?.province ?? null
+      const ordersCount = Number(c.orders_count ?? 0)
+      const totalSpent = Math.round(Number(c.total_spent ?? 0) * 100) / 100
+      const joined = c.created_at ? new Date(c.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)
+      const verifiedEmail = c.verified_email != null ? Boolean(c.verified_email) : null
+
+      // Match existing customer by shopifyId, email, or phone
+      let existingCustomer = knownByShopifyId.get(shopifyId)
+      if (!existingCustomer && email) existingCustomer = knownByEmail.get(email)
+      if (!existingCustomer && phone) existingCustomer = knownByPhone.get(phone)
+
+      try {
+        if (existingCustomer) {
+          await db
+            .update(schema.customers)
+            .set({
+              name: existingCustomer.name || name,
+              email: email ?? existingCustomer.email,
+              phone: phone ?? existingCustomer.phone,
+              city: city ?? undefined,
+              province: province ?? undefined,
+              shopifyId: existingCustomer.shopifyId ?? shopifyId,
+              emailVerified: verifiedEmail ?? undefined,
+              orders: ordersCount,
+              totalSpent,
+              status: existingCustomer.status ?? 'active',
+            })
+            .where(eq(schema.customers.id, existingCustomer.id))
+          updated++
+        } else {
+          await db
+            .insert(schema.customers)
+            .values({
+              id: `C-shop-${shopifyId}`,
+              name,
+              email,
+              phone,
+              city: city ?? null,
+              province: province ?? null,
+              shopifyId,
+              emailVerified: verifiedEmail,
+              orders: ordersCount,
+              totalSpent,
+              status: 'active',
+              joined,
+            })
+            .onConflictDoNothing()
+          imported++
+        }
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : 'Failed to import a customer')
+      }
+    }
+
+    await persistLog({
+      entity: 'Customer',
+      direction: 'in',
+      action: 'Customers Synced',
+      status: 'success',
+    })
+    return { ok: true, imported, updated, errors }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    await persistLog({ entity: 'Customer', direction: 'in', action: 'Customers Synced', status: 'failed', error: msg })
+    return { ok: false, imported: 0, updated: 0, errors: [msg], message: 'Shopify customer sync failed' }
   }
 }

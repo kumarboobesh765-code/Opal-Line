@@ -1278,8 +1278,8 @@ backupRouter.post('/shopify/enrich-customers', requirePermission('system', 'edit
 
 backupRouter.post('/shopify/enrich-orders', requirePermission('system', 'edit'), async (_req, res) => {
   try {
-    const { enrichOrdersFromShopify } = await import('../shopifyDataEnhance')
-    const result = await enrichOrdersFromShopify()
+    const { enrichAllIncompleteOrders } = await import('../shopifyDataEnhance')
+    const result = await enrichAllIncompleteOrders()
     res.json({ ok: true, ...result })
   } catch (err) {
     res.status(500).json({ error: 'Order enrichment failed: ' + (err instanceof Error ? err.message : 'Unknown') })

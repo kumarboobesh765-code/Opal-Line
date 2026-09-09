@@ -76,34 +76,38 @@ export interface ShopifyCustomer {
 }
 
 export async function fetchCustomerById(shopifyCustomerId: string): Promise<ShopifyCustomer | null> {
-  const query = `query ($id: ID!) {
-    customerById(id: $id) {
-      id
-      firstName
-      lastName
-      email
-      phone
-      ordersCount
-      totalSpent
-      tags
-      createdAt
-      updatedAt
-      defaultAddress {
-        address1
-        address2
-        city
-        province
-        zip
-        country
-        phone
+  const gql = `query ($q: String!) {
+    customers(first: 1, query: $q) {
+      edges {
+        node {
+          id
+          firstName
+          lastName
+          email
+          phone
+          ordersCount
+          totalSpent
+          tags
+          createdAt
+          updatedAt
+          defaultAddress {
+            address1
+            address2
+            city
+            province
+            zip
+            country
+            phone
+          }
+        }
       }
     }
   }`
 
-  const data = await graphqlRequest<{ customerById: any }>(query, { id: `gid://shopify/Customer/${shopifyCustomerId}` })
-  if (!data?.customerById) return null
+  const data = await graphqlRequest<{ customers: { edges: Array<{ node: any }> } }>(gql, { q: `id:${shopifyCustomerId}` })
+  if (!data?.customers?.edges?.length) return null
 
-  const c = data.customerById
+  const c = data.customers.edges[0].node
   return {
     id: c.id?.replace('gid://shopify/Customer/', '') || shopifyCustomerId,
     firstName: c.firstName || '',
@@ -384,18 +388,13 @@ export async function enrichCustomersFromShopify(): Promise<{ enriched: number; 
           updates.push(`phone = $${values.length + 1}`)
           values.push(shopifyData.phone)
         }
-        if (shopifyData.defaultAddress?.address1) {
-          const addr = [
-            shopifyData.defaultAddress.address1,
-            shopifyData.defaultAddress.address2,
-            shopifyData.defaultAddress.city,
-            shopifyData.defaultAddress.province,
-            shopifyData.defaultAddress.zip,
-            shopifyData.defaultAddress.country,
-          ].filter(Boolean).join(', ')
-          // Only update if customer has no address
-          updates.push(`address = $${values.length + 1}`)
-          values.push(addr)
+        if (shopifyData.defaultAddress?.city && !cust.city) {
+          updates.push(`city = $${values.length + 1}`)
+          values.push(shopifyData.defaultAddress.city)
+        }
+        if (shopifyData.defaultAddress?.province) {
+          updates.push(`province = $${values.length + 1}`)
+          values.push(shopifyData.defaultAddress.province)
         }
 
         if (updates.length > 0) {
@@ -429,10 +428,10 @@ export async function enrichOrdersFromShopify(): Promise<{ enriched: number; fai
   let failed = 0
 
   try {
-    // Find orders missing customer email or phone
+    // Find orders missing billing address or with minimal customer data
     const incomplete = await client.unsafe(
       `SELECT id, shopify_id, customer FROM sales_orders
-       WHERE (email IS NULL OR email = '' OR phone IS NULL OR phone = '' OR billing_address IS NULL)
+       WHERE (billing_address IS NULL OR billing_address = '{}'::jsonb OR customer IS NULL OR customer = '')
        AND shopify_id IS NOT NULL AND shopify_id != ''
        LIMIT 50`
     )
@@ -448,14 +447,6 @@ export async function enrichOrdersFromShopify(): Promise<{ enriched: number; fai
         const updates: string[] = []
         const values: any[] = []
 
-        if (shopifyData.email) {
-          updates.push(`email = $${values.length + 1}`)
-          values.push(shopifyData.email)
-        }
-        if (shopifyData.phone) {
-          updates.push(`phone = $${values.length + 1}`)
-          values.push(shopifyData.phone)
-        }
         if (shopifyData.billingAddress) {
           const addr = {
             name: `${shopifyData.billingAddress.firstName} ${shopifyData.billingAddress.lastName}`.trim(),
@@ -504,6 +495,193 @@ export async function enrichOrdersFromShopify(): Promise<{ enriched: number; fai
   }
 
   return { enriched, failed }
+}
+
+// ─── Enrich all incomplete orders via GraphQL ─────────────────────
+
+export interface EnrichResult {
+  enriched: number
+  failed: number
+  skipped: number
+  errors: string[]
+}
+
+export async function enrichAllIncompleteOrders(): Promise<EnrichResult> {
+  const client = getRawClient()
+  if (!client) return { enriched: 0, failed: 0, skipped: 0, errors: ['Database not available'] }
+
+  const result: EnrichResult = { enriched: 0, failed: 0, skipped: 0, errors: [] }
+
+  try {
+    // Find orders with incomplete data: missing billing address, Guest customer, or missing shipping address
+    const incomplete = await client.unsafe(
+      `SELECT id, shopify_id, customer, billing_address, shipping_address
+       FROM sales_orders
+       WHERE shopify_id IS NOT NULL AND shopify_id != ''
+         AND (
+           billing_address IS NULL OR billing_address = '{}'::jsonb OR billing_address->>'name' = ''
+           OR customer IS NULL OR customer = '' OR customer = 'Guest'
+           OR shipping_address IS NULL OR shipping_address = '{}'::jsonb OR shipping_address->>'name' = ''
+         )
+       ORDER BY date DESC
+       LIMIT 100`
+    )
+
+    if ((incomplete as any[]).length === 0) {
+      return { enriched: 0, failed: 0, skipped: 0, errors: [] }
+    }
+
+    logger.info({ count: (incomplete as any[]).length }, 'Starting order enrichment via GraphQL')
+
+    for (const order of incomplete as any[]) {
+      try {
+        const shopifyIdNum = order.shopify_id?.replace('#', '') || ''
+        if (!shopifyIdNum) { result.skipped++; continue }
+
+        // Fetch full order details via GraphQL
+        const gqlOrder = await fetchOrderById(shopifyIdNum)
+        if (!gqlOrder) {
+          result.skipped++
+          continue
+        }
+
+        const updates: Record<string, any> = {}
+
+        // Update customer name if we have a better one
+        const currentName = order.customer || ''
+        if (gqlOrder.customer && (currentName === 'Guest' || !currentName)) {
+          const gqlName = `${gqlOrder.customer.firstName} ${gqlOrder.customer.lastName}`.trim()
+          if (gqlName) updates.customer = gqlName
+        }
+        if (gqlOrder.email && (!currentName || currentName === 'Guest')) {
+          const gqlName = `${gqlOrder.customer?.firstName || ''} ${gqlOrder.customer?.lastName || ''}`.trim()
+          if (!gqlName && gqlOrder.email) updates.customer = gqlOrder.email
+        }
+
+        // Build billing address
+        if (gqlOrder.billingAddress) {
+          const addr = gqlOrder.billingAddress
+          const existingBilling = order.billing_address
+          const billingName = `${addr.firstName || ''} ${addr.lastName || ''}`.trim()
+          const existingName = existingBilling?.name || ''
+          // Update if we have new data that's better than what exists
+          if (billingName || addr.address1 || addr.city) {
+            updates.billingAddress = {
+              name: billingName || existingName,
+              address1: addr.address1 || existingBilling?.address1 || '',
+              address2: addr.address2 || existingBilling?.address2 || '',
+              city: addr.city || existingBilling?.city || '',
+              province: addr.province || existingBilling?.province || '',
+              zip: addr.zip || existingBilling?.zip || '',
+              country: addr.country || existingBilling?.country || '',
+              phone: addr.phone || existingBilling?.phone || '',
+            }
+          }
+        }
+
+        // Build shipping address
+        if (gqlOrder.shippingAddress) {
+          const addr = gqlOrder.shippingAddress
+          const existingShipping = order.shipping_address
+          const shipName = `${addr.firstName || ''} ${addr.lastName || ''}`.trim()
+          const existingName = existingShipping?.name || ''
+          if (shipName || addr.address1 || addr.city) {
+            updates.shippingAddress = {
+              name: shipName || existingName,
+              address1: addr.address1 || existingShipping?.address1 || '',
+              address2: addr.address2 || existingShipping?.address2 || '',
+              city: addr.city || existingShipping?.city || '',
+              province: addr.province || existingShipping?.province || '',
+              zip: addr.zip || existingShipping?.zip || '',
+              country: addr.country || existingShipping?.country || '',
+              phone: addr.phone || existingShipping?.phone || '',
+            }
+          }
+        }
+
+        // Update line items if available
+        if (gqlOrder.lineItems?.length) {
+          updates.lineItems = gqlOrder.lineItems.map(li => ({
+            title: li.title,
+            sku: li.sku,
+            quantity: li.quantity,
+            price: Math.round(Number(li.price) * 100) / 100,
+          }))
+        }
+
+        if (Object.keys(updates).length === 0) {
+          result.skipped++
+          continue
+        }
+
+        await client.unsafe(
+          `UPDATE sales_orders SET
+            customer = COALESCE($1, customer),
+            billing_address = COALESCE($2::jsonb, billing_address),
+            shipping_address = COALESCE($3::jsonb, shipping_address),
+            line_items = COALESCE($4::jsonb, line_items)
+          WHERE id = $5`,
+          [
+            updates.customer || null,
+            updates.billingAddress ? JSON.stringify(updates.billingAddress) : null,
+            updates.shippingAddress ? JSON.stringify(updates.shippingAddress) : null,
+            updates.lineItems ? JSON.stringify(updates.lineItems) : null,
+            order.id,
+          ]
+        )
+        result.enriched++
+        logger.info({ orderId: order.id, shopifyId: order.shopify_id }, 'Order enriched via GraphQL')
+
+        // Also enrich the customer record if we have customer data from the order
+        if (gqlOrder.customer?.id) {
+          try {
+            const gqlCustomer = await fetchCustomerById(gqlOrder.customer.id)
+            if (gqlCustomer) {
+              const customerEmail = gqlCustomer.email || gqlOrder.email || null
+              const customerPhone = gqlCustomer.phone || gqlOrder.phone || null
+              const fullName = `${gqlCustomer.firstName} ${gqlCustomer.lastName}`.trim()
+
+              if (customerEmail || customerPhone) {
+                await client.unsafe(
+                  `UPDATE customers SET
+                    name = CASE WHEN name = 'Guest' OR name IS NULL OR name = '' THEN COALESCE($1, name) ELSE name END,
+                    email = COALESCE($2, email),
+                    phone = COALESCE($3, phone),
+                    city = COALESCE($4, city),
+                    province = COALESCE($5, province)
+                  WHERE shopify_id = $6 OR email = $2 OR phone = $3`,
+                  [
+                    fullName || null,
+                    customerEmail,
+                    customerPhone,
+                    gqlCustomer.defaultAddress?.city || null,
+                    gqlCustomer.defaultAddress?.province || null,
+                    gqlOrder.customer.id,
+                  ]
+                )
+              }
+            }
+          } catch {
+            // Customer enrichment failure should not block order enrichment
+          }
+        }
+
+        // Rate limit: 500ms between GraphQL requests
+        await new Promise(r => setTimeout(r, 500))
+      } catch (err) {
+        logger.error({ err, orderId: order.id }, 'Order enrichment failed')
+        result.failed++
+        result.errors.push(err instanceof Error ? err.message : 'Unknown error')
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'Enrichment batch failed')
+    result.errors.push(msg)
+  }
+
+  logger.info({ enriched: result.enriched, failed: result.failed, skipped: result.skipped }, 'Order enrichment complete')
+  return result
 }
 
 // ─── CSV Import ───────────────────────────────────────────────────
