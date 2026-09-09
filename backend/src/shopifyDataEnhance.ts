@@ -19,8 +19,19 @@ interface GraphQLResponse<T = any> {
   errors?: Array<{ message: string }>
 }
 
+/**
+ * Set once Shopify answers ACCESS_DENIED for PII (plan-gated Customer data).
+ * While set, enrichment attempts are skipped — the block is account-level and
+ * only lifts after access is approved in the Shopify admin.
+ */
+let piiAccessDenied = false
+export function isPiiAccessDenied(): boolean {
+  return piiAccessDenied
+}
+
 async function graphqlRequest<T>(query: string, variables?: Record<string, any>): Promise<T | null> {
   if (!isConfigured()) return null
+  if (piiAccessDenied) return null
 
   const url = `https://${config.shop}.myshopify.com/admin/api/${config.apiVersion}/graphql.json`
   try {
@@ -41,6 +52,10 @@ async function graphqlRequest<T>(query: string, variables?: Record<string, any>)
 
     const json: GraphQLResponse<T> = await res.json()
     if (json.errors?.length) {
+      if (json.errors.some((e) => (e as any)?.extensions?.code === 'ACCESS_DENIED' && /Customer object|personally identifiable/i.test(e.message))) {
+        piiAccessDenied = true
+        logger.warn('Shopify PII access denied (plan-gated) — enrichment paused until access is approved in the Shopify admin')
+      }
       logger.error({ errors: json.errors }, 'Shopify GraphQL errors')
       return null
     }
@@ -76,38 +91,38 @@ export interface ShopifyCustomer {
 }
 
 export async function fetchCustomerById(shopifyCustomerId: string): Promise<ShopifyCustomer | null> {
-  const gql = `query ($q: String!) {
-    customers(first: 1, query: $q) {
-      edges {
-        node {
-          id
-          firstName
-          lastName
-          email
+  // customerById was removed from the Admin GraphQL API — use node(id:)
+  // with an inline fragment (works regardless of searchable fields).
+  const gql = `query ($id: ID!) {
+    node(id: $id) {
+      ... on Customer {
+        id
+        firstName
+        lastName
+        email
+        phone
+        ordersCount
+        totalSpent
+        tags
+        createdAt
+        updatedAt
+        defaultAddress {
+          address1
+          address2
+          city
+          province
+          zip
+          country
           phone
-          ordersCount
-          totalSpent
-          tags
-          createdAt
-          updatedAt
-          defaultAddress {
-            address1
-            address2
-            city
-            province
-            zip
-            country
-            phone
-          }
         }
       }
     }
   }`
 
-  const data = await graphqlRequest<{ customers: { edges: Array<{ node: any }> } }>(gql, { q: `id:${shopifyCustomerId}` })
-  if (!data?.customers?.edges?.length) return null
+  const data = await graphqlRequest<{ node: any }>(gql, { id: `gid://shopify/Customer/${shopifyCustomerId}` })
+  if (!data?.node) return null
 
-  const c = data.customers.edges[0].node
+  const c = data.node
   return {
     id: c.id?.replace('gid://shopify/Customer/', '') || shopifyCustomerId,
     firstName: c.firstName || '',
@@ -241,67 +256,83 @@ export interface ShopifyOrder {
 }
 
 export async function fetchOrderById(shopifyOrderId: string): Promise<ShopifyOrder | null> {
+  // NOTE: orderById was removed from the Admin GraphQL API — use the
+  // orders(query:) search field instead (same fix as customerById).
+  // orderById was removed from the Admin GraphQL API — use node(id:) with
+  // an inline fragment instead.
   const query = `query ($id: ID!) {
-    orderById(id: $id) {
-      id
-      name
-      email
-      phone
-      totalPrice
-      subtotalPrice
-      totalTax
-      currency
-      financialStatus
-      fulfillmentStatus
-      createdAt
-      updatedAt
-      customer {
+    node(id: $id) {
+      ... on Order {
         id
-        firstName
-        lastName
+        name
         email
         phone
-      }
-      billingAddress {
-        firstName
-        lastName
-        address1
-        address2
-        city
-        province
-        zip
-        country
-        phone
-      }
-      shippingAddress {
-        firstName
-        lastName
-        address1
-        address2
-        city
-        province
-        zip
-        country
-        phone
-      }
-      lineItems(first: 50) {
-        edges {
-          node {
-            title
-            sku
-            quantity
-            price
-            variant { sku }
+        totalPrice
+        subtotalPrice
+        totalTax
+        displayFinancialStatus
+        displayFulfillmentStatus
+        createdAt
+        updatedAt
+        totalPriceSet {
+          shopMoney {
+            amount
+            currencyCode
+          }
+        }
+        customer {
+          id
+          firstName
+          lastName
+          email
+          phone
+        }
+        billingAddress {
+          firstName
+          lastName
+          address1
+          address2
+          city
+          province
+          zip
+          country
+          phone
+        }
+        shippingAddress {
+          firstName
+          lastName
+          address1
+          address2
+          city
+          province
+          zip
+          country
+          phone
+        }
+        lineItems(first: 50) {
+          edges {
+            node {
+              title
+              sku
+              quantity
+              discountedTotalSet {
+                shopMoney {
+                  amount
+                }
+              }
+              variant { sku }
+            }
           }
         }
       }
     }
   }`
 
-  const data = await graphqlRequest<{ orderById: any }>(query, { id: `gid://shopify/Order/${shopifyOrderId}` })
-  if (!data?.orderById) return null
+  const data = await graphqlRequest<{ node: any }>(query, { id: `gid://shopify/Order/${shopifyOrderId}` })
+  const node = data?.node
+  if (!node) return null
 
-  const o = data.orderById
+  const o = node
   return {
     id: o.id?.replace('gid://shopify/Order/', '') || shopifyOrderId,
     name: o.name || '',
@@ -310,9 +341,9 @@ export async function fetchOrderById(shopifyOrderId: string): Promise<ShopifyOrd
     totalPrice: o.totalPrice || '0.0',
     subtotalPrice: o.subtotalPrice || '0.0',
     totalTax: o.totalTax || '0.0',
-    currency: o.currency || 'INR',
-    financialStatus: o.financialStatus || '',
-    fulfillmentStatus: o.fulfillmentStatus || '',
+    currency: o.totalPriceSet?.shopMoney?.currencyCode || 'INR',
+    financialStatus: o.displayFinancialStatus || '',
+    fulfillmentStatus: o.displayFulfillmentStatus || '',
     createdAt: o.createdAt || '',
     updatedAt: o.updatedAt || '',
     customer: o.customer ? {
@@ -348,7 +379,7 @@ export async function fetchOrderById(shopifyOrderId: string): Promise<ShopifyOrd
       title: e.node.title || '',
       sku: e.node.sku || e.node.variant?.sku || '',
       quantity: e.node.quantity || 0,
-      price: e.node.price || '0.0',
+      price: e.node.discountedTotalSet?.shopMoney?.amount || '0.0',
       variant: e.node.variant ? { sku: e.node.variant.sku || '' } : undefined,
     })) || [],
   }
@@ -427,6 +458,11 @@ export async function enrichOrdersFromShopify(): Promise<{ enriched: number; fai
   let enriched = 0
   let failed = 0
 
+  if (isPiiAccessDenied()) {
+    logger.debug('Order enrichment skipped — Shopify PII access not approved yet')
+    return { enriched, failed }
+  }
+
   try {
     // Find orders missing billing address or with minimal customer data
     const incomplete = await client.unsafe(
@@ -438,10 +474,12 @@ export async function enrichOrdersFromShopify(): Promise<{ enriched: number; fai
 
     for (const order of incomplete as any[]) {
       try {
-        const shopifyId = order.shopify_id?.replace('gid://shopify/Order/', '') || ''
-        if (!shopifyId) { failed++; continue }
+        // The numeric Shopify order id is stored in the row's id column
+        // ("shopify-<numericId>"); shopify_id holds the order name ("#1034").
+        const numericId = String(order.id ?? '').match(/^shopify-(\d+)$/)?.[1] ?? ''
+        if (!numericId) { failed++; continue }
 
-        const shopifyData = await fetchOrderById(shopifyId)
+        const shopifyData = await fetchOrderById(numericId)
         if (!shopifyData) { failed++; continue }
 
         const updates: string[] = []
@@ -480,7 +518,7 @@ export async function enrichOrdersFromShopify(): Promise<{ enriched: number; fai
           values.push(order.id)
           await client.unsafe(`UPDATE sales_orders SET ${updates.join(', ')} WHERE id = $${values.length}`, values)
           enriched++
-          logger.info({ orderId: order.id, shopifyId }, 'Order enriched from Shopify')
+          logger.info({ orderId: order.id, shopifyNumericId: numericId }, 'Order enriched from Shopify')
         }
       } catch (err) {
         logger.error({ err, orderId: order.id }, 'Order enrichment failed')
@@ -509,6 +547,9 @@ export interface EnrichResult {
 export async function enrichAllIncompleteOrders(): Promise<EnrichResult> {
   const client = getRawClient()
   if (!client) return { enriched: 0, failed: 0, skipped: 0, errors: ['Database not available'] }
+  if (isPiiAccessDenied()) {
+    return { enriched: 0, failed: 0, skipped: 0, errors: ['Shopify PII access not approved — approve in Shopify admin (Protected customer data)'] }
+  }
 
   const result: EnrichResult = { enriched: 0, failed: 0, skipped: 0, errors: [] }
 

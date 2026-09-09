@@ -48,7 +48,10 @@ export function verifyShopifyWebhook(req: Request, res: Response, next: NextFunc
     return
   }
 
-  if (providedHmac.length !== generatedHmac.length || !timingSafeEqual(providedHmac, Buffer.from(generatedHmac, 'base64'))) {
+  // Compare raw digests (bytes), not the base64 strings — a string/Buffer
+  // length mix-up here rejects every genuine webhook with 401.
+  const generatedBuf = Buffer.from(generatedHmac, 'base64')
+  if (providedHmac.length !== generatedBuf.length || !timingSafeEqual(providedHmac, generatedBuf)) {
     res.status(401).json({ error: 'Invalid HMAC signature' })
     return
   }
