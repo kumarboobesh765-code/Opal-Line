@@ -714,6 +714,10 @@ export const backupApi = {
     request('/backup/shopify/enrich-customers', { method: 'POST' }),
   enrichOrders: (): Promise<{ ok: boolean; enriched: number; failed: number }> =>
     request('/backup/shopify/enrich-orders', { method: 'POST' }),
+  emailIngestStatus: (): Promise<{ configured: boolean; mailbox: string | null; host: string }> =>
+    request('/shopify/email-ingest/status'),
+  pollOrderEmails: (): Promise<{ ok: boolean; scanned: number; parsed: number; updated: number; created: number; errors: string[] }> =>
+    request('/shopify/email-ingest/poll', { method: 'POST' }),
   parseCSV: (csv: string): Promise<{ ok: boolean; rows: Record<string, string>[]; count: number; headers: string[] }> =>
     request('/backup/shopify/parse-csv', {
       method: 'POST', body: JSON.stringify({ csv }),

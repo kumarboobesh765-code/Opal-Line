@@ -25,6 +25,7 @@ import { CONSTANTS } from './constants'
 import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup } from './autoBackup'
+import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured } from './orderEmailIngest'
 import { startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
 
@@ -450,6 +451,19 @@ app.post('/api/v1/shopify/test', requirePermission('shopify', 'view'), async (re
         }
       : undefined
   const result = await testShopifyConnection(overrides)
+  res.json(result)
+})
+
+app.get('/api/v1/shopify/email-ingest/status', requireAuth, (_req, res) => {
+  res.json({
+    configured: isEmailIngestConfigured(),
+    mailbox: process.env.ORDER_EMAIL_ADDRESS ? process.env.ORDER_EMAIL_ADDRESS.replace(/^[^@]+/, '••••') : null,
+    host: process.env.ORDER_EMAIL_HOST || 'imap.gmail.com',
+  })
+})
+
+app.post('/api/v1/shopify/email-ingest/poll', requirePermission('shopify', 'create'), async (_req, res) => {
+  const result = await pollOrderMailbox()
   res.json(result)
 })
 
@@ -1104,6 +1118,8 @@ const server = app.listen(config.port, async () => {
   // Schedule the daily automated backup (7:00 PM local time).
   startAutoBackup()
   startSilverRateScheduler()
+  // Poll the order-notification mailbox so redacted Shopify PII still reaches the ERP
+  startOrderEmailIngest()
 
   // Auto-enrich incomplete orders/customers on startup (background, non-blocking)
   if (isConfigured()) {
@@ -1129,6 +1145,7 @@ server.on('error', (err) => {
 
 function gracefulShutdown(signal: string) {
   logger.info({ signal }, 'Shutting down gracefully')
+  stopOrderEmailIngest()
   server.close(() => {
     shutdownSessions()
     logger.info('Server closed')

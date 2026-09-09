@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Upload, FileText, Download, RefreshCw, Users, ShoppingCart, Check, ArrowRight } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Upload, FileText, Download, RefreshCw, Users, ShoppingCart, Check, ArrowRight, Mail } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -19,6 +19,12 @@ export default function ShopifyDataImportPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [result, setResult] = useState<{ imported: number; updated: number; errors: string[] } | null>(null)
   const [enrichResult, setEnrichResult] = useState<{ enriched: number; failed: number; skipped?: number } | null>(null)
+  const [emailStatus, setEmailStatus] = useState<{ configured: boolean; mailbox: string | null; host: string } | null>(null)
+  const [emailResult, setEmailResult] = useState<{ ok: boolean; scanned: number; parsed: number; updated: number; created: number; errors: string[] } | null>(null)
+
+  useEffect(() => {
+    loadEmailStatus()
+  }, [])
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -77,6 +83,25 @@ export default function ShopifyDataImportPage() {
     }
   }
 
+  const loadEmailStatus = async () => {
+    try {
+      const res = await backupApi.emailIngestStatus()
+      setEmailStatus(res)
+    } catch { setEmailStatus({ configured: false, mailbox: null, host: 'imap.gmail.com' }) }
+  }
+
+  const doPollEmails = async () => {
+    setBusy('email-poll')
+    try {
+      const res = await backupApi.pollOrderEmails()
+      setEmailResult(res)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Email poll failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const reset = () => {
     setStep('upload')
     setCsvText('')
@@ -84,6 +109,7 @@ export default function ShopifyDataImportPage() {
     setParsedHeaders([])
     setResult(null)
     setEnrichResult(null)
+    setEmailResult(null)
   }
 
   return (
@@ -97,8 +123,54 @@ export default function ShopifyDataImportPage() {
             <span>Shopify Data Import</span>
           </span>
         }
-        subtitle="Import customer and order data from Shopify via CSV or enrich existing records"
+        subtitle="Import customer and order data from Shopify via CSV, email ingestion, or enrich existing records"
       />
+
+      {/* Order email ingestion section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Mail className="h-4 w-4" /> Order Email Ingestion
+          </CardTitle>
+          <CardDescription>
+            Shopify's owner notification email always contains full customer data (even when the API redacts it).
+            Add a mailbox as a staff notification recipient in Shopify Admin → Settings → Notifications and the ERP
+            reads it automatically every 2 minutes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={doPollEmails}
+            >
+              {busy === 'email-poll' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+              Poll Emails Now
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {emailStatus?.configured
+                ? `Mailbox connected: ${emailStatus.mailbox ?? ''} (${emailStatus.host})`
+                : 'Not configured — set ORDER_EMAIL_ADDRESS and ORDER_EMAIL_PASSWORD in backend/.env'}
+            </span>
+          </div>
+          {emailResult && (
+            <div className={`mt-3 rounded-lg border p-3 text-sm ${emailResult.ok ? 'border-success-200 bg-success-50' : 'border-destructive-200 bg-destructive-50'}`}>
+              {emailResult.ok ? (
+                <>
+                  <p className="font-medium text-success-700"><Check className="inline h-4 w-4" /> Poll complete</p>
+                  <p className="text-success-700/80">{emailResult.scanned} emails scanned, {emailResult.parsed} parsed, {emailResult.updated} orders updated, {emailResult.created} created</p>
+                </>
+              ) : (
+                <p className="font-medium text-destructive-700">Poll failed: {emailResult.errors[0] ?? 'unknown error'}</p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator />
 
       {/* Auto-enrich section */}
       <Card>
