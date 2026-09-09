@@ -73,6 +73,18 @@ export function isEmailIngestConfigured(): boolean {
   return Boolean(user && pass)
 }
 
+/** Which mailbox protocol to use: IMAP (Gmail etc.) or mail.tm REST API. */
+function emailProvider(): 'imap' | 'mailtm' {
+  const p = process.env.ORDER_EMAIL_PROVIDER?.trim().toLowerCase()
+  if (p === 'mailtm' || p === 'mail.tm') return 'mailtm'
+  if (p === 'imap') return 'imap'
+  // Auto-detect: mail.tm domains end in .tm-hosted domains like uberip.com;
+  // default to IMAP otherwise.
+  const host = process.env.ORDER_EMAIL_HOST?.trim().toLowerCase() ?? ''
+  if (host.includes('mail.tm')) return 'mailtm'
+  return 'imap'
+}
+
 // ─── Email text parsing helpers ─────────────────────────────────────
 
 const clean = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '')
@@ -373,6 +385,20 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
   }
   running = true
   const cfg = emailConfig()
+  if (emailProvider() === 'mailtm') {
+    try {
+      await pollMailtm(cfg, res)
+      res.ok = true
+      logger.info({ scanned: res.scanned, parsed: res.parsed, updated: res.updated, created: res.created }, 'Order email ingestion complete (mail.tm)')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown mail.tm error'
+      res.errors.push(message)
+      logger.error({ err: message }, 'Order email ingestion failed')
+    } finally {
+      running = false
+    }
+    return res
+  }
   const client = new ImapFlow({
     host: cfg.host,
     port: cfg.port,
@@ -423,6 +449,78 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
   return res
 }
 
+// ─── mail.tm REST provider (no IMAP needed) ───────────────────────
+
+const MAILTM_API = 'https://api.mail.tm'
+
+interface MailTmMessageSummary {
+  id: string
+  subject?: string
+  from?: { address?: string; name?: string }
+  createdAt?: string
+}
+
+interface MailTmMessageFull extends MailTmMessageSummary {
+  text?: string
+  html?: string[] | string
+}
+
+async function mailtmToken(user: string, pass: string): Promise<string> {
+  const res = await fetch(`${MAILTM_API}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address: user, password: pass }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) throw new Error(`mail.tm auth failed (${res.status}) — check ORDER_EMAIL_ADDRESS / ORDER_EMAIL_PASSWORD`)
+  const data = (await res.json()) as { token: string }
+  return data.token
+}
+
+async function pollMailtm(cfg: { user: string; pass: string }, res: IngestResult): Promise<void> {
+  const token = await mailtmToken(cfg.user, cfg.pass)
+  const headers = { Authorization: `Bearer ${token}` }
+  const since = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+
+  for (let page = 1; page <= 5; page++) {
+    const listRes = await fetch(`${MAILTM_API}/messages?page=${page}`, {
+      headers,
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!listRes.ok) throw new Error(`mail.tm list failed (${listRes.status})`)
+    const list = (await listRes.json()) as { 'hydra:member'?: MailTmMessageSummary[] }
+    const messages = list['hydra:member'] ?? []
+    if (messages.length === 0) break
+
+    for (const m of messages) {
+      if (m.createdAt && new Date(m.createdAt).getTime() < since) continue
+      res.scanned++
+      const subject = clean(m.subject)
+      if (!parseOrderNumberFromSubject(subject)) continue
+      if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
+      try {
+        const fullRes = await fetch(`${MAILTM_API}/messages/${m.id}`, {
+          headers,
+          signal: AbortSignal.timeout(20_000),
+        })
+        if (!fullRes.ok) continue
+        const full = (await fullRes.json()) as MailTmMessageFull
+        const html = Array.isArray(full.html) ? full.html.join('\n') : full.html
+        // Reuse the same parser via a minimal ParsedMail-compatible object.
+        const mailLike = { subject, text: full.text ?? '', html: html ?? false } as unknown as Parameters<typeof parseOrderEmail>[0]
+        const data = parseOrderEmail(mailLike)
+        if (!data) continue
+        res.parsed++
+        const merged = await mergeOrderData(data)
+        if (merged.updated) res.updated++
+        if (merged.created) res.created++
+      } catch (err) {
+        res.errors.push(err instanceof Error ? err.message : 'mail.tm fetch error')
+      }
+    }
+  }
+}
+
 export function startOrderEmailIngest(): void {
   if (pollTimer) return
   if (!isEmailIngestConfigured()) {
@@ -436,7 +534,10 @@ export function startOrderEmailIngest(): void {
   pollTimer = setInterval(() => {
     pollOrderMailbox().catch(() => {})
   }, POLL_INTERVAL_MS)
-  logger.info({ intervalMinutes: POLL_INTERVAL_MS / 60000 }, 'Order email ingestion scheduler started')
+  logger.info(
+    { intervalMinutes: POLL_INTERVAL_MS / 60000, provider: emailProvider() },
+    'Order email ingestion scheduler started',
+  )
 }
 
 export function stopOrderEmailIngest(): void {
