@@ -22,12 +22,13 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { dbApi } from '@/lib/api'
-import type { Invoice } from '@/types'
+import type { AppSettings, Invoice } from '@/types'
 import { formatCurrency, formatDateTime } from '@/lib/format'
 
 export default function InvoiceDetailPage() {
   const { id } = useParams()
   const [invoice, setInvoice] = useState<Invoice | null>(null)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [refunding, setRefunding] = useState(false)
 
@@ -37,6 +38,7 @@ export default function InvoiceDetailPage() {
       setInvoice(inv ?? null)
       setLoading(false)
     }).catch(() => setLoading(false))
+    dbApi.getSettings().then((s) => setSettings(s ?? null)).catch(() => {})
   }, [id])
 
   if (loading) {
@@ -120,9 +122,11 @@ export default function InvoiceDetailPage() {
       @media print{body{padding:12mm;font-size:10px;}.header-banner{background:#1a1a2e !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}table.items thead th{background:#1a1a2e !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
     </style></head><body>
       <div class="header-banner">
-        <h1>${escapeHtml(invoice.businessName || 'OPAL LINE JEWELS LLP')}</h1>
-        <div class="sub">92.5 Sterling Silver Jewellery · GSTIN: ${escapeHtml(invoice.businessGstin || '27AAACO1234F1Z5')}</div>
-        <div class="sub">State: Maharashtra (27) · E-commerce sale via Shopify</div>
+        <h1>${escapeHtml(settings?.businessName || invoice.businessName || 'OPAL LINE JEWELS LLP')}</h1>
+        <div class="sub">92.5 Sterling Silver Jewellery${settings?.gstin ? ` · GSTIN: ${escapeHtml(settings.gstin)}` : ''}</div>
+        ${settings?.address ? `<div class="sub">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings?.phone || settings?.email ? `<div class="sub">${[settings.phone, settings.email].filter(Boolean).map(escapeHtml).join(' · ')}</div>` : ''}
+        <div class="sub">E-commerce sale via Shopify</div>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div class="info-row" style="flex:1;margin-right:16px;">

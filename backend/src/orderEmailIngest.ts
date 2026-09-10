@@ -559,6 +559,111 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
   return { updated: false, created: true }
 }
 
+// ─── Auto-invoice ───────────────────────────────────────────────
+
+async function nextInvoiceNumber(prefix: string): Promise<string> {
+  const now = new Date()
+  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = `${prefix}${stamp}${Math.floor(1000 + Math.random() * 9000)}`
+    const [clash] = await db!
+      .select({ id: schema.salesInvoices.id })
+      .from(schema.salesInvoices)
+      .where(eq(schema.salesInvoices.number, candidate))
+      .limit(1)
+    if (!clash) return candidate
+  }
+  return `${prefix}${stamp}${Date.now().toString().slice(-6)}`
+}
+
+/**
+ * Auto-raise a tax invoice when an email-synced order is created/updated.
+ * Idempotent: skips orders that already have an invoice; refreshes the
+ * customer snapshot when new contact details arrive in a later email.
+ */
+export async function autoInvoiceOrder(d: OrderEmailData): Promise<{ created: boolean; invoiceNumber: string | null }> {
+  if (!db) return { created: false, invoiceNumber: null }
+  const shopifyId = `#${d.orderNumber}`
+  const [order] = await db
+    .select()
+    .from(schema.salesOrders)
+    .where(eq(schema.salesOrders.shopifyId, shopifyId))
+    .limit(1)
+  if (!order || order.invoice) return { created: false, invoiceNumber: order?.invoice ?? null }
+
+  const lineItems = Array.isArray(order.lineItems) ? (order.lineItems as OrderEmailData['items']) : []
+  if (lineItems.length === 0) return { created: false, invoiceNumber: null }
+
+  // Settings: gst rate + invoice prefix
+  const [settingsRow] = await db.select().from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+  const gstRate = Number(settingsRow?.gstRate ?? 3)
+  const prefix = settingsRow?.invoicePrefix?.trim() || 'INV-'
+  const payment = order.payment === 'paid' ? 'Online' : order.payment === 'cod' ? 'COD' : 'Pending'
+
+  const items = lineItems.map((li) => {
+    const qty = Number(li.quantity ?? 0)
+    const price = Number(li.price ?? 0)
+    const amount = Math.round(price * qty * 100) / 100
+    return {
+      product: String(li.title ?? '').trim(),
+      sku: String(li.sku ?? ''),
+      qty,
+      weight: 0,
+      silverRate: 0,
+      makingCharge: 0,
+      tax: Math.round(((amount * gstRate) / 100) * 100) / 100,
+      amount,
+    }
+  })
+  const subtotal = Math.round(items.reduce((a, it) => a + it.amount, 0) * 100) / 100
+  const gstAmount = Math.round(((subtotal * gstRate) / 100) * 100) / 100
+  const discount = Number(order.discount ?? 0)
+  const grandTotal = Math.round((subtotal + gstAmount - discount) * 100) / 100
+
+  // Customer snapshot: customer record first, then the order's addresses
+  const [customer] = order.customer
+    ? await db.select().from(schema.customers).where(eq(schema.customers.name, order.customer)).limit(1)
+    : []
+  const addr = (order.shippingAddress && (order.shippingAddress as Record<string, string>).address1)
+    ? order.shippingAddress as Record<string, string>
+    : (order.billingAddress as Record<string, string> | null) ?? {}
+  const address1 = String(addr.address1 ?? '')
+  const address2 = String(addr.address2 ?? '')
+
+  const number = await nextInvoiceNumber(prefix)
+  const invoiceId = crypto.randomUUID()
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.salesInvoices).values({
+      id: invoiceId,
+      number,
+      shopifyOrder: shopifyId,
+      customer: order.customer,
+      customerEmail: customer?.email ?? '',
+      customerPhone: customer?.phone ?? String(addr.phone ?? ''),
+      customerAddress: [address1, address2].filter(Boolean).join(', '),
+      customerCity: String(addr.city ?? customer?.city ?? ''),
+      customerState: String(addr.province ?? customer?.province ?? ''),
+      customerPincode: String(addr.zip ?? ''),
+      silverValue: 0,
+      makingCharge: 0,
+      subtotal,
+      gst: gstRate,
+      gstAmount,
+      discount,
+      grandTotal,
+      paymentMethod: payment,
+      paymentStatus: order.payment,
+      status: order.payment === 'paid' ? 'paid' : 'issued',
+      date: order.date ?? new Date().toISOString(),
+    })
+    for (const it of items) {
+      await tx.insert(schema.salesInvoiceItems).values({ ...it, id: crypto.randomUUID(), invoiceId })
+    }
+    await tx.update(schema.salesOrders).set({ invoice: number }).where(eq(schema.salesOrders.id, order.id))
+  })
+  return { created: true, invoiceNumber: number }
+}
+
 // ─── IMAP polling ───────────────────────────────────────────────────
 
 function emailConfig() {
@@ -638,6 +743,13 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
         const merged = await mergeOrderData(data)
         if (merged.updated) res.updated++
         if (merged.created) res.created++
+        // Auto-raise the tax invoice with the full customer snapshot
+        try {
+          const inv = await autoInvoiceOrder(data)
+          if (inv.created) logger.info({ order: `#${data.orderNumber}`, invoice: inv.invoiceNumber }, 'Auto-invoice created from order email')
+        } catch (invErr) {
+          logger.error({ err: invErr instanceof Error ? invErr.message : String(invErr), order: data.orderNumber }, 'Auto-invoice failed')
+        }
       } catch (err) {
         res.errors.push(err instanceof Error ? err.message : 'parse error')
       }
