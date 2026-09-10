@@ -202,7 +202,7 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
       if (/^(billing address|shipping address|customer|payment method|payment|gateway|note|items?|email|phone).*$/.test(ll) && !PHONE_RE.test(l)) break
       if (EMAIL_RE.test(l)) break
       if (PHONE_RE.test(l) && !fields.phone && addressLines.length > 0) {
-        fields.phone = clean(l)
+        fields.phone = clean(l.replace(/^phone\s*:\s*/i, ''))
         k++
         continue
       }
@@ -224,7 +224,11 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
   }
 
   const shipping = parseAddr(/^shipping address/i) ?? parseAddr(/^shipping:/i) ?? parseAddr(/^billing address/i) ?? parseAddr(/^billing:/i)
-  const billing = parseAddr(/^billing address/i) ?? parseAddr(/^billing:/i) ?? shipping
+  let billing = parseAddr(/^billing address/i) ?? parseAddr(/^billing:/i) ?? shipping
+  // "Billing address\nSame as shipping address" — resolve to the real shipping block
+  if (billing && shipping && !billing.address1 && !billing.phone && !billing.address2 && /same as shipping/i.test(billing.name ?? '')) {
+    billing = shipping
+  }
 
   // Items table (plain text): "1 × Silver Bangles 925 ₹3,200.00" variants
   const items: OrderEmailData['items'] = []
@@ -531,7 +535,6 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
         // Only order notifications — skip shipping/refund/etc.
         if (!parseOrderNumberFromSubject(subject)) continue
         if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
-      if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
         if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
         const data = parseOrderEmail(parsed)
         if (!data) continue
@@ -560,6 +563,74 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
     running = false
   }
   return res
+}
+
+// ─── Instant sync: IMAP IDLE push + webhook kicks ───────────────────
+
+let idleClient: ImapFlow | null = null
+let idleStopped = false
+let idleReconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleIdleReconnect(): void {
+  if (idleStopped || idleReconnectTimer) return
+  idleReconnectTimer = setTimeout(() => {
+    idleReconnectTimer = null
+    startImapIdle().catch(() => {})
+  }, 10_000)
+}
+
+/**
+ * Persistent IMAP connection using IDLE (push). Gmail fires an `exists` event
+ * the moment a new email lands, so order notifications are processed within
+ * seconds instead of waiting for the next interval poll.
+ */
+async function startImapIdle(): Promise<void> {
+  if (idleStopped || idleClient) return
+  if (emailProvider() !== 'imap' || !isEmailIngestConfigured()) return
+  const cfg = emailConfig()
+  const client = new ImapFlow({
+    host: cfg.host,
+    port: cfg.port,
+    secure: true,
+    auth: { user: cfg.user, pass: cfg.pass },
+    logger: false,
+    emitLogs: false,
+  })
+  idleClient = client
+  client.on('exists', () => {
+    logger.info('IMAP IDLE: new email detected — syncing order data now')
+    // Short delay so the message is fully delivered; second sweep as insurance.
+    setTimeout(() => { pollOrderMailbox().catch(() => {}) }, 2_000)
+    setTimeout(() => { pollOrderMailbox().catch(() => {}) }, 30_000)
+  })
+  client.on('error', (err) => {
+    logger.warn({ err: err instanceof Error ? err.message : 'unknown' }, 'IMAP IDLE connection error')
+  })
+  client.on('close', () => {
+    if (idleClient === client) idleClient = null
+    scheduleIdleReconnect()
+  })
+  try {
+    await client.connect()
+    await client.mailboxOpen(cfg.folder)
+    logger.info({ host: cfg.host, mailbox: cfg.folder }, 'IMAP IDLE listener connected — new order emails sync instantly')
+  } catch (err) {
+    if (idleClient === client) idleClient = null
+    scheduleIdleReconnect()
+    throw err
+  }
+}
+
+/**
+ * Trigger immediate mailbox polls (no-op when not configured). Used by the
+ * Shopify order webhook: the webhook is the instant signal, the notification
+ * email carries the full customer data — poll now and again shortly after
+ * to cover email delivery lag.
+ */
+export function kickEmailIngest(): void {
+  if (!isEmailIngestConfigured()) return
+  setTimeout(() => { pollOrderMailbox().catch(() => {}) }, 1_000)
+  setTimeout(() => { pollOrderMailbox().catch(() => {}) }, 30_000)
 }
 
 // ─── mail.tm REST provider (no IMAP needed) ───────────────────────
@@ -648,8 +719,16 @@ export function startOrderEmailIngest(): void {
   pollTimer = setInterval(() => {
     pollOrderMailbox().catch(() => {})
   }, POLL_INTERVAL_MS)
+  // Instant sync: persistent IDLE connection pushes new-email events immediately
+  if (emailProvider() === 'imap') {
+    setTimeout(() => {
+      startImapIdle().catch((err) => {
+        logger.warn({ err: err instanceof Error ? err.message : 'unknown' }, 'IMAP IDLE listener failed to start — falling back to interval polling')
+      })
+    }, 20_000)
+  }
   logger.info(
-    { intervalMinutes: POLL_INTERVAL_MS / 60000, provider: emailProvider() },
+    { intervalMinutes: POLL_INTERVAL_MS / 60000, provider: emailProvider(), instant: emailProvider() === 'imap' },
     'Order email ingestion scheduler started',
   )
 }
@@ -658,5 +737,15 @@ export function stopOrderEmailIngest(): void {
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
+  }
+  idleStopped = true
+  if (idleReconnectTimer) {
+    clearTimeout(idleReconnectTimer)
+    idleReconnectTimer = null
+  }
+  if (idleClient) {
+    const c = idleClient
+    idleClient = null
+    c.close()
   }
 }

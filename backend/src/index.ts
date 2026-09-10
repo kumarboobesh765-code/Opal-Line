@@ -25,7 +25,7 @@ import { CONSTANTS } from './constants'
 import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup } from './autoBackup'
-import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured } from './orderEmailIngest'
+import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured, kickEmailIngest } from './orderEmailIngest'
 import { startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
 
@@ -277,6 +277,9 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
         logger.warn({ topic }, 'Webhook: orders/cancelled without an identifiable order')
       }
     } else if (topic.startsWith('orders/')) {
+      // Instant sync: the webhook is the instant signal, the notification email
+      // carries the full (non-redacted) customer data — poll the mailbox now.
+      kickEmailIngest()
       const result = await importShopifyOrders()
       logger.info(
         { topic, imported: result.imported, updated: result.updated, ok: result.ok },
