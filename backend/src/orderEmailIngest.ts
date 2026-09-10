@@ -219,6 +219,15 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
         k++
         continue
       }
+      // Compressed single-line form: "Thane, Maharashtra 400607" (city, province+zip)
+      const tailZip = l.match(/,\s*([A-Za-z\s.]+?)\s+(\d{5,6})\s*$/)
+      if (tailZip) {
+        raw.push(l.replace(/,\s*[A-Za-z\s.]+?\s+\d{5,6}\s*$/, ''))
+        raw.push(tailZip[1])
+        zip = tailZip[2]
+        k++
+        continue
+      }
       raw.push(l.replace(/,+$/, ''))
       k++
     }
@@ -285,17 +294,40 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
     }
     const q = l.match(qtyAfterRe)
     if (q && i > 0) {
-      const title = clean(lines[i - 1])
-      if (!title || /^[\d₹]/.test(title) || /^(subtotal|shipping|total|tax)/i.test(title)) continue
+      // mailparser's text conversion can split the price across lines
+      // ("Rs." alone, then "1,299.00 × 1"), so walk back over currency-only
+      // and bare-amount lines to find the real item title.
+      const parts: string[] = []
+      let j = i - 1
+      while (j >= 0 && parts.length < 3) {
+        const prev = lines[j]
+        if (!prev) break
+        if (/^(subtotal|shipping|total|tax|order summary|contact information|payment method|customer|email|phone)\b/i.test(prev)) break
+        if (/^(?:₹|Rs\.?|INR)$/i.test(prev)) { j--; continue } // currency prefix — belongs to the price, not the title
+        if (/^[\d,]+(?:\.\d+)?$/.test(prev)) { j--; continue } // bare amount wrapped onto its own line
+        if (/^SKU:/i.test(prev)) break
+        if (/^[\d₹]/.test(prev)) break
+        parts.unshift(prev)
+        break
+      }
+      const title = clean(parts.join(' '))
+      if (!title) continue
       const key = `${title}|${q[2]}|${q[1]}`
       if (seenItems.has(key)) continue
       seenItems.add(key)
-      items.push({
+      const item = {
         title,
         sku: '',
         quantity: Math.max(0, parseInt(q[2], 10) || 0),
         price: Math.round(Number(q[1].replace(/,/g, '')) * 100) / 100,
-      })
+      }
+      // Attach SKU if it appears just below the price line
+      for (let k = i + 1; k <= Math.min(i + 2, lines.length - 1); k++) {
+        const sk = lines[k].match(/^SKU:\s*(.+)$/i)
+        if (sk) { item.sku = clean(sk[1]); break }
+        if (lines[k] && !/^Rs/.test(lines[k])) break
+      }
+      items.push(item)
     }
   }
 
