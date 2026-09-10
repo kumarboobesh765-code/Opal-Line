@@ -117,7 +117,10 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
   const orderNumber = parseOrderNumberFromSubject(subject)
   if (!orderNumber) return null
 
-  const lines = cleanLines(text)
+  // Strip URLs before scanning — Shopify "View order" links contain long digit
+  // runs (order IDs) that would otherwise be mistaken for phone numbers.
+  const textNoUrls = text.replace(/https?:\/\/\S+/g, ' ')
+  const lines = cleanLines(textNoUrls)
   const lower = lines.map((l) => l.toLowerCase())
 
   const lineAfter = (labelRe: RegExp): string => {
@@ -137,32 +140,66 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
       break
     }
   }
-  if (!customerName) customerName = lineAfter(/^shipping address$/)
+  // Customer name: "placed by <Name>" in the subject (Shopify staff notification)
+  if (!customerName) {
+    const m = subject.match(/placed by\s+(.+?)\s*(?:\(|$)/i)
+    if (m) customerName = clean(m[1])
+  }
+  // Body: "Priya Raghavan placed order #1035 on Sep 10 ..."
+  if (!customerName) {
+    for (const l of lines) {
+      const m = l.match(/^([A-Za-z][\w'.&-]*(?:\s+[A-Za-z][\w'.&-]*){0,4})\s+placed order\b/)
+      if (m) { customerName = clean(m[1]); break }
+    }
+  }
+  if (!customerName) customerName = lineAfter(/^shipping address/)
 
-  const emailMatch = text.match(EMAIL_RE)
-  const email = emailMatch ? emailMatch[0] : ''
+  // Email: prefer a labeled "Email:" line, fall back to first address in body
+  let email = ''
+  const emailLblIdx = lower.findIndex((l) => /^email(?: address)?:/.test(l) || /^email$/.test(l))
+  if (emailLblIdx >= 0) {
+    const inline = lines[emailLblIdx].split(/:\s*(.+)$/)[1]
+    const v = clean(inline || (lines[emailLblIdx + 1] ?? ''))
+    const m = v.match(EMAIL_RE)
+    if (m) email = m[0]
+  }
+  if (!email) {
+    const m = textNoUrls.match(EMAIL_RE)
+    if (m) email = m[0]
+  }
 
   let phone = ''
-  const phoneIdx = lower.findIndex((l) => /^phone number$/.test(l))
+  const phoneIdx = lower.findIndex((l) => /^(phone|phone number|contact number):?\s*$/.test(l))
   if (phoneIdx >= 0) {
-    phone = clean(lines[phoneIdx + 1] ?? '')
+    const inline = lines[phoneIdx].split(/:\s*(.+)$/)[1]
+    phone = clean(inline || (lines[phoneIdx + 1] ?? ''))
   }
   if (!phone) {
-    const allPhones = text.match(new RegExp(PHONE_RE.source, 'g')) ?? []
-    phone = clean(allPhones.find((p) => p.replace(/\D/g, '').length >= 10) ?? '')
+    const allPhones = textNoUrls.match(new RegExp(PHONE_RE.source, 'g')) ?? []
+    phone = clean(allPhones.find((p) => {
+      const digits = p.replace(/\D/g, '')
+      return digits.length >= 10 && digits.length <= 13
+    }) ?? '')
   }
 
   // Address block: prefer Shipping Address, fall back to Billing Address.
+  // Supports "Shipping address" / "Shipping address:" / "Shipping:" label forms.
   const parseAddr = (startRe: RegExp): OrderEmailData['shipping'] => {
     const start = lower.findIndex((l) => startRe.test(l))
     if (start < 0) return null
     const fields: { name?: string; address1?: string; address2?: string; city?: string; province?: string; zip?: string; country?: string; phone?: string } = {}
     let addressLines: string[] = []
+    // Inline value on the label line itself ("Shipping: 48 Lake View Road")
+    const labelLine = lines[start]
+    if (labelLine.includes(':')) {
+      const inlineVal = clean(labelLine.split(/:(.+)$/)[1] ?? '')
+      if (inlineVal) addressLines.push(inlineVal)
+    }
     let k = start + 1
     while (k < lines.length && k < start + 12) {
       const l = lines[k]
       const ll = lower[k]
-      if (/^(billing address|shipping address|customer|payment method|note|items?)$/.test(ll)) break
+      if (/^(billing address|shipping address|customer|payment method|payment|gateway|note|items?|email|phone).*$/.test(ll) && !PHONE_RE.test(l)) break
       if (EMAIL_RE.test(l)) break
       if (PHONE_RE.test(l) && !fields.phone && addressLines.length > 0) {
         fields.phone = clean(l)
@@ -186,20 +223,42 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
     return Object.values(fields).some(Boolean) ? fields : null
   }
 
-  const shipping = parseAddr(/^shipping address$/) ?? parseAddr(/^billing address$/)
-  const billing = parseAddr(/^billing address$/) ?? shipping
+  const shipping = parseAddr(/^shipping address/i) ?? parseAddr(/^shipping:/i) ?? parseAddr(/^billing address/i) ?? parseAddr(/^billing:/i)
+  const billing = parseAddr(/^billing address/i) ?? parseAddr(/^billing:/i) ?? shipping
 
   // Items table (plain text): "1 × Silver Bangles 925 ₹3,200.00" variants
   const items: OrderEmailData['items'] = []
   const itemRe = /^\s*(\d+)\s*[×x]\s*(.+?)\s+(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)\s*$/
-  for (const l of lines) {
+  // Shopify staff-email format: title line, then "Rs. 2,499.00 × 1"
+  const qtyAfterRe = /^\s*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)\s*×\s*(\d+)\s*$/
+  const seenItems = new Set<string>()
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
     const m = l.match(itemRe)
     if (m) {
+      const key = `${m[2]}|${m[1]}|${m[3]}`
+      if (seenItems.has(key)) continue
+      seenItems.add(key)
       items.push({
         title: clean(m[2]),
         sku: '',
         quantity: Math.max(0, parseInt(m[1], 10) || 0),
         price: Math.round(Number(m[3].replace(/,/g, '')) * 100) / 100,
+      })
+      continue
+    }
+    const q = l.match(qtyAfterRe)
+    if (q && i > 0) {
+      const title = clean(lines[i - 1])
+      if (!title || /^[\d₹]/.test(title) || /^(subtotal|shipping|total|tax)/i.test(title)) continue
+      const key = `${title}|${q[2]}|${q[1]}`
+      if (seenItems.has(key)) continue
+      seenItems.add(key)
+      items.push({
+        title,
+        sku: '',
+        quantity: Math.max(0, parseInt(q[2], 10) || 0),
+        price: Math.round(Number(q[1].replace(/,/g, '')) * 100) / 100,
       })
     }
   }
@@ -220,10 +279,13 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
     }
   }
 
-  // Payment method: line after "Payment method" label
+  // Payment method: line after "Payment method" label (or inline after colon)
   let paymentMethod = ''
-  const payIdx = lower.findIndex((l) => /^payment method$/.test(l))
-  if (payIdx >= 0) paymentMethod = clean(lines[payIdx + 1] ?? '')
+  const payIdx = lower.findIndex((l) => /^(payment method|payment|gateway):?\s*$/.test(l))
+  if (payIdx >= 0) {
+    const inline = lines[payIdx].split(/:\s*(.+)$/)[1]
+    paymentMethod = clean(inline || (lines[payIdx + 1] ?? ''))
+  }
 
   const date = new Date().toISOString()
   if (!customerName && !email && !phone && !shipping && !billing) return null
@@ -249,29 +311,33 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
 export function parseOrderEmail(mail: ParsedMail): OrderEmailData | null {
   const subject = clean(mail.subject)
   if (!parseOrderNumberFromSubject(subject)) return null
+  let result: OrderEmailData | null = null
   if (mail.text) {
-    const fromText = parseOrderEmailText(mail.text, subject)
-    if (fromText) return fromText
+    result = parseOrderEmailText(mail.text, subject)
   }
-  if (mail.html) {
+  if (!result && mail.html) {
     const html = typeof mail.html === 'string' ? mail.html : false
     if (html) {
       const text = html
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/(p|div|tr|h\d)>/gi, '\n')
+        .replace(/<\/(p|div|tr|td|th|h\d)>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/g, ' ')
         .replace(/&amp;/g, '&')
         .replace(/&#8377;|&rsquo;/g, ' ')
         .replace(/[ \t]+/g, ' ')
         .replace(/\n{3,}/g, '\n\n')
-      const fromHtml = parseOrderEmailText(text, subject)
-      if (fromHtml) return fromHtml
+      result = parseOrderEmailText(text, subject)
     }
   }
-  return null
+  // Prefer the email's own date over parse time
+  if (result && mail.date) {
+    const d = new Date(mail.date)
+    if (!Number.isNaN(d.getTime())) result.date = d.toISOString()
+  }
+  return result
 }
 
 // ─── DB merge ───────────────────────────────────────────────────────
@@ -465,6 +531,8 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
         // Only order notifications — skip shipping/refund/etc.
         if (!parseOrderNumberFromSubject(subject)) continue
         if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
+      if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
+        if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
         const data = parseOrderEmail(parsed)
         if (!data) continue
         res.parsed++
@@ -543,6 +611,7 @@ async function pollMailtm(cfg: { user: string; pass: string }, res: IngestResult
       const subject = clean(m.subject)
       if (!parseOrderNumberFromSubject(subject)) continue
       if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
+      if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
       try {
         const fullRes = await fetch(`${MAILTM_API}/messages/${m.id}`, {
           headers,
