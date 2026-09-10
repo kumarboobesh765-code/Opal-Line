@@ -112,6 +112,7 @@ export default function SalesInvoicesPage() {
           <div>
             <p className="font-medium text-foreground">{row.original.customer}</p>
             <p className="text-[11px] text-muted-foreground">{row.original.customerEmail}</p>
+            {row.original.customerPhone ? <p className="text-[11px] text-muted-foreground">{row.original.customerPhone}</p> : null}
           </div>
         ),
       },

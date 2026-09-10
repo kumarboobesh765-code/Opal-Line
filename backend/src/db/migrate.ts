@@ -32,6 +32,12 @@ async function main() {
   await client.unsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "permissions" jsonb;`)
   await client.unsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "username" text;`)
   await client.unsafe(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "password_hash" text;`)
+  // Invoice customer detail snapshot (address block for print/PDF)
+  await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_phone" text;`)
+  await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_address" text;`)
+  await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_city" text;`)
+  await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_state" text;`)
+  await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_pincode" text;`)
 
   console.log('Seeding default roles (idempotent)...')
   for (const [i, name] of roleNames.entries()) {

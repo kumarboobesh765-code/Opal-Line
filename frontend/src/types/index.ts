@@ -253,8 +253,11 @@ export interface Invoice {
   customer: string
   customerEmail: string
   customerPhone?: string
-  customerGstin?: string
+  customerAddress?: string
+  customerCity?: string
   customerState?: string
+  customerPincode?: string
+  customerGstin?: string
   customerStateCode?: string
   items: InvoiceItem[]
   silverValue: number

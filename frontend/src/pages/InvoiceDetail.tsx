@@ -147,6 +147,10 @@ export default function InvoiceDetailPage() {
           <div class="label">Bill To</div>
           <div class="name">${escapeHtml(invoice.customer)}</div>
           <div class="detail">${escapeHtml(invoice.customerEmail) ?? ''}${invoice.customerPhone ? '<br/>' + escapeHtml(invoice.customerPhone) : ''}</div>
+          ${invoice.customerAddress || invoice.customerCity || invoice.customerState || invoice.customerPincode ? `<div class="detail" style="margin-top:4px;white-space:pre-line;">${[
+            invoice.customerAddress,
+            [invoice.customerCity, invoice.customerState, invoice.customerPincode].filter(Boolean).join(', '),
+          ].filter(Boolean).join('\n')}</div>` : ''}
         </div>
         <div class="billto-box">
           <div class="label">Order Details</div>
@@ -317,8 +321,17 @@ export default function InvoiceDetailPage() {
                   <div>
                     <p className="text-sm font-semibold text-foreground">{invoice.customer}</p>
                     <p className="text-xs text-muted-foreground">{invoice.customerEmail}</p>
+                    {invoice.customerPhone ? <p className="text-xs text-muted-foreground">{invoice.customerPhone}</p> : null}
                   </div>
                 </div>
+                {invoice.customerAddress || invoice.customerCity || invoice.customerState || invoice.customerPincode ? (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {invoice.customerAddress ? <p>{invoice.customerAddress}</p> : null}
+                    {[invoice.customerCity, invoice.customerState, invoice.customerPincode].filter(Boolean).length > 0 ? (
+                      <p>{[invoice.customerCity, invoice.customerState, invoice.customerPincode].filter(Boolean).join(', ')}</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <Separator className="my-4" />
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">

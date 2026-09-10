@@ -217,7 +217,15 @@ export default function SalesOrdersPage() {
       try {
         const settings = await dbApi.getSettings().catch(() => null)
         const gst = settings?.gstRate ?? 3
-        const customer = customers.find((c) => c.name === o.customer) ?? null
+        // Customer snapshot: prefer the customer record (email/phone), fall back to
+        // the order's own shipping/billing address for contact + full address block.
+        const addr = (o.shippingAddress && (o.shippingAddress.address1 || o.shippingAddress.city)) ? o.shippingAddress : (o.billingAddress ?? undefined)
+        const fmtAddr = addr
+          ? [addr.address1, addr.address2].filter(Boolean).join(', ')
+          : ''
+        const customer = customers.find((c) => c.name === o.customer)
+          ?? customers.find((c) => c.email && o.shippingAddress && (o.shippingAddress as any).phone && c.phone === (o.shippingAddress as any).phone)
+          ?? null
         const items = (o.lineItems ?? [])
           .map((li) => {
             const qty = Number(li.quantity ?? 0)
@@ -245,6 +253,11 @@ export default function SalesOrdersPage() {
           shopifyOrder: o.shopifyId,
           customer: o.customer,
           customerEmail: customer?.email ?? '',
+          customerPhone: customer?.phone ?? (addr as any)?.phone ?? '',
+          customerAddress: fmtAddr || (addr as any)?.address1 || '',
+          customerCity: (addr as any)?.city ?? customer?.city ?? '',
+          customerState: (addr as any)?.province ?? customer?.province ?? '',
+          customerPincode: (addr as any)?.zip ?? '',
           silverValue: 0,
           makingCharge: 0,
           subtotal,
@@ -1003,6 +1016,18 @@ export default function SalesOrdersPage() {
           {viewOrder ? (
             <div className="space-y-2 text-sm">
               <DetailRow label="Customer" value={viewOrder.customer} />
+              {(() => {
+                const a = (viewOrder.shippingAddress && (viewOrder.shippingAddress.address1 || viewOrder.shippingAddress.city)) ? viewOrder.shippingAddress : viewOrder.billingAddress
+                if (!a) return null
+                return (
+                  <>
+                    {a.phone ? <DetailRow label="Phone" value={a.phone} /> : null}
+                    {a.address1 ? <DetailRow label="Address" value={[a.address1, a.address2].filter(Boolean).join(', ')} /> : null}
+                    {[a.city, a.province, a.zip].some(Boolean) ? <DetailRow label="City" value={[a.city, a.province, a.zip].filter(Boolean).join(', ')} /> : null}
+                    {a.country ? <DetailRow label="Country" value={a.country} /> : null}
+                  </>
+                )
+              })()}
               <DetailRow label="Order Value" value={formatCurrency(viewOrder.value)} />
               {viewOrder.currency && viewOrder.currency.toUpperCase() !== 'INR' ? (
                 <DetailRow label="Currency" value={viewOrder.currency} />
