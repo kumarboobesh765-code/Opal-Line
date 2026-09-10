@@ -93,7 +93,10 @@ const cleanLines = (v: unknown): string[] =>
     ? v
         .split('\n')
         .map((l) => l.trim())
-        .filter(Boolean)
+        // Drop empty lines and dash/underscore separator rules — Gmail renders
+        // CSS rules as dashes and templates use them as visual separators;
+        // either way they must never be mistaken for values.
+        .filter((l) => l && !/^[-=_*.\s]+$/.test(l))
     : []
 
 // "Order #1042" / "New order #1042" / "Dev store order #1042" — capture digits.
@@ -134,7 +137,7 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
   if (custIdx >= 0) {
     for (let i = custIdx + 1; i < Math.min(custIdx + 4, lines.length); i++) {
       const v = clean(lines[i])
-      if (!v || ORDER_NUM_RE.test(v)) continue
+      if (!v || ORDER_NUM_RE.test(v) || /^[-=_*.\s]+$/.test(v)) continue
       if (EMAIL_RE.test(v) || PHONE_RE.test(v)) break
       customerName = v
       break
@@ -167,6 +170,7 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
     const m = textNoUrls.match(EMAIL_RE)
     if (m) email = m[0]
   }
+  if (email) email = email.replace(/\.+$/, '') // strip trailing sentence period
 
   let phone = ''
   const phoneIdx = lower.findIndex((l) => /^(phone|phone number|contact number):?\s*$/.test(l))
@@ -188,38 +192,66 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
     const start = lower.findIndex((l) => startRe.test(l))
     if (start < 0) return null
     const fields: { name?: string; address1?: string; address2?: string; city?: string; province?: string; zip?: string; country?: string; phone?: string } = {}
-    let addressLines: string[] = []
+    const raw: string[] = []
+    let zip = ''
     // Inline value on the label line itself ("Shipping: 48 Lake View Road")
     const labelLine = lines[start]
     if (labelLine.includes(':')) {
       const inlineVal = clean(labelLine.split(/:(.+)$/)[1] ?? '')
-      if (inlineVal) addressLines.push(inlineVal)
+      if (inlineVal) raw.push(inlineVal)
     }
     let k = start + 1
-    while (k < lines.length && k < start + 12) {
+    while (k < lines.length && k < start + 14) {
       const l = lines[k]
       const ll = lower[k]
       if (/^(billing address|shipping address|customer|payment method|payment|gateway|note|items?|email|phone).*$/.test(ll) && !PHONE_RE.test(l)) break
       if (EMAIL_RE.test(l)) break
-      if (PHONE_RE.test(l) && !fields.phone && addressLines.length > 0) {
+      // Shopify mail footer — never part of the customer's address
+      if (/^shopify$/i.test(l) || /ottawa/i.test(l)) break
+      if (PHONE_RE.test(l) && !fields.phone) {
         fields.phone = clean(l.replace(/^phone\s*:\s*/i, ''))
         k++
         continue
       }
-      if (/^\d{5,6}(\s|,|-|$)/.test(l)) {
-        // PIN code line often "400069" or "400069 MH" — the city/province precede it
-        const prev = addressLines.length ? addressLines[addressLines.length - 1] : ''
-        fields.zip = l
-        if (prev) fields.city = prev
+      const zipM = l.match(/^(\d{5,6})\b/)
+      if (zipM) {
+        zip = zipM[1]
         k++
         continue
       }
-      addressLines.push(l)
+      raw.push(l.replace(/,+$/, ''))
       k++
     }
-    if (addressLines.length > 0) fields.name = addressLines.shift()
-    if (addressLines.length > 0) fields.address1 = addressLines.shift()
-    if (addressLines.length > 0) fields.address2 = addressLines.join(', ')
+    if (zip) {
+      // Shopify's canonical layout: name, street…, city, province, <zip>, country.
+      // A wordy line after the zip is the country.
+      if (raw.length > 0 && /^[A-Za-z\s.'-]+$/.test(raw[raw.length - 1])) {
+        fields.country = raw.pop()!
+      }
+      const before = raw
+      if (before.length >= 4) {
+        fields.name = before[0]
+        fields.address1 = before[1]
+        const mid = before.slice(2, before.length - 2)
+        if (mid.length) fields.address2 = mid.join(', ')
+        fields.city = before[before.length - 2]
+        fields.province = before[before.length - 1]
+      } else if (before.length === 3) {
+        fields.name = before[0]
+        fields.address1 = before[1]
+        fields.city = before[2]
+      } else if (before.length === 2) {
+        fields.name = before[0]
+        fields.city = before[1]
+      } else if (before.length === 1) {
+        fields.name = before[0]
+      }
+      fields.zip = zip
+    } else {
+      if (raw.length > 0) fields.name = raw.shift()
+      if (raw.length > 0) fields.address1 = raw.shift()
+      if (raw.length > 0) fields.address2 = raw.join(', ')
+    }
     return Object.values(fields).some(Boolean) ? fields : null
   }
 
@@ -285,7 +317,7 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
 
   // Payment method: line after "Payment method" label (or inline after colon)
   let paymentMethod = ''
-  const payIdx = lower.findIndex((l) => /^(payment method|payment|gateway):?\s*$/.test(l))
+  const payIdx = lower.findIndex((l) => /^(payment method|payment processing method|payment|gateway):?\s*$/.test(l))
   if (payIdx >= 0) {
     const inline = lines[payIdx].split(/:\s*(.+)$/)[1]
     paymentMethod = clean(inline || (lines[payIdx + 1] ?? ''))
@@ -322,7 +354,12 @@ export function parseOrderEmail(mail: ParsedMail): OrderEmailData | null {
   if (!result && mail.html) {
     const html = typeof mail.html === 'string' ? mail.html : false
     if (html) {
-      const text = html
+      // Shopify staff notifications end with a footer (class="no-print")
+      // carrying Shopify's own Ottawa address — cut everything after it so it
+      // can never leak into a parsed address block.
+      const cut = html.search(/class="no-print"|<footer/i)
+      const body = cut >= 0 ? html.slice(0, cut) : html
+      const text = body
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<br\s*\/?>/gi, '\n')
@@ -405,7 +442,7 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
   const shippingAddress = d.shipping ?? undefined
 
   const [existing] = await db
-    .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress })
+    .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress, lineItems: schema.salesOrders.lineItems })
     .from(schema.salesOrders)
     .where(eq(schema.salesOrders.shopifyId, shopifyId))
     .limit(1)
@@ -421,8 +458,17 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
     const newAddr = needAddr ? billingAddress : undefined
     const newCustomer = d.customerName && d.customerName !== 'Guest' ? d.customerName : undefined
     const newTotal = d.total > 0 ? d.total : undefined
-    const newItems = d.items.length > 0 ? d.items.reduce((s, i) => s + i.quantity, 0) : undefined
-    const newLineItems = d.items.length > 0 ? d.items : undefined
+    // Union line items across emails — the same order arrives via both the
+    // staff notification and the customer confirmation, often with different
+    // subsets parsed; never lose an already-parsed item.
+    const prevItems = Array.isArray(existing.lineItems) ? (existing.lineItems as OrderEmailData['items']) : []
+    const mergedItems = [...prevItems]
+    for (const it of d.items) {
+      const key = `${it.title}|${it.quantity}|${it.price}`
+      if (!mergedItems.some((p) => `${p.title}|${p.quantity}|${p.price}` === key)) mergedItems.push(it)
+    }
+    const newLineItems = mergedItems.length > prevItems.length ? mergedItems : undefined
+    const newItems = newLineItems ? mergedItems.reduce((s, i) => s + i.quantity, 0) : undefined
     if (!newAddr && !newCustomer && !newTotal && !newLineItems) {
       return { updated: false, created: false } // nothing meaningful to add
     }
