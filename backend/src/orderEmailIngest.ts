@@ -131,17 +131,22 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
     return idx >= 0 && idx + 1 < lines.length ? clean(lines[idx + 1]) : ''
   }
 
-  // Customer name: line after "Customer" label (skip the order-number line itself)
+  // Customer name: line after "Customer" label (skip the order-number line itself).
+  // HTML→text conversion wraps names across lines ("Karthik" / "Subramanian"),
+  // so absorb consecutive single-word alpha fragments after the first line.
   let customerName = ''
   const custIdx = lower.findIndex((l) => /^customer\b/.test(l))
   if (custIdx >= 0) {
-    for (let i = custIdx + 1; i < Math.min(custIdx + 4, lines.length); i++) {
+    const parts: string[] = []
+    for (let i = custIdx + 1; i < Math.min(custIdx + 8, lines.length); i++) {
       const v = clean(lines[i])
       if (!v || ORDER_NUM_RE.test(v) || /^[-=_*.\s]+$/.test(v)) continue
       if (EMAIL_RE.test(v) || PHONE_RE.test(v)) break
-      customerName = v
-      break
+      if (parts.length > 0 && (!/^[A-Za-z][A-Za-z.'-]*$/.test(v) || /^(email|phone|payment|billing|shipping|customer|note|order)\b/i.test(v))) break
+      parts.push(v)
+      if (parts.length >= 3) break
     }
+    customerName = clean(parts.join(' '))
   }
   // Customer name: "placed by <Name>" in the subject (Shopify staff notification)
   if (!customerName) {
@@ -238,6 +243,12 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
         fields.country = raw.pop()!
       }
       const before = raw
+      // Names wrap across lines ("Karthik" / "Subramanian") — rejoin when the
+      // first two lines match the known customer name from the Contact section.
+      if (before.length >= 2 && customerName && !before[0].includes(' ')) {
+        const joined = `${before[0]} ${before[1]}`
+        if (joined.toLowerCase() === customerName.toLowerCase()) before.splice(0, 2, joined)
+      }
       if (before.length >= 4) {
         fields.name = before[0]
         fields.address1 = before[1]
@@ -305,10 +316,13 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
         if (/^(subtotal|shipping|total|tax|order summary|contact information|payment method|customer|email|phone)\b/i.test(prev)) break
         if (/^(?:₹|Rs\.?|INR)$/i.test(prev)) { j--; continue } // currency prefix — belongs to the price, not the title
         if (/^[\d,]+(?:\.\d+)?$/.test(prev)) { j--; continue } // bare amount wrapped onto its own line
-        if (/^SKU:/i.test(prev)) break
+        if (/^SKU/i.test(prev)) break
         if (/^[\d₹]/.test(prev)) break
+        // Title fragments wrap across lines ("Silver" / "Stud Earrings") —
+        // absorb consecutive alphabetic fragments after the first one.
+        if (parts.length > 0 && !/^[A-Za-z][A-Za-z\s.&'-]*$/.test(prev)) break
         parts.unshift(prev)
-        break
+        j--
       }
       const title = clean(parts.join(' '))
       if (!title) continue
@@ -321,11 +335,13 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
         quantity: Math.max(0, parseInt(q[2], 10) || 0),
         price: Math.round(Number(q[1].replace(/,/g, '')) * 100) / 100,
       }
-      // Attach SKU if it appears just below the price line
-      for (let k = i + 1; k <= Math.min(i + 2, lines.length - 1); k++) {
+      // Attach SKU if it appears just below the price line ("SKU: X" or
+      // "SKU:" with the value wrapped onto the next line)
+      for (let k = i + 1; k <= Math.min(i + 3, lines.length - 1); k++) {
         const sk = lines[k].match(/^SKU:\s*(.+)$/i)
-        if (sk) { item.sku = clean(sk[1]); break }
-        if (lines[k] && !/^Rs/.test(lines[k])) break
+        if (sk && sk[1]) { item.sku = clean(sk[1]); break }
+        if (/^SKU:?$/i.test(lines[k])) { item.sku = clean(lines[k + 1] ?? ''); break }
+        if (lines[k] && !/^Rs/i.test(lines[k]) && !/^[\d,]/.test(lines[k])) break
       }
       items.push(item)
     }
