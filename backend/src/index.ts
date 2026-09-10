@@ -24,7 +24,7 @@ import { logger } from './logger'
 import { CONSTANTS } from './constants'
 import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
-import { startAutoBackup } from './autoBackup'
+import { startAutoBackup, startDailySummary } from './autoBackup'
 import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured, kickEmailIngest } from './orderEmailIngest'
 import { startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
@@ -1120,6 +1120,8 @@ const server = app.listen(config.port, async () => {
   await loadSecretsFromDb()
   // Schedule the daily automated backup (7:00 PM local time).
   startAutoBackup()
+  // Daily business summary email (9:00 AM IST).
+  startDailySummary()
   startSilverRateScheduler()
   // Poll the order-notification mailbox so redacted Shopify PII still reaches the ERP
   startOrderEmailIngest()

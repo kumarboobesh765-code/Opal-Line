@@ -20,27 +20,69 @@ export interface NotificationOptions {
  * Send an email notification. Returns silently if RESEND_API_KEY is not set
  * (graceful degradation — notifications are optional).
  */
+let gmailTransport: import('nodemailer').Transporter | null = null
+
+/**
+ * Gmail SMTP fallback using the same ORDER_EMAIL_* app-password credentials
+ * the order-email ingest already uses. Lets notifications work without a
+ * separate Resend account.
+ */
+function getGmailTransport(): import('nodemailer').Transporter | null {
+  const user = process.env.ORDER_EMAIL_ADDRESS?.trim()
+  const passEnc = process.env.ORDER_EMAIL_PASSWORD?.trim()
+  if (!user || !passEnc) return null
+  if (!gmailTransport) {
+    // Lazy import keeps nodemailer optional at module-load time
+    const nodemailer = require('nodemailer') as typeof import('nodemailer')
+    const { decryptSecret } = require('./lib/crypto') as typeof import('./lib/crypto')
+    gmailTransport = nodemailer.createTransport({
+      host: process.env.NOTIFICATION_SMTP_HOST?.trim() || 'smtp.gmail.com',
+      port: Number(process.env.NOTIFICATION_SMTP_PORT ?? 465),
+      secure: true,
+      auth: { user, pass: decryptSecret(passEnc) },
+    })
+  }
+  return gmailTransport
+}
+
 export async function sendEmail(opts: NotificationOptions): Promise<boolean> {
   const client = getClient()
-  if (!client) {
-    logger.debug('Email skipped — RESEND_API_KEY not configured')
+  if (client) {
+    try {
+      const from = process.env.EMAIL_FROM || 'Opal Line <notifications@opalline.in>'
+      const { error } = await client.emails.send({
+        from,
+        to: [opts.to],
+        subject: opts.subject,
+        html: opts.html,
+      })
+      if (error) {
+        logger.error({ error: error.message }, 'Email send failed')
+        return false
+      }
+      return true
+    } catch (err) {
+      logger.error({ err }, 'Email send exception')
+      return false
+    }
+  }
+  // Fallback: Gmail SMTP with the ingest app password
+  const transport = getGmailTransport()
+  if (!transport) {
+    logger.debug('Email skipped — no RESEND_API_KEY and no ORDER_EMAIL credentials')
     return false
   }
   try {
-    const from = process.env.EMAIL_FROM || 'Opal Line <notifications@opalline.in>'
-    const { error } = await client.emails.send({
-      from,
-      to: [opts.to],
+    const user = process.env.ORDER_EMAIL_ADDRESS!.trim()
+    await transport.sendMail({
+      from: process.env.EMAIL_FROM || `Opal Line ERP <${user}>`,
+      to: opts.to,
       subject: opts.subject,
       html: opts.html,
     })
-    if (error) {
-      logger.error({ error: error.message }, 'Email send failed')
-      return false
-    }
     return true
   } catch (err) {
-    logger.error({ err }, 'Email send exception')
+    logger.error({ err }, 'Gmail SMTP send failed')
     return false
   }
 }

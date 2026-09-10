@@ -1,12 +1,17 @@
 import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises'
 import { unlinkSync } from 'node:fs'
 import path from 'node:path'
+import { eq, gte, isNotNull, lte, ne, sql, and } from 'drizzle-orm'
 import { exportScopeData, backupDirectory } from './routes/backup'
 import { logger } from './logger'
 import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from './notifications'
+import { db } from './db/client'
+import * as schema from './db/schema'
 
 export const AUTO_BACKUP_HOUR = 19
 export const AUTO_BACKUP_MINUTE = 0
+export const DAILY_SUMMARY_HOUR = 9
+export const DAILY_SUMMARY_MINUTE = 0
 
 export function autoBackupDirectory(): string {
   return backupDirectory()
@@ -96,6 +101,75 @@ function schedule(): void {
     void runAutoBackup()
   }, msUntilNextRun())
   timer.unref()
+}
+
+// ─── Daily summary email ────────────────────────────────────────────
+
+let summaryTimer: NodeJS.Timeout | null = null
+
+function msUntilNextSummary(now = new Date()): number {
+  const next = new Date(now)
+  next.setHours(DAILY_SUMMARY_HOUR, DAILY_SUMMARY_MINUTE, 0, 0)
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1)
+  return next.getTime() - now.getTime()
+}
+
+async function runDailySummary(): Promise<void> {
+  try {
+    if (!db) return
+    const [settingsRow] = await db.select().from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+    if (settingsRow && settingsRow.dailySummary === false) return
+    const recipient = process.env.NOTIFICATION_EMAIL?.trim() || settingsRow?.email?.trim()
+    if (!recipient) {
+      logger.debug('Daily summary skipped — no NOTIFICATION_EMAIL or settings.email')
+      return
+    }
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const [salesRow] = await db
+      .select({ total: sql<number>`coalesce(sum(${schema.salesInvoices.grandTotal}), 0)::float` })
+      .from(schema.salesInvoices)
+      .where(gte(schema.salesInvoices.date, since))
+    const [ordersRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.salesOrders)
+      .where(gte(schema.salesOrders.date, since))
+    const [pendingRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.salesInvoices)
+      .where(ne(schema.salesInvoices.paymentStatus, 'paid'))
+    const [lowStockRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.products)
+      .where(and(isNotNull(schema.products.stock), isNotNull(schema.products.reorderLevel), lte(schema.products.stock, schema.products.reorderLevel)))
+    const sent = await notifyDailySummary(recipient, {
+      todaySales: Number(salesRow?.total ?? 0),
+      todayOrders: Number(ordersRow?.count ?? 0),
+      pendingPayments: Number(pendingRow?.count ?? 0),
+      lowStockCount: Number(lowStockRow?.count ?? 0),
+    })
+    if (sent) logger.info({ recipient }, 'Daily summary email sent')
+  } catch (err) {
+    logger.error({ err }, 'Daily summary failed')
+  }
+}
+
+function scheduleSummary(): void {
+  summaryTimer = setTimeout(() => {
+    scheduleSummary()
+    void runDailySummary()
+  }, msUntilNextSummary())
+  summaryTimer.unref()
+}
+
+export function startDailySummary(): void {
+  if (summaryTimer) return
+  scheduleSummary()
+  logger.info({ next: new Date(Date.now() + msUntilNextSummary()).toISOString() }, 'Daily summary scheduler started (9:00 AM IST)')
+}
+
+export function stopDailySummary(): void {
+  if (summaryTimer) clearTimeout(summaryTimer)
+  summaryTimer = null
 }
 
 const KEEP_BACKUPS = 15

@@ -576,6 +576,17 @@ async function nextInvoiceNumber(prefix: string): Promise<string> {
   return `${prefix}${stamp}${Date.now().toString().slice(-6)}`
 }
 
+/** Deduct sold quantity from product stock. Never blocks invoicing on stock gaps. */
+async function deductStock(tx: any, sku: string, qty: number): Promise<void> {
+  if (!sku || !qty) return
+  try {
+    const [row] = await tx.select({ stock: schema.products.stock }).from(schema.products).where(eq(schema.products.sku, sku)).limit(1).for('update')
+    if (!row) return
+    const next = Number(row.stock ?? 0) - qty
+    await tx.update(schema.products).set({ stock: next }).where(eq(schema.products.sku, sku))
+  } catch { /* stock tracking optional for email orders */ }
+}
+
 /**
  * Auto-raise a tax invoice when an email-synced order is created/updated.
  * Idempotent: skips orders that already have an invoice; refreshes the
@@ -658,6 +669,8 @@ export async function autoInvoiceOrder(d: OrderEmailData): Promise<{ created: bo
     })
     for (const it of items) {
       await tx.insert(schema.salesInvoiceItems).values({ ...it, id: crypto.randomUUID(), invoiceId })
+      // Deduct stock for the sold SKU, same rule as manual invoices
+      await deductStock(tx, it.sku, it.qty)
     }
     await tx.update(schema.salesOrders).set({ invoice: number }).where(eq(schema.salesOrders.id, order.id))
   })
