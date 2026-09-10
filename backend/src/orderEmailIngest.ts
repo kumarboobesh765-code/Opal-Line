@@ -535,7 +535,9 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
         // Only order notifications — skip shipping/refund/etc.
         if (!parseOrderNumberFromSubject(subject)) continue
         if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
-        if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
+        // Shopify's "send test notification" button uses fake order #9999 — skip
+        // only that. Real orders in test mode carry [Testing] and MUST sync.
+        if (/\[testing\]/i.test(subject) && /#9999\b/.test(subject)) continue
         const data = parseOrderEmail(parsed)
         if (!data) continue
         res.parsed++
@@ -682,7 +684,9 @@ async function pollMailtm(cfg: { user: string; pass: string }, res: IngestResult
       const subject = clean(m.subject)
       if (!parseOrderNumberFromSubject(subject)) continue
       if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
-      if (/\[testing\]/i.test(subject)) continue // Shopify test notifications (e.g. "[Testing] Order #9999")
+      // Shopify's "send test notification" button uses fake order #9999 — skip
+      // only that. Real orders in test mode carry [Testing] and MUST sync.
+      if (/\[testing\]/i.test(subject) && /#9999\b/.test(subject)) continue
       try {
         const fullRes = await fetch(`${MAILTM_API}/messages/${m.id}`, {
           headers,
