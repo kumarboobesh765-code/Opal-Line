@@ -61,6 +61,8 @@ const statusMeta: Record<OrderStatus, { label: string; variant: 'success' | 'war
 const paymentMeta: Record<string, { label: string; variant: 'success' | 'warning' | 'muted' | 'info' }> = {
   paid: { label: 'Paid', variant: 'success' },
   pending: { label: 'Pending', variant: 'warning' },
+  cod: { label: 'COD', variant: 'warning' },
+  bank: { label: 'Bank Transfer', variant: 'info' },
   refunded: { label: 'Refunded', variant: 'muted' },
   Online: { label: 'Paid', variant: 'success' },
   online: { label: 'Paid', variant: 'success' },
@@ -1009,10 +1011,10 @@ export default function SalesOrdersPage() {
                 <DetailRow label="Discount" value={formatCurrency(viewOrder.discount)} />
               ) : null}
               <DetailRow label="Items" value={`${viewOrder.items} item(s)`} />
-              <DetailRow label="Payment" value={paymentMeta[viewOrder.payment].label} />
-              <DetailRow label="Fulfillment" value={fulfillmentMeta[viewOrder.fulfillment].label} />
+              <DetailRow label="Payment" value={getPaymentMeta(viewOrder.payment).label} />
+              <DetailRow label="Fulfillment" value={getFulfillmentMeta(viewOrder.fulfillment).label} />
               <DetailRow label="Invoice" value={viewOrder.invoice ?? 'Not raised'} />
-              <DetailRow label="Status" value={statusMeta[viewOrder.status].label} />
+              <DetailRow label="Status" value={statusMeta[viewOrder.status]?.label ?? viewOrder.status} />
               <DetailRow label="Order Date" value={formatDate(viewOrder.date)} />
               {viewOrder.tags ? <DetailRow label="Tags" value={viewOrder.tags.split(',').join(', ')} /> : null}
               {viewOrder.billingAddress && (viewOrder.billingAddress.name || viewOrder.billingAddress.address1) ? (
