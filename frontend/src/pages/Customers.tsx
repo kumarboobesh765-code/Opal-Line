@@ -44,6 +44,7 @@ export default function CustomersPage() {
   const [addEmail, setAddEmail] = useState('')
   const [addPhone, setAddPhone] = useState('')
   const [addCity, setAddCity] = useState('')
+  const [viewCustomer, setViewCustomer] = useState<Customer | null>(null)
 
   useEffect(() => {
     dbApi.getCustomers().then((d) => {
@@ -237,6 +238,7 @@ export default function CustomersPage() {
           </div>
 
           <DataTable
+            onRowClick={(c) => setViewCustomer(c)}
             columns={columns}
             data={filtered}
             loading={loading}
@@ -244,6 +246,53 @@ export default function CustomersPage() {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={viewCustomer !== null} onOpenChange={(open) => { if (!open) setViewCustomer(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className="bg-primary-100 text-primary-700">{initials(viewCustomer?.name ?? '')}</AvatarFallback>
+              </Avatar>
+              {viewCustomer?.name}
+            </DialogTitle>
+            <DialogDescription>Customer details and activity</DialogDescription>
+          </DialogHeader>
+          {viewCustomer ? (
+            <div className="space-y-0.5 text-sm">
+              <DetailRow label="Email" value={viewCustomer.email || '—'} />
+              <DetailRow label="Phone" value={viewCustomer.phone || '—'} />
+              <DetailRow label="City" value={[viewCustomer.city, viewCustomer.province].filter(Boolean).join(', ') || '—'} />
+              <DetailRow label="Total Orders" value={formatNumber(viewCustomer.orders)} />
+              <DetailRow label="Total Spent" value={formatCurrency(viewCustomer.totalSpent)} />
+              <DetailRow label="Customer Since" value={formatDate(viewCustomer.joined)} />
+              <DetailRow
+                label="Status"
+                value={viewCustomer.status === 'active' ? 'Active' : 'Inactive'}
+              />
+              {viewCustomer.shopifyId ? <DetailRow label="Shopify ID" value={viewCustomer.shopifyId} /> : null}
+              {viewCustomer.emailVerified != null && viewCustomer.email ? (
+                <DetailRow label="Email Verified" value={viewCustomer.emailVerified ? 'Yes' : 'No'} />
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            {viewCustomer?.phone ? (
+              <Button variant="outline" onClick={() => (window.location.href = `tel:${encodeURI(viewCustomer.phone)}`)}>
+                <Phone className="h-4 w-4" /> Call
+              </Button>
+            ) : null}
+            {viewCustomer?.email ? (
+              <Button variant="outline" onClick={() => (window.location.href = `mailto:${encodeURI(viewCustomer.email)}`)}>
+                <Mail className="h-4 w-4" /> Email
+              </Button>
+            ) : null}
+            <Button onClick={() => { setViewCustomer(null); navigate('/sales/invoices') }}>
+              <ShoppingBag className="h-4 w-4" /> Order History
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
         <DialogContent>
@@ -295,5 +344,14 @@ function SummaryTile({ icon: Icon, label, value, sub, tint }: { icon: React.Comp
         </div>
       </div>
     </Card>
+  )
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-border/60 py-2 last:border-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right font-medium text-foreground">{value}</span>
+    </div>
   )
 }

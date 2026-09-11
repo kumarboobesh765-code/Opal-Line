@@ -1,15 +1,19 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Sidebar } from './sidebar'
 import { Header } from './header'
 import { SearchCommand } from './search-command'
+import { ShortcutsHelp } from './shortcuts-help'
+import { SHORTCUT_PATHS } from '@/lib/shortcuts'
 import { useMediaQuery } from '@/hooks/use-media-query'
 
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const location = useLocation()
+  const navigate = useNavigate()
   const isMobile = useMediaQuery('(max-width: 767px)')
 
   const toggleSidebar = useCallback(() => {
@@ -25,15 +29,43 @@ export function AppShell() {
   }, [])
 
   useEffect(() => {
+    let gPending = false
+    let gTimer: number | undefined
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setSearchOpen((v) => !v)
+        return
+      }
+      const target = e.target as HTMLElement | null
+      const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.tagName === 'SELECT')
+      if (e.key === '?' && !typing) {
+        e.preventDefault()
+        setHelpOpen((v) => !v)
+        return
+      }
+      if (typing || e.ctrlKey || e.metaKey || e.altKey) return
+      if (gPending) {
+        const path = SHORTCUT_PATHS[e.key.toLowerCase()]
+        gPending = false
+        window.clearTimeout(gTimer)
+        if (path) {
+          e.preventDefault()
+          navigate(path)
+        }
+        return
+      }
+      if (e.key.toLowerCase() === 'g') {
+        gPending = true
+        gTimer = window.setTimeout(() => { gPending = false }, 1200)
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.clearTimeout(gTimer)
+    }
+  }, [navigate])
 
   useEffect(() => {
     window.scrollTo({ top: 0 })
@@ -71,6 +103,7 @@ export function AppShell() {
         </main>
       </div>
       <SearchCommand open={searchOpen} onOpenChange={setSearchOpen} />
+      <ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   )
 }

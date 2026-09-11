@@ -20,6 +20,7 @@ interface DataTableProps<TData extends RowData> {
   emptyMessage?: string
   className?: string
   initialVisibility?: ColumnVisibilityState
+  onRowClick?: (row: TData) => void
 }
 
 export function DataTable<TData extends RowData>({
@@ -29,6 +30,7 @@ export function DataTable<TData extends RowData>({
   emptyMessage = 'No records found',
   className,
   initialVisibility,
+  onRowClick,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
   const [rowSelection, setRowSelection] = React.useState({})
@@ -98,7 +100,15 @@ export function DataTable<TData extends RowData>({
             </TableRow>
           ) : table.getRowModel().rows.length ? (
             table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id} data-state={row.getIsSelected() && 'selected'}>
+              <TableRow
+                key={row.id}
+                data-state={row.getIsSelected() && 'selected'}
+                className={onRowClick ? 'cursor-pointer' : undefined}
+                onClick={onRowClick ? (e) => {
+                  if ((e.target as HTMLElement).closest('button, a, [role=menuitem], input, select, textarea')) return
+                  onRowClick(row.original)
+                } : undefined}
+              >
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}

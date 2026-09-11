@@ -692,6 +692,7 @@ export default function SalesOrdersPage() {
           </div>
 
           <DataTable
+            onRowClick={(o) => setViewOrder(o)}
             columns={columns}
             data={filtered}
             loading={loading}
@@ -1017,6 +1018,11 @@ export default function SalesOrdersPage() {
             <div className="space-y-2 text-sm">
               <DetailRow label="Customer" value={viewOrder.customer} />
               {(() => {
+                const cust = customers.find((c) => c.name === viewOrder.customer)
+                  ?? customers.find((c) => viewOrder.shippingAddress?.phone && c.phone === viewOrder.shippingAddress.phone)
+                return cust?.email ? <DetailRow label="Email" value={cust.email} /> : null
+              })()}
+              {(() => {
                 const a = (viewOrder.shippingAddress && (viewOrder.shippingAddress.address1 || viewOrder.shippingAddress.city)) ? viewOrder.shippingAddress : viewOrder.billingAddress
                 if (!a) return null
                 return (
@@ -1036,6 +1042,12 @@ export default function SalesOrdersPage() {
                 <DetailRow label="Discount" value={formatCurrency(viewOrder.discount)} />
               ) : null}
               <DetailRow label="Items" value={`${viewOrder.items} item(s)`} />
+              {viewOrder.lineItems && viewOrder.lineItems.length > 0 ? (
+                <DetailRow
+                  label="Items Subtotal"
+                  value={formatCurrency(viewOrder.lineItems.reduce((sum, li) => sum + (li.price ?? 0) * (li.quantity ?? 0), 0))}
+                />
+              ) : null}
               <DetailRow label="Payment" value={getPaymentMeta(viewOrder.payment).label} />
               <DetailRow label="Fulfillment" value={getFulfillmentMeta(viewOrder.fulfillment).label} />
               <DetailRow label="Invoice" value={viewOrder.invoice ?? 'Not raised'} />
