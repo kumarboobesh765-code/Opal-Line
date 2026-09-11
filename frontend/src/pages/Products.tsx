@@ -3,9 +3,11 @@ import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import {
   Download,
+  ExternalLink,
   Gem,
   MoreHorizontal,
   Package,
+  PackagePlus,
   Plus,
   RefreshCw,
   Search,
@@ -15,9 +17,18 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -85,6 +96,10 @@ export default function ProductsPage() {
   const [purity, setPurity] = useState('')
   const [stockStatus, setStockStatus] = useState('')
   const [addOpen, setAddOpen] = useState(false)
+  const [viewProduct, setViewProduct] = useState<Product | null>(null)
+  const [reorderFor, setReorderFor] = useState<Product | null>(null)
+  const [reorderQty, setReorderQty] = useState('')
+  const [reorderSaving, setReorderSaving] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -243,7 +258,16 @@ export default function ProductsPage() {
       { accessorKey: 'makingCharge', header: 'Making', cell: ({ row }) => <span className="tabular-nums text-muted-foreground">{row.original.makingCharge != null ? `${row.original.makingCharge} ₹/g` : '—'}</span>, meta: { align: 'right' as const } },
       { accessorKey: 'silverRate', header: 'Silver Rate', cell: ({ row }) => <span className="tabular-nums text-muted-foreground">₹{row.original.silverRate?.toFixed(2) ?? '—'}/g</span>, meta: { align: 'right' as const } },
       { accessorKey: 'sellingPrice', header: 'Selling Price', cell: ({ row }) => <span className="font-semibold tabular-nums text-foreground">{formatCurrency(row.original.sellingPrice)}</span>, meta: { align: 'right' as const } },
-      { accessorKey: 'stock', header: 'Stock', cell: ({ row }) => <span className={cn('font-medium tabular-nums', (row.original.stock ?? 0) <= (row.original.reorderLevel ?? 0) ? 'text-red-600' : 'text-foreground')}>{row.original.stock ?? 0} pcs</span>, meta: { align: 'right' as const } },
+      { accessorKey: 'stock', header: 'Stock', cell: ({ row }) => {
+        const stock = row.original.stock ?? 0
+        const low = stock <= (row.original.reorderLevel ?? 0)
+        return (
+          <span className="flex items-center justify-end gap-1.5">
+            {low ? <Badge variant="danger" dot>Reorder</Badge> : null}
+            <span className={cn('font-medium tabular-nums', low ? 'text-red-600' : 'text-foreground')}>{stock} pcs</span>
+          </span>
+        )
+      }, meta: { align: 'right' as const } },
       {
         id: 'shopify',
         header: 'Shopify',
@@ -329,6 +353,90 @@ export default function ProductsPage() {
         }}
       />
 
+      <Dialog open={viewProduct !== null} onOpenChange={(open) => { if (!open) setViewProduct(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {productImageSrc(viewProduct ?? {}) ? (
+                <img src={productImageSrc(viewProduct ?? {})} alt="" className="h-8 w-8 rounded-md object-cover" />
+              ) : null}
+              {viewProduct?.name}
+            </DialogTitle>
+            <DialogDescription>{viewProduct ? `${viewProduct.sku} · ${viewProduct.category}` : ''}</DialogDescription>
+          </DialogHeader>
+          {viewProduct ? (
+            <div className="space-y-0.5 text-sm">
+              <DetailRow label="Purity" value={viewProduct.purity != null ? `${viewProduct.purity}%` : '—'} />
+              <DetailRow label="Gross Weight" value={viewProduct.grossWeight != null ? formatWeight(viewProduct.grossWeight) : '—'} />
+              <DetailRow label="Stone Weight" value={viewProduct.stoneWeight != null ? formatWeight(viewProduct.stoneWeight) : '—'} />
+              <DetailRow label="Net Weight" value={viewProduct.netWeight != null ? formatWeight(viewProduct.netWeight) : '—'} />
+              <DetailRow label="Making Charge" value={viewProduct.makingCharge != null ? `${viewProduct.makingCharge} ₹/g` : '—'} />
+              <DetailRow label="Silver Rate" value={viewProduct.silverRate != null ? `₹${viewProduct.silverRate}/g` : '—'} />
+              <DetailRow label="Selling Price" value={formatCurrency(viewProduct.sellingPrice)} />
+              {viewProduct.compareAtPrice ? <DetailRow label="Compare At" value={formatCurrency(viewProduct.compareAtPrice)} /> : null}
+              <DetailRow label="GST" value={viewProduct.gst != null ? `${viewProduct.gst}%` : '—'} />
+              {viewProduct.hsn ? <DetailRow label="HSN" value={viewProduct.hsn} /> : null}
+              <DetailRow label="Stock" value={`${viewProduct.stock ?? 0} pcs${(viewProduct.stock ?? 0) <= (viewProduct.reorderLevel ?? 0) ? ' · LOW' : ''}`} />
+              <DetailRow label="Reorder Level" value={viewProduct.reorderLevel != null ? `${viewProduct.reorderLevel} pcs` : 'Not set'} />
+              {viewProduct.supplier ? <DetailRow label="Supplier" value={viewProduct.supplier} /> : null}
+              {viewProduct.collection ? <DetailRow label="Collection" value={viewProduct.collection} /> : null}
+              {viewProduct.vendor ? <DetailRow label="Vendor" value={viewProduct.vendor} /> : null}
+              {viewProduct.tags ? <DetailRow label="Tags" value={viewProduct.tags.split(',').join(', ')} /> : null}
+              <DetailRow label="Shopify" value={viewProduct.shopifyStatus === 'synced' ? 'Synced' : viewProduct.shopifyStatus === 'pending' ? 'Pending' : viewProduct.shopifyStatus === 'error' ? 'Error' : 'Not Listed'} />
+              <DetailRow label="Status" value={viewProduct.status ?? '—'} />
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewProduct(null)}>Close</Button>
+            <Button onClick={() => { setReorderFor(viewProduct); setReorderQty(String(Math.max(10, (viewProduct?.reorderLevel ?? 5) - (viewProduct?.stock ?? 0)))); setViewProduct(null) }}>
+              <PackagePlus className="h-4 w-4" /> Quick Reorder
+            </Button>
+            <Button asChild>
+              <Link to={`/inventory/products/${viewProduct?.id ?? ''}`}>
+                <ExternalLink className="h-4 w-4" /> Full Page
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reorderFor !== null} onOpenChange={(open) => { if (!open) setReorderFor(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Quick Reorder — {reorderFor?.name}</DialogTitle>
+            <DialogDescription>Add stock for {reorderFor?.sku}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reorder-qty">Quantity to add</Label>
+            <Input id="reorder-qty" type="number" min="1" value={reorderQty} onChange={(e) => setReorderQty(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Current stock: {reorderFor?.stock ?? 0} pcs · Reorder level: {reorderFor?.reorderLevel ?? '—'}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReorderFor(null)}>Cancel</Button>
+            <Button
+              disabled={reorderSaving || !Number(reorderQty)}
+              onClick={async () => {
+                if (!reorderFor) return
+                setReorderSaving(true)
+                try {
+                  const qty = Number(reorderQty)
+                  await dbApi.update('products', reorderFor.id, { stock: (reorderFor.stock ?? 0) + qty })
+                  setPushMessage({ ok: true, text: `Stock updated: ${reorderFor.name} +${qty} pcs.` })
+                  setReorderFor(null)
+                  load()
+                } catch (err) {
+                  window.alert(err instanceof Error ? err.message : 'Update failed')
+                } finally {
+                  setReorderSaving(false)
+                }
+              }}
+            >
+              {reorderSaving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <PackagePlus className="h-4 w-4" />} Add Stock
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {error ? (
         <div className="flex items-start gap-2.5 rounded-lg border border-red-200 bg-red-50/60 px-4 py-3 text-sm text-red-700">
           <span className="mt-0.5 block h-2 w-2 shrink-0 rounded-full bg-red-600" />
@@ -401,6 +509,7 @@ export default function ProductsPage() {
           </div>
 
           <DataTable
+            onRowClick={(p) => setViewProduct(p)}
             columns={columns}
             data={filtered}
             loading={loading}
@@ -435,3 +544,12 @@ function LegendSwatch({ color, label }: { color: string; label: string }) {
 }
 
 export { PURE, GREEN, ORANGE, RED }
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-border/60 py-2 last:border-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right font-medium text-foreground">{value}</span>
+    </div>
+  )
+}

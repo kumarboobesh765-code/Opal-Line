@@ -10,6 +10,14 @@ import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -19,7 +27,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Invoice } from '@/types'
+import type { Invoice, InvoiceItem } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/format'
 
 const paymentBadge: Record<Invoice['paymentStatus'], { label: string; variant: 'success' | 'warning' | 'danger' | 'muted' }> = {
@@ -46,6 +54,8 @@ export default function SalesInvoicesPage() {
   const [query, setQuery] = useState('')
   const [paymentFilter, setPaymentFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null)
+  const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([])
 
   const setInvoiceStatus = async (inv: Invoice, status: Invoice['status']) => {
     if (!window.confirm(`Mark invoice ${inv.number} as ${status}?`)) return
@@ -238,6 +248,15 @@ export default function SalesInvoicesPage() {
           </div>
 
           <DataTable
+            onRowClick={(inv) => {
+              setViewInvoice(inv)
+              setInvoiceItems(inv.items ?? [])
+              if (!inv.items?.length) {
+                dbApi.getInvoiceById(inv.id).then((full) => {
+                  if (full) setInvoiceItems(full.items ?? [])
+                }).catch(() => {})
+              }
+            }}
             columns={columns}
             data={filtered}
             loading={loading}
@@ -245,6 +264,71 @@ export default function SalesInvoicesPage() {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={viewInvoice !== null} onOpenChange={(open) => { if (!open) setViewInvoice(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{viewInvoice?.number}</DialogTitle>
+            <DialogDescription>{viewInvoice ? `Linked order ${viewInvoice.shopifyOrder || '—'} · ${formatDate(viewInvoice.date ?? '')}` : ''}</DialogDescription>
+          </DialogHeader>
+          {viewInvoice ? (
+            <div className="space-y-0.5 text-sm">
+              <DetailRow label="Customer" value={viewInvoice.customer || '—'} />
+              {viewInvoice.customerEmail ? <DetailRow label="Email" value={viewInvoice.customerEmail} /> : null}
+              {viewInvoice.customerPhone ? <DetailRow label="Phone" value={viewInvoice.customerPhone} /> : null}
+              {viewInvoice.customerAddress ? <DetailRow label="Address" value={viewInvoice.customerAddress} /> : null}
+              {[viewInvoice.customerCity, viewInvoice.customerState, viewInvoice.customerPincode].some(Boolean) ? (
+                <DetailRow label="City / State / PIN" value={[viewInvoice.customerCity, viewInvoice.customerState, viewInvoice.customerPincode].filter(Boolean).join(', ')} />
+              ) : null}
+              {viewInvoice.customerGstin ? <DetailRow label="GSTIN" value={viewInvoice.customerGstin} /> : null}
+              <DetailRow label="Subtotal" value={formatCurrency(viewInvoice.subtotal)} />
+              {viewInvoice.discount > 0 ? <DetailRow label="Discount" value={`− ${formatCurrency(viewInvoice.discount)}`} /> : null}
+              <DetailRow label={`GST (${viewInvoice.gst ?? 0}%)`} value={formatCurrency(viewInvoice.gstAmount)} />
+              <DetailRow label="Grand Total" value={formatCurrency(viewInvoice.grandTotal)} />
+              <DetailRow label="Payment Method" value={viewInvoice.paymentMethod || '—'} />
+              <DetailRow label="Payment Status" value={paymentBadge[viewInvoice.paymentStatus]?.label ?? viewInvoice.paymentStatus} />
+              <DetailRow label="Invoice Status" value={statusBadge[viewInvoice.status]?.label ?? viewInvoice.status} />
+              {invoiceItems.length > 0 ? (
+                <div className="border-b border-border/60 py-2">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-muted-foreground">Items</span>
+                    <span className="text-[11px] text-muted-foreground">{invoiceItems.length} product(s)</span>
+                  </div>
+                  <div className="space-y-1">
+                    {invoiceItems.map((li, i) => (
+                      <div key={i} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-medium text-foreground">{li.product}</span>
+                          {li.sku ? <span className="ml-1.5 font-mono text-muted-foreground">{li.sku}</span> : null}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-muted-foreground">{li.qty} × {formatCurrency(li.amount / (li.qty || 1))}</span>
+                        <span className="shrink-0 tabular-nums font-medium text-foreground">{formatCurrency(li.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewInvoice(null)}>Close</Button>
+            <Button asChild>
+              <Link to={`/sales/invoices/${viewInvoice?.id ?? ''}`}>
+                <Eye className="h-4 w-4" /> Open Full Page
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-border/60 py-2 last:border-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right font-medium text-foreground">{value}</span>
     </div>
   )
 }

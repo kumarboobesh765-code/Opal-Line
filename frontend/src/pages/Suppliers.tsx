@@ -35,6 +35,7 @@ import { initials } from '@/lib/utils'
 export default function SuppliersPage() {
   const navigate = useNavigate()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [viewSupplier, setViewSupplier] = useState<Supplier | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -222,6 +223,7 @@ export default function SuppliersPage() {
           </div>
 
           <DataTable
+            onRowClick={(s) => setViewSupplier(s)}
             columns={columns}
             data={filtered}
             loading={loading}
@@ -229,6 +231,37 @@ export default function SuppliersPage() {
           />
         </CardContent>
       </Card>
+
+      <Dialog open={viewSupplier !== null} onOpenChange={(open) => { if (!open) setViewSupplier(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className="bg-primary-100 text-primary-700">{initials(viewSupplier?.name ?? '')}</AvatarFallback>
+              </Avatar>
+              {viewSupplier?.name}
+            </DialogTitle>
+            <DialogDescription>Supplier details</DialogDescription>
+          </DialogHeader>
+          {viewSupplier ? (
+            <div className="space-y-0.5 text-sm">
+              <DetailRow label="Contact" value={viewSupplier.contact || '—'} />
+              <DetailRow label="Phone" value={viewSupplier.phone || '—'} />
+              <DetailRow label="City" value={viewSupplier.city || '—'} />
+              <DetailRow label="Outstanding" value={formatCurrency(viewSupplier.outstanding)} />
+              <DetailRow label="Status" value={viewSupplier.status === 'active' ? 'Active' : 'Inactive'} />
+            </div>
+          ) : null}
+          <DialogFooter>
+            {viewSupplier?.phone ? (
+              <Button variant="outline" onClick={() => (window.location.href = `tel:${encodeURI(viewSupplier.phone)}`)}>
+                <Phone className="h-4 w-4" /> Call
+              </Button>
+            ) : null}
+            <Button onClick={() => setViewSupplier(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -305,5 +338,14 @@ function MiniCard({ icon: Icon, label, value, sub, tint }: { icon: React.Compone
         </div>
       </div>
     </Card>
+  )
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-border/60 py-2 last:border-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right font-medium text-foreground">{value}</span>
+    </div>
   )
 }
