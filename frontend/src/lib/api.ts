@@ -4,6 +4,7 @@ import type {
   AnalyticsStat,
   AppSettings,
   AuditLogEntry,
+  NotificationSettings,
   BankAccount,
   Customer,
   Expense,
@@ -443,6 +444,26 @@ export const dbApi = {
   updateConnectionSettings: (patch: Partial<ConnectionSettings>) =>
     request<{ ok: boolean; reconnectError?: string; shopify?: { ok: boolean; error?: string; shop?: string } }>('/db/settings/connections', { method: 'PUT', body: JSON.stringify(patch) }),
   getDbStatus: (): Promise<DbStatus> => request('/db/settings/db-status'),
+  getNotificationSettings: (): Promise<NotificationSettings> => request('/db/settings/notifications'),
+  updateNotificationSettings: (patch: Partial<NotificationSettings>) =>
+    request<NotificationSettings>('/db/settings/notifications', { method: 'PUT', body: JSON.stringify(patch) }),
+  getSupplierDues: () =>
+    request<{ dues: Array<{ supplier: string; count: number; total: number; oldestDate: string | null }>; total: number; supplierCount: number }>('/db/supplier-dues'),
+  recordSupplierPayment: (payload: { supplier: string; amount: number; method: string }) =>
+    request<{ ok: boolean; ref: string }>('/db/supplier-dues/pay', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  createPaymentLink: (customer: string, amount: number) =>
+    request<{ url: string; id: string; configured: boolean }>('/db/dues/payment-link', {
+      method: 'POST',
+      body: JSON.stringify({ customer, amount }),
+    }),
+  sendWhatsApp: (phone: string, message: string) =>
+    request<{ ok: boolean; messageId: string; configured: boolean }>('/db/send-whatsapp', {
+      method: 'POST',
+      body: JSON.stringify({ phone, message }),
+    }),
 
   getProducts: () => list<Product>('/db/products', PAGED),
   getProductById: (id: string) => maybe<Product>(`/db/products/${id}`),

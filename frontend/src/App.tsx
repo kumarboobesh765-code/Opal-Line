@@ -45,6 +45,8 @@ const GstReportsPage = lazy(() => import('@/pages/GstReports'))
 const SalesAnalysisPage = lazy(() => import('@/pages/SalesAnalysis'))
 const InventoryReportsPage = lazy(() => import('@/pages/InventoryReports'))
 const DuesPage = lazy(() => import('@/pages/Dues'))
+const NotificationSettingsPage = lazy(() => import('@/pages/NotificationSettings'))
+const SupplierDuesPage = lazy(() => import('@/pages/SupplierDues'))
 const UsersPage = lazy(() => import('@/pages/Users'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
 const BackupRestorePage = lazy(() => import('@/pages/BackupRestore'))
@@ -122,6 +124,7 @@ function App() {
             <Route path="/reports/sales" element={guarded('reports', <SalesAnalysisPage />)} />
             <Route path="/reports/inventory" element={guarded('reports', <InventoryReportsPage />)} />
             <Route path="/reports/dues" element={guarded('sales', <DuesPage />)} />
+            <Route path="/reports/supplier-dues" element={guarded('purchase', <SupplierDuesPage />)} />
 
             <Route path="/shopify/dashboard" element={guarded('shopify', <ShopifyDashboardPage />)} />
             <Route path="/shopify/orders" element={guarded('shopify', <ShopifyOrdersPage />)} />
@@ -135,6 +138,7 @@ function App() {
             <Route path="/system/users" element={guarded('system', <UsersPage />)} />
             <Route path="/system/backup" element={guarded('system', <BackupRestorePage />)} />
             <Route path="/system/settings" element={guarded('system', <SettingsPage />)} />
+            <Route path="/system/notifications" element={guarded('system', <NotificationSettingsPage />)} />
             <Route path="/system/audit" element={guarded('system', <AuditLogsPage />)} />
             <Route path="/system/activity" element={guarded('system', <ActivityLogsPage />)} />
 

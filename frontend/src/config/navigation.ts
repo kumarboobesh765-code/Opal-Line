@@ -100,6 +100,7 @@ export const navSections: NavSection[] = [
       { title: 'Sales Analysis', path: '/reports/sales', icon: TrendingUp },
       { title: 'Inventory Reports', path: '/reports/inventory', icon: PackageSearch },
       { title: 'Outstanding Dues', path: '/reports/dues', icon: HandCoins },
+      { title: 'Supplier Dues', path: '/reports/supplier-dues', icon: Building2 },
     ],
   },
   {
@@ -121,6 +122,7 @@ export const navSections: NavSection[] = [
       { title: 'Users & Roles', path: '/system/users', icon: UserCog },
       { title: 'Backup & Restore', path: '/system/backup', icon: DatabaseBackup },
       { title: 'Settings', path: '/system/settings', icon: Settings },
+      { title: 'Notifications', path: '/system/notifications', icon: Settings },
       { title: 'Audit Logs', path: '/system/audit', icon: Activity },
       { title: 'Activity Log', path: '/system/activity', icon: ScrollText },
     ],

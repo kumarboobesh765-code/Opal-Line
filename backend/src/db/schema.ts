@@ -407,6 +407,7 @@ export const settings = pgTable('settings', {
   autoUpdateMcx: boolean('auto_update_mcx'),
   requireRateApproval: boolean('require_rate_approval'),
   autoReconcileRazorpay: boolean('auto_reconcile_razorpay'),
+  notificationSettings: jsonb('notification_settings'),
   paymentReminders: boolean('payment_reminders'),
   lowStockAlerts: boolean('low_stock_alerts'),
   dailySummary: boolean('daily_summary'),

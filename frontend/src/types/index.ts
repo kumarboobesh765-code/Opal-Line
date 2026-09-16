@@ -21,6 +21,15 @@ export interface AppSettings {
   dailySummary: boolean
   orderImports: boolean
   updatedAt: string | null
+  notificationSettings?: NotificationSettings
+}
+
+export interface NotificationSettings {
+  dailySummaryEnabled: boolean
+  monthlyStatementsEnabled: boolean
+  dueRemindersEnabled: boolean
+  weeklyReportEnabled: boolean
+  recipientEmail: string
 }
 
 export interface ConnectionSettings {

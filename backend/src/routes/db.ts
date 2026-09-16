@@ -1129,6 +1129,109 @@ dbRouter.post('/customers/:name/statement/email', requirePermission('sales', 'ed
   }
 })
 
+// ─── Razorpay payment link ───────────────────────────────────────────────
+
+dbRouter.post('/dues/payment-link', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    const { createRazorpayPaymentLink, isRazorpayConfigured } = await import('../paymentLinks')
+    if (!isRazorpayConfigured()) return res.status(400).json({ error: 'Razorpay not configured (set RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET)', configured: false })
+    const customer = String(req.body?.customer ?? '').trim()
+    const amount = Number(req.body?.amount ?? 0)
+    if (!customer) return res.status(400).json({ error: 'customer required' })
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be > 0' })
+    const link = await createRazorpayPaymentLink({
+      amount,
+      customer,
+      description: `Outstanding dues for ${customer} — Opal Line`,
+      referenceId: `OL-${customer.slice(0, 20).replace(/[^a-z0-9]/gi, '')}-${Date.now().toString(36).toUpperCase()}`,
+    })
+    if (!link) return res.status(500).json({ error: 'Failed to create payment link' })
+    res.json({ url: link.url, id: link.id, configured: true })
+  } catch (err) {
+    logger.error({ err }, 'Razorpay payment link failed')
+    res.status(500).json({ error: 'Payment link generation failed' })
+  }
+})
+
+// ─── WhatsApp send (server-side) ────────────────────────────────────────────
+
+dbRouter.post('/send-whatsapp', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    const { sendWhatsAppMessage, isWhatsAppConfigured } = await import('../whatsapp')
+    if (!isWhatsAppConfigured()) return res.status(400).json({ error: 'WhatsApp Business API not configured', configured: false })
+    const phone = String(req.body?.phone ?? '').trim()
+    const message = String(req.body?.message ?? '').trim()
+    if (!phone || !message) return res.status(400).json({ error: 'phone and message required' })
+    const result = await sendWhatsAppMessage(phone, message)
+    if (!result) return res.status(500).json({ error: 'WhatsApp send failed', configured: true })
+    const actor = actorFromRequest(req)
+    void recordActivity({ action: 'Sent WhatsApp', module: 'sales', entity: phone, details: message.slice(0, 100), userId: actor.userId, ip: actor.ip })
+    res.json({ ok: true, messageId: result.messageId, configured: true })
+  } catch (err) {
+    logger.error({ err }, 'WhatsApp send endpoint failed')
+    res.status(500).json({ error: 'WhatsApp send failed' })
+  }
+})
+
+// ─── Supplier purchase invoice aging (outstanding dues) ────────────────────
+
+dbRouter.get('/supplier-dues', requirePermission('purchase', 'view'), async (_req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: 'Database not configured' })
+    const rows = await db
+      .select({
+        supplier: schema.purchaseInvoices.supplier,
+        count: sql<number>`count(*)::int`,
+        total: sql<number>`coalesce(sum(${schema.purchaseInvoices.total}), 0)::float`,
+        oldestDate: sql<string | null>`min(${schema.purchaseInvoices.date})::text`,
+      })
+      .from(schema.purchaseInvoices)
+      .where(sql`${schema.purchaseInvoices.status} is distinct from 'paid'`)
+      .groupBy(schema.purchaseInvoices.supplier)
+      .orderBy(sql`coalesce(sum(${schema.purchaseInvoices.total}), 0) desc`)
+    const total = rows.reduce((a, r) => a + Number(r.total ?? 0), 0)
+    res.json({ dues: rows.map((r) => ({ supplier: r.supplier ?? 'Unknown', count: Number(r.count ?? 0), total: Number(r.total ?? 0), oldestDate: r.oldestDate })), total, supplierCount: rows.length })
+  } catch (err) {
+    logger.error({ err }, 'Supplier dues query failed')
+    res.status(500).json({ error: 'Failed to load supplier dues' })
+  }
+})
+
+// ─── Notification settings ─────────────────────────────────────────────────
+
+dbRouter.get('/settings/notifications', requirePermission('system', 'view'), async (_req, res) => {
+  try {
+    const [row] = await db!.select().from(schema.settings).where(sql`${schema.settings.id} = 'app'`).limit(1)
+    const notif = (row as any)?.notificationSettings ?? {
+      dailySummaryEnabled: true,
+      monthlyStatementsEnabled: true,
+      dueRemindersEnabled: true,
+      weeklyReportEnabled: true,
+      recipientEmail: process.env.NOTIFICATION_EMAIL ?? '',
+    }
+    res.json(notif)
+  } catch (err) {
+    logger.error({ err }, 'Notification settings load failed')
+    res.status(500).json({ error: 'Failed to load notification settings' })
+  }
+})
+
+dbRouter.put('/settings/notifications', requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>
+    const [row] = await db!.select().from(schema.settings).where(sql`${schema.settings.id} = 'app'`).limit(1)
+    const existing = (row as any)?.notificationSettings ?? {}
+    const merged = { ...existing, ...body }
+    await db!.update(schema.settings).set({ notificationSettings: merged } as any).where(sql`${schema.settings.id} = 'app'`)
+    const actor = actorFromRequest(req)
+    void recordActivity({ action: 'Updated Notification Settings', module: 'system', entity: 'Notifications', details: Object.keys(body).join(', '), userId: actor.userId, ip: actor.ip })
+    res.json(merged)
+  } catch (err) {
+    logger.error({ err }, 'Notification settings update failed')
+    res.status(500).json({ error: 'Failed to update notification settings' })
+  }
+})
+
 // ─── Invoice PDF Download ──────────────────────────────────────────────────
 
 dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
