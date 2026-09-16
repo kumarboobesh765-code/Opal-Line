@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Boxes, Gem, Package, PackageX, Search, TrendingUp, Weight } from 'lucide-react'
+import { Boxes, Gem, Lightbulb, Package, PackageX, Search, TrendingUp, Weight } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,7 +13,7 @@ import { StatCard } from '@/components/ui/stat-card'
 import { DataTable } from '@/components/ui/data-table'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Product, SilverRate, StockCategory } from '@/types'
+import type { Product, ReorderSuggestion, SilverRate, StockCategory } from '@/types'
 import { formatCurrency, formatNumber, formatWeight } from '@/lib/format'
 
 interface OverviewStats {
@@ -145,6 +145,8 @@ export default function StockOverviewPage() {
         <StatCard icon={PackageX} title="Out of Stock" value={overview ? String(overview.outOfStock) : '—'} accent="slate" support="Zero quantity" />
       </div>
 
+      <ReorderSuggestionsCard />
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card className="lg:col-span-1">
           <CardHeader>
@@ -219,5 +221,82 @@ export default function StockOverviewPage() {
         </Card>
       </div>
     </div>
+  )
+}
+
+/** Auto reorder suggestions: 90-day sales velocity vs. stock on hand. */
+function ReorderSuggestionsCard() {
+  const [suggestions, setSuggestions] = useState<ReorderSuggestion[]>([])
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    dbApi.reorderSuggestions()
+      .then((r) => setSuggestions(r.data ?? []))
+      .catch(() => setSuggestions([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const priorityBadge = (p: ReorderSuggestion['priority']) =>
+    p === 'urgent'
+      ? <Badge variant="danger" dot>Order now</Badge>
+      : p === 'soon'
+        ? <Badge variant="warning" dot>Soon</Badge>
+        : <Badge variant="muted">Monitor</Badge>
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm"><Lightbulb className="h-4 w-4 text-amber-500" /> Smart Reorder Suggestions</CardTitle>
+        <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setOpen((o) => !o)}>
+          {open ? 'Hide' : `Show (${suggestions.length})`}
+        </button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {loading ? (
+            <p className="text-xs text-muted-foreground">Analysing 90-day sales velocity…</p>
+          ) : suggestions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No reorder needed — stock levels look healthy across the catalogue.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="py-1.5 pr-3 font-medium">Priority</th>
+                    <th className="py-1.5 pr-3 font-medium">Product</th>
+                    <th className="py-1.5 pr-3 font-medium">SKU</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Stock</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Sold 90d</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Weekly velocity</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Weeks of cover</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Suggested qty</th>
+                    <th className="py-1.5 font-medium">Supplier</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {suggestions.slice(0, 25).map((s) => (
+                    <tr key={s.id} className="border-b last:border-0">
+                      <td className="py-1.5 pr-3">{priorityBadge(s.priority)}</td>
+                      <td className="max-w-[180px] truncate py-1.5 pr-3 font-medium text-foreground">{s.name}</td>
+                      <td className="py-1.5 pr-3 font-mono text-muted-foreground">{s.sku}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{s.stock}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{s.sold90d}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{s.weeklyVelocity}</td>
+                      <td className="py-1.5 pr-3 text-right tabular-nums">{s.weeksOfCover >= 99 ? '—' : s.weeksOfCover}</td>
+                      <td className="py-1.5 pr-3 text-right font-semibold tabular-nums text-primary-700">{s.suggestedQty}</td>
+                      <td className="max-w-[120px] truncate py-1.5 text-muted-foreground">{s.supplier ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {suggestions.length > 25 && (
+                <p className="pt-2 text-[11px] text-muted-foreground">Showing top 25 of {suggestions.length} suggestions.</p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
   )
 }

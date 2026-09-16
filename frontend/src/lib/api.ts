@@ -39,6 +39,8 @@ import type {
   UserPermissions,
   ConnectionSettings,
   DbStatus,
+  Customer360,
+  ReorderSuggestion,
 } from '@/types'
 import type {
   ShopifyStatus,
@@ -499,6 +501,22 @@ export const dbApi = {
       method: 'POST',
       body: JSON.stringify({}),
     }),
+  getOrderEvents: (orderId: string) =>
+    request<{ data: Array<{ id: string; orderId: string; event: string; details: string | null; actor: string | null; createdAt: string }> }>(`/db/orders/${orderId}/events`),
+  customer360: (name: string) =>
+    request<Customer360>(`/db/customers/${encodeURIComponent(name)}/summary`),
+  bulkOrderStatus: (ids: string[], status: string) =>
+    request<{ updated: number; status: string }>('/db/sales-orders/bulk-status', {
+      method: 'POST',
+      body: JSON.stringify({ ids, status }),
+    }),
+  bulkOrderInvoice: (ids: string[]) =>
+    request<{ created: number; alreadyInvoiced: number; failed: number; errors: string[] }>('/db/sales-orders/bulk-invoice', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+  reorderSuggestions: () =>
+    request<{ data: ReorderSuggestion[]; generatedAt: string }>('/db/inventory/reorder-suggestions'),
   getCustomers: () => list<Customer>('/db/customers', PAGED),
   getSuppliers: () => list<Supplier>('/db/suppliers', PAGED),
   getInvoices: async (): Promise<Invoice[]> => {
@@ -753,11 +771,6 @@ export const backupApi = {
   downloadCreditNotePDF: (returnId: string) => {
     window.open(`${API_BASE}/db/credit-notes/${encodeURIComponent(returnId)}/pdf`, '_blank')
   },
-  bookingPaymentLink: (bookingId: string) =>
-    request<{ url: string; id: string; amount: number; configured: boolean }>(`/db/bookings/${bookingId}/payment-link`, {
-      method: 'POST',
-      body: JSON.stringify({}),
-    }),
   downloadGstExport: (month: number, year: number, format: 'csv' | 'json') => {
     window.open(`${API_BASE}/dashboard/reports/gst/export?month=${month}&year=${year}&format=${format}`, '_blank')
   },

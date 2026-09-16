@@ -236,6 +236,18 @@ export const salesReturns = pgTable('sales_returns', {
   dateIdx: index('sales_returns_date_idx').on(table.date),
 }))
 
+export const orderEvents = pgTable('order_events', {
+  id: text('id').primaryKey(),
+  orderId: text('order_id'),
+  event: text('event'),
+  details: text('details'),
+  actor: text('actor'),
+  createdAt: ts('created_at'),
+}, (table) => ({
+  orderIdIdx: index('order_events_order_id_idx').on(table.orderId),
+  createdIdx: index('order_events_created_idx').on(table.createdAt),
+}))
+
 export const purchaseReturns = pgTable('purchase_returns', {
   id: text('id').primaryKey(),
   number: text('number').notNull().unique(),

@@ -339,6 +339,41 @@ export type OrderStatus =
   | 'returned'
   | 'refunded'
 
+export interface OrderEvent {
+  id: string
+  orderId: string
+  event: string
+  details: string | null
+  actor: string | null
+  createdAt: string
+}
+
+export interface Customer360 {
+  customer: string
+  totalOrders: number
+  lifetimeValue: number
+  outstanding: number
+  lastOrder: string | null
+  lastInvoice: string | null
+  orders: SalesOrder[]
+  invoices: Array<Pick<Invoice, 'id' | 'number' | 'customer' | 'grandTotal' | 'paymentStatus' | 'status' | 'date'>>
+  payments: Array<{ id: string; ref: string | null; invoice: string | null; amount: number | null; method: string | null; date: string | null }>
+}
+
+export interface ReorderSuggestion {
+  id: string
+  name: string
+  sku: string
+  supplier: string | null
+  stock: number
+  reorderLevel: number
+  sold90d: number
+  weeklyVelocity: number
+  weeksOfCover: number
+  suggestedQty: number
+  priority: 'urgent' | 'soon' | 'ok'
+}
+
 export interface SyncLog {
   id: string
   entity: 'Order' | 'Product' | 'Inventory' | 'Customer' | 'Price' | 'Payment'

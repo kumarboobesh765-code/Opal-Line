@@ -47,7 +47,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Customer, OrderStatus, Product, SalesOrder } from '@/types'
+import type { Customer, Customer360, OrderEvent, OrderStatus, Product, SalesOrder } from '@/types'
+import { cn } from '@/lib/utils'
 import { formatCurrency, formatDate, formatDateTime, todayIST } from '@/lib/format'
 
 const statusMeta: Record<OrderStatus, { label: string; variant: 'success' | 'warning' | 'danger' | 'muted' | 'info' | 'purple' }> = {
@@ -183,6 +184,8 @@ export default function SalesOrdersPage() {
   const [scanFeedback, setScanFeedback] = useState<{ ok: boolean; text: string } | null>(null)
 
   const [viewOrder, setViewOrder] = useState<SalesOrder | null>(null)
+  const [selectedOrders, setSelectedOrders] = useState<SalesOrder[]>([])
+  const [bulkBusy, setBulkBusy] = useState(false)
   const [invoiceSavingId, setInvoiceSavingId] = useState<string | null>(null)
   const [syncingOrders, setSyncingOrders] = useState(false)
   const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -190,6 +193,41 @@ export default function SalesOrdersPage() {
   const reload = useCallback(() => {
     dbApi.getSalesOrders().then(setOrders).catch(() => {})
   }, [])
+
+  const bulkInvoice = async () => {
+    if (selectedOrders.length === 0) return
+    if (!window.confirm(`Create invoices for ${selectedOrders.length} order(s)? Orders already invoiced are skipped.`)) return
+    setBulkBusy(true)
+    try {
+      const r = await dbApi.bulkOrderInvoice(selectedOrders.map((o) => o.id))
+      const parts = [`${r.created} invoice(s) created`]
+      if (r.alreadyInvoiced > 0) parts.push(`${r.alreadyInvoiced} already invoiced`)
+      if (r.failed > 0) parts.push(`${r.failed} failed`)
+      window.alert(parts.join(', '))
+      setSelectedOrders([])
+      reload()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Bulk invoicing failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const bulkStatus = async (status: string) => {
+    if (selectedOrders.length === 0) return
+    if (!window.confirm(`Set ${selectedOrders.length} order(s) to "${status}"?`)) return
+    setBulkBusy(true)
+    try {
+      const r = await dbApi.bulkOrderStatus(selectedOrders.map((o) => o.id), status)
+      window.alert(`${r.updated} order(s) updated to ${r.status}.`)
+      setSelectedOrders([])
+      reload()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Bulk status update failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   useEffect(() => {
     Promise.all([dbApi.getSalesOrders(), dbApi.getCustomers(), dbApi.getProducts()])
@@ -640,8 +678,21 @@ export default function SalesOrdersPage() {
             </div>
           </div>
 
+          {selectedOrders.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-2">
+              <span className="text-xs font-medium">{selectedOrders.length} selected</span>
+              <Button size="sm" variant="outline" onClick={bulkInvoice} disabled={bulkBusy}>
+                <FileText className="h-3.5 w-3.5" /> Create Invoices
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => bulkStatus('confirmed')} disabled={bulkBusy}>Mark Confirmed</Button>
+              <Button size="sm" variant="outline" onClick={() => bulkStatus('processing')} disabled={bulkBusy}>Mark Processing</Button>
+              <Button size="sm" variant="outline" onClick={() => bulkStatus('fulfilled')} disabled={bulkBusy}>Mark Fulfilled</Button>
+              <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelectedOrders([])}>Clear</Button>
+            </div>
+          )}
           <DataTable
             onRowClick={(o) => setViewOrder(o)}
+            onSelectionChange={setSelectedOrders}
             columns={columns}
             data={filtered}
             loading={loading}
@@ -965,7 +1016,12 @@ export default function SalesOrdersPage() {
           </DialogHeader>
           {viewOrder ? (
             <div className="space-y-2 text-sm">
-              <DetailRow label="Customer" value={viewOrder.customer} />
+              {/* Customer 360 — past orders, dues, payments for this customer */}
+              {(() => {
+                const cust = customers.find((c) => c.name === viewOrder.customer)
+                  ?? customers.find((c) => viewOrder.shippingAddress?.phone && c.phone === viewOrder.shippingAddress.phone)
+                return cust?.email ? <DetailRow label="Email" value={cust.email} /> : null
+              })()}
               {(() => {
                 const cust = customers.find((c) => c.name === viewOrder.customer)
                   ?? customers.find((c) => viewOrder.shippingAddress?.phone && c.phone === viewOrder.shippingAddress.phone)
@@ -1055,6 +1111,8 @@ export default function SalesOrdersPage() {
                   </div>
                 </div>
               ) : null}
+              <Customer360Card customer={viewOrder.customer} />
+              <OrderTimeline orderId={viewOrder.id} />
             </div>
           ) : null}
           <DialogFooter className="no-print mt-2">
@@ -1145,6 +1203,127 @@ function AddressFields({
           <Input value={addr.phone} onChange={(e) => set({ phone: e.target.value })} placeholder="Phone" />
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Customer 360: lifetime stats, recent orders, outstanding dues for this order's customer. */
+function Customer360Card({ customer }: { customer: string }) {
+  const [data, setData] = useState<Customer360 | null>(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open || !customer || data) return
+    dbApi.customer360(customer).then(setData).catch(() => setData(null))
+  }, [open, customer, data])
+
+  if (!customer) return null
+  return (
+    <div className="border-b border-border/60 py-2">
+      <button type="button" className="flex w-full items-center justify-between" onClick={() => setOpen((o) => !o)}>
+        <span className="text-muted-foreground">Customer 360 — {customer}</span>
+        <span className="text-[11px] text-muted-foreground">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {!data ? (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-md border p-2">
+                  <p className="text-[10px] text-muted-foreground">Lifetime value</p>
+                  <p className="text-sm font-semibold tabular-nums">{formatCurrency(data.lifetimeValue)}</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-[10px] text-muted-foreground">Orders</p>
+                  <p className="text-sm font-semibold tabular-nums">{data.totalOrders}</p>
+                </div>
+                <div className={cn('rounded-md border p-2', data.outstanding > 0 && 'border-red-500/40 bg-red-500/10')}>
+                  <p className="text-[10px] text-muted-foreground">Outstanding</p>
+                  <p className="text-sm font-semibold tabular-nums">{formatCurrency(data.outstanding)}</p>
+                </div>
+              </div>
+              {data.orders.length > 0 && (
+                <div>
+                  <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Recent orders</p>
+                  <div className="space-y-1">
+                    {data.orders.slice(0, 5).map((o) => (
+                      <div key={o.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{o.internalId || o.shopifyId || o.id.slice(0, 8)}</span>
+                        <span className="shrink-0 text-muted-foreground">{o.date ? formatDate(o.date) : ''}</span>
+                        <span className="shrink-0 tabular-nums font-medium">{formatCurrency(Number(o.value ?? 0))}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {data.payments.filter((p) => (p.amount ?? 0) !== 0).length > 0 && (
+                <div>
+                  <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Recent payments</p>
+                  <div className="space-y-1">
+                    {data.payments.slice(0, 5).map((p) => (
+                      <div key={p.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{p.invoice ?? p.ref ?? '—'}</span>
+                        <span className="shrink-0 text-muted-foreground">{p.date ? formatDate(p.date) : ''}</span>
+                        <span className={cn('shrink-0 tabular-nums font-medium', (p.amount ?? 0) < 0 && 'text-red-500')}>
+                          {formatCurrency(Number(p.amount ?? 0))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Order timeline: every event from creation to delivery (lazily loaded). */
+function OrderTimeline({ orderId }: { orderId: string }) {
+  const [events, setEvents] = useState<OrderEvent[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open || loaded || !orderId) return
+    dbApi.getOrderEvents(orderId).then((r) => { setEvents(r.data ?? []); setLoaded(true) }).catch(() => setLoaded(true))
+  }, [open, loaded, orderId])
+
+  return (
+    <div className="py-2">
+      <button type="button" className="flex w-full items-center justify-between" onClick={() => setOpen((o) => !o)}>
+        <span className="text-muted-foreground">Order Timeline</span>
+        <span className="text-[11px] text-muted-foreground">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-0">
+          {!loaded ? (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          ) : events.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No events recorded yet.</p>
+          ) : (
+            events.map((e, i) => (
+              <div key={e.id} className="flex gap-2">
+                <div className="flex flex-col items-center">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary-500" />
+                  {i < events.length - 1 && <span className="w-px flex-1 bg-border" />}
+                </div>
+                <div className="pb-3">
+                  <p className="text-xs font-medium text-foreground">{e.event}</p>
+                  {e.details ? <p className="text-[11px] text-muted-foreground">{e.details}</p> : null}
+                  <p className="text-[10px] text-muted-foreground/70">
+                    {formatDateTime(e.createdAt)}{e.actor ? ` · ${e.actor.slice(0, 8)}` : ''}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   )
 }

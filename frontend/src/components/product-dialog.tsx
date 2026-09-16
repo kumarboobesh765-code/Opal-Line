@@ -265,6 +265,23 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
     })
   }
 
+  // Drag-to-reorder gallery; first image is the primary/cover
+  const dragIndex = useRef<number | null>(null)
+  const reorderImage = (from: number, to: number) => {
+    setForm((f) => {
+      const images = [...f.images]
+      const [moved] = images.splice(from, 1)
+      images.splice(to, 0, moved)
+      return { ...f, images, image: images[0] ?? '' }
+    })
+  }
+  const setPrimaryImage = (path: string) => {
+    setForm((f) => {
+      const images = [path, ...f.images.filter((x) => x !== path)]
+      return { ...f, images, image: path }
+    })
+  }
+
   const submit = async () => {
     const name = form.name.trim()
     const sku = form.sku.trim()
@@ -446,19 +463,36 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
               <Field label="Product images" className="col-span-2">
                 <div className="space-y-2">
                   <div className="flex flex-wrap gap-2">
-                    {form.images.map((path) => {
+                    {form.images.map((path, idx) => {
                       const preview = safeImageUrl(path) ?? (path.startsWith('/uploads/') ? `${API_ORIGIN}${path}` : undefined)
+                      const isPrimary = idx === 0
                       return (
-                        <div key={path} className="group relative h-16 w-16 overflow-hidden rounded-md border bg-muted">
+                        <div
+                          key={path}
+                          draggable
+                          onDragStart={() => { dragIndex.current = idx }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => { if (dragIndex.current !== null && dragIndex.current !== idx) reorderImage(dragIndex.current, idx); dragIndex.current = null }}
+                          className={cn('group relative h-16 w-16 cursor-grab overflow-hidden rounded-md border bg-muted active:cursor-grabbing', isPrimary && 'border-primary-500 ring-1 ring-primary-500')}
+                          title={isPrimary ? 'Primary image — drag to reorder' : 'Drag to reorder'}
+                        >
                           {preview ? <img src={preview} alt="product" className="h-full w-full object-cover" /> : null}
-                          <button
-                            type="button"
-                            onClick={() => removeImage(path)}
-                            className="absolute inset-0 hidden items-center justify-center bg-black/50 text-white group-hover:flex"
-                            title="Remove image"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          {isPrimary && (
+                            <span className="absolute left-0 top-0 rounded-br bg-primary-600 px-1 text-[8px] font-semibold text-white">COVER</span>
+                          )}
+                          <div className="absolute inset-x-0 bottom-0 hidden justify-center gap-0.5 bg-black/50 p-0.5 group-hover:flex">
+                            {!isPrimary && (
+                              <button type="button" onClick={() => setPrimaryImage(path)} className="rounded px-1 text-[9px] text-white hover:bg-white/20" title="Set as primary">★</button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => removeImage(path)}
+                              className="rounded px-1 text-[9px] text-white hover:bg-white/20"
+                              title="Remove image"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
                         </div>
                       )
                     })}

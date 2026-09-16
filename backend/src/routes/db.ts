@@ -437,6 +437,7 @@ dbRouter.post('/sales-orders/:id/create-invoice', requirePermission('sales', 'cr
     if (invoiceNumber && !existing) {
       const [fresh] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
       if (fresh) recordCrud('sales-orders', 'Updated', req, fresh)
+      await insertOrderEvent(req.params.id, 'Invoice Created', `Invoice ${invoiceNumber} generated`, actorFromRequest(req).userId ?? 'system')
     }
     res.json({ created: Boolean(invoiceNumber) && !existing, invoiceNumber })
   } catch (err) {
@@ -621,6 +622,7 @@ dbRouter.patch('/sales-orders/:id/status', requirePermission('sales', 'edit'), a
     const [row] = await db!.update(s.salesOrders).set({ status }).where(eq(s.salesOrders.id, req.params.id)).returning()
     if (!row) return res.status(404).json({ error: 'Order not found' })
     const actor = actorFromRequest(req)
+    await insertOrderEvent(row.id, 'Status Change', `Status moved to ${status}`, actor.userId ?? 'system')
     void recordActivity({
       action: 'Updated Order Status',
       module: 'sales',
@@ -707,6 +709,7 @@ dbRouter.post('/invoices/:id/return', requirePermission('sales', 'create'), asyn
     })
 
     recordCrud('sales-returns', 'Created', req, ret)
+    if (invoice.id) await insertOrderEvent(invoice.id, 'Return Processed', `Credit note ${number} — ${returnItems.length} item(s), ₹${amount.toLocaleString('en-IN')}${restock ? ', restocked' : ''}`, actorFromRequest(req).userId ?? 'system')
     res.json({ return: ret, creditNoteNumber: number, amount, restocked: restock })
   } catch (err) {
     logger.error({ err }, 'invoice return failed')
@@ -806,6 +809,7 @@ dbRouter.post('/bookings/:id/convert', requirePermission('sales', 'create'), asy
       })
     }
     recordCrud('sales-orders', 'Updated', req, { id: order.id, invoice: invoiceNumber })
+    await insertOrderEvent(order.id, 'Booking Converted', `Converted to invoice ${invoiceNumber}; advance applied ₹${advancePaid.toLocaleString('en-IN')}`, actorFromRequest(req).userId ?? 'system')
     res.json({ invoiceNumber, advanceApplied: advancePaid, balance: Math.round((value - advancePaid) * 100) / 100 })
   } catch (err) {
     logger.error({ err }, 'booking convert failed')
@@ -813,8 +817,187 @@ dbRouter.post('/bookings/:id/convert', requirePermission('sales', 'create'), asy
   }
 })
 
-dbRouter.get('/purchase-orders', listOf(s.purchaseOrders, s.purchaseOrders.date))
-dbRouter.get('/purchase-orders/:id', oneOf(s.purchaseOrders, s.purchaseOrders.id))
+// ─── Order events timeline ───────────────────────────────────────────────────
+async function insertOrderEvent(orderId: string, event: string, details: string, actor?: string | null): Promise<void> {
+  if (!db) return
+  try {
+    await db.insert(s.orderEvents).values({
+      id: randomUUID(), orderId, event, details,
+      actor: actor ?? null,
+      createdAt: new Date().toISOString(),
+    })
+  } catch (err) {
+    logger.warn({ err }, 'order event insert failed')
+  }
+}
+
+// Seed a timeline for orders that have none (first time the dialog is opened)
+async function ensureOrderTimeline(order: typeof s.salesOrders.$inferSelect): Promise<void> {
+  const existing = await db!.select({ id: s.orderEvents.id }).from(s.orderEvents).where(eq(s.orderEvents.orderId, order.id)).limit(1)
+  if (existing.length > 0) return
+  const events: Array<[string, string]> = []
+  if (order.date) events.push(['Order Created', order.shopifyId ? `Imported from Shopify order ${order.shopifyId}` : 'Order recorded'])
+  if (order.isBooking && order.advancePaid) events.push(['Advance Received', `${Number(order.advancePaid).toLocaleString('en-IN')} collected at booking`])
+  if (order.invoice) events.push(['Invoice Created', `Invoice ${order.invoice}`])
+  if (order.status && order.status !== 'imported') events.push(['Status', `Status set to ${order.status}`])
+  for (const [e, d] of events) {
+    await insertOrderEvent(order.id, e, d, 'system')
+  }
+}
+
+dbRouter.get('/orders/:id/events', requirePermission('sales', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    await ensureOrderTimeline(order)
+    const events = await db!.select().from(s.orderEvents).where(eq(s.orderEvents.orderId, req.params.id)).orderBy(desc(s.orderEvents.createdAt))
+    res.json({ data: events })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load order events' })
+  }
+})
+
+// ─── Customer 360: everything about one customer in a single call ───────────
+dbRouter.get('/customers/:name/summary', requirePermission('sales', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const customer = req.params.name
+    const [orders, invoices, dues, pays] = await Promise.all([
+      db!.select().from(s.salesOrders).where(eq(s.salesOrders.customer, customer)).orderBy(desc(s.salesOrders.date)).limit(25),
+      db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.customer, customer)).orderBy(desc(s.salesInvoices.date)).limit(25),
+      db!.select().from(s.salesInvoices).where(sql`${s.salesInvoices.customer} = ${customer} and ${s.salesInvoices.paymentStatus} is distinct from 'paid' and ${s.salesInvoices.status} is distinct from 'cancelled' and ${s.salesInvoices.status} is distinct from 'refunded'`),
+      db!.select().from(s.payments).where(eq(s.payments.customer, customer)).orderBy(desc(s.payments.date)).limit(15),
+    ])
+    const lifetimeValue = Math.round(orders.reduce((a, o) => a + Number(o.value ?? 0), 0) * 100) / 100
+    const outstanding = Math.round(dues.reduce((a, i) => a + Number(i.grandTotal ?? 0), 0) * 100) / 100
+    res.json({
+      customer,
+      totalOrders: orders.length,
+      lifetimeValue,
+      outstanding,
+      lastOrder: orders[0]?.date ?? null,
+      lastInvoice: invoices[0]?.number ?? null,
+      orders,
+      invoices,
+      payments: pays,
+    })
+  } catch (err) {
+    logger.error({ err }, 'customer summary failed')
+    res.status(500).json({ error: 'Failed to load customer summary' })
+  }
+})
+
+// ─── Bulk order actions: status update + invoice creation ────────────────────
+dbRouter.post('/sales-orders/bulk-status', requirePermission('sales', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids : []
+    const status = String(req.body?.status ?? '').trim()
+    const allowed = ['imported', 'confirmed', 'processing', 'fulfilled', 'cancelled']
+    if (ids.length === 0) return res.status(400).json({ error: 'ids is required' })
+    if (!allowed.includes(status)) return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` })
+    let updated = 0
+    for (const id of ids) {
+      const [row] = await db!.update(s.salesOrders).set({ status }).where(eq(s.salesOrders.id, id)).returning()
+      if (row) {
+        updated++
+        await insertOrderEvent(id, 'Status Change', `Bulk status moved to ${status}`, actorFromRequest(req).userId ?? 'system')
+      }
+    }
+    recordCrud('sales-orders', 'Updated', req, { bulkStatus: status, updated })
+    res.json({ updated, status })
+  } catch (err) {
+    logger.error({ err }, 'bulk status failed')
+    res.status(500).json({ error: 'Bulk status update failed' })
+  }
+})
+
+dbRouter.post('/sales-orders/bulk-invoice', requirePermission('sales', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids : []
+    if (ids.length === 0) return res.status(400).json({ error: 'ids is required' })
+    const { createInvoiceForOrderRow } = await import('../orderEmailIngest')
+    let created = 0
+    let alreadyInvoiced = 0
+    let failed = 0
+    const errors: string[] = []
+    for (const id of ids) {
+      const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, id)).limit(1)
+      if (!order) { failed++; errors.push(`${id}: not found`); continue }
+      if (order.invoice) { alreadyInvoiced++; continue }
+      try {
+        const invoiceNumber = await createInvoiceForOrderRow(order)
+        if (invoiceNumber) {
+          created++
+          await insertOrderEvent(id, 'Invoice Created', `Invoice ${invoiceNumber} generated (bulk)`, actorFromRequest(req).userId ?? 'system')
+        } else { failed++; errors.push(`${order.internalId ?? order.id}: no convertible line items`) }
+      } catch (e) {
+        failed++
+        errors.push(`${order.internalId ?? order.id}: ${e instanceof Error ? e.message : 'failed'}`)
+      }
+    }
+    recordCrud('sales-orders', 'Updated', req, { bulkInvoice: true, created })
+    res.json({ created, alreadyInvoiced, failed, errors })
+  } catch (err) {
+    logger.error({ err }, 'bulk invoice failed')
+    res.status(500).json({ error: 'Bulk invoicing failed' })
+  }
+})
+
+// ─── Auto reorder suggestions: sales velocity vs. stock on hand ─────────────
+dbRouter.get('/inventory/reorder-suggestions', requirePermission('inventory', 'view'), async (_req, res) => {
+  if (!requireDb(res)) return
+  try {
+    // Sales per SKU over the last 90 days from order line items (JSONB)
+    const salesRows = await db!.execute(sql`
+      SELECT li->>'sku' AS sku,
+             sum((li->>'quantity')::numeric) AS qty_sold
+      FROM sales_orders, jsonb_array_elements(line_items) AS li
+      WHERE date > now() - interval '90 days'
+        AND li->>'sku' IS NOT NULL AND li->>'sku' <> ''
+      GROUP BY li->>'sku'
+    `)
+    const soldMap = new Map<string, number>()
+    for (const row of salesRows as any[]) {
+      soldMap.set(String(row.sku), Number(row.qty_sold ?? 0))
+    }
+
+    const prods = await db!.select().from(s.products)
+    const suggestions: Array<{
+      id: string; name: string; sku: string; supplier: string | null; stock: number
+      reorderLevel: number; sold90d: number; weeklyVelocity: number; weeksOfCover: number
+      suggestedQty: number; priority: 'urgent' | 'soon' | 'ok'
+    }> = []
+    for (const p of prods) {
+      if (p.trackInventory === false) continue
+      const sold90d = soldMap.get(p.sku) ?? 0
+      const weeklyVelocity = Math.round((sold90d / 13) * 100) / 100 // 13 weeks ≈ 90 days
+      const stock = p.stock ?? 0
+      const weeksOfCover = weeklyVelocity > 0 ? Math.round((stock / weeklyVelocity) * 10) / 10 : 99
+      const target = Math.max(p.reorderLevel ?? 5, Math.ceil(weeklyVelocity * 8)) // 8 weeks of stock
+      if (stock <= (p.reorderLevel ?? 5) || weeksOfCover < 4) {
+        suggestions.push({
+          id: p.id, name: p.name, sku: p.sku, supplier: p.supplier,
+          stock, reorderLevel: p.reorderLevel ?? 5, sold90d, weeklyVelocity,
+          weeksOfCover,
+          suggestedQty: Math.max(target - stock, 1),
+          priority: stock <= 0 || weeksOfCover < 1 ? 'urgent' : weeksOfCover < 2 ? 'soon' : 'ok',
+        })
+      }
+    }
+    suggestions.sort((a, b) => {
+      const rank = { urgent: 0, soon: 1, ok: 2 } as const
+      if (rank[a.priority] !== rank[b.priority]) return rank[a.priority] - rank[b.priority]
+      return a.weeksOfCover - b.weeksOfCover
+    })
+    res.json({ data: suggestions, generatedAt: new Date().toISOString() })
+  } catch (err) {
+    logger.error({ err }, 'reorder suggestions failed')
+    res.status(500).json({ error: 'Failed to generate reorder suggestions' })
+  }
+})
 
 dbRouter.get('/purchase-invoices', listOf(s.purchaseInvoices, s.purchaseInvoices.date))
 dbRouter.get('/purchase-invoices/:id', oneOf(s.purchaseInvoices, s.purchaseInvoices.id))
