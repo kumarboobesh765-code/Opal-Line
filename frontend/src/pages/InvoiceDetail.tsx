@@ -16,6 +16,8 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { escapeHtml, numberToIndianWords } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -32,6 +34,11 @@ export default function InvoiceDetailPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [refunding, setRefunding] = useState(false)
+  // Return-dialog state must live above the early returns (Rules of Hooks)
+  const [returnOpen, setReturnOpen] = useState(false)
+  const [returnQty, setReturnQty] = useState<Record<string, number>>({})
+  const [restock, setRestock] = useState(true)
+  const [returning, setReturning] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -228,6 +235,35 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  // Returns: choose quantities per line item → credit note + optional restock
+  const openReturnDialog = () => {
+    const initial: Record<string, number> = {}
+    for (const it of invoice.items) if (it.sku) initial[it.sku] = 0
+    setReturnQty(initial)
+    setRestock(true)
+    setReturnOpen(true)
+  }
+
+  const submitReturn = async () => {
+    const items = Object.entries(returnQty)
+      .filter(([, qty]) => qty > 0)
+      .map(([sku, qty]) => ({ sku, qty }))
+    if (items.length === 0) { window.alert('Enter a quantity greater than 0 for at least one item.'); return }
+    setReturning(true)
+    try {
+      const r = await dbApi.createReturn(invoice.id, { items, restock })
+      window.alert(
+        `Return processed.\nCredit Note: ${r.creditNoteNumber}\nAmount: ₹${r.amount.toLocaleString('en-IN')}${r.restocked ? '\nItems restocked.' : ''}`,
+      )
+      setReturnOpen(false)
+      window.location.reload()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Return failed')
+    } finally {
+      setReturning(false)
+    }
+  }
+
   const customerInitial = invoice.customer.split(' ').map((n) => n[0]).join('').slice(0, 2)
 
   return (
@@ -255,7 +291,7 @@ export default function InvoiceDetailPage() {
             )}
           </span>
         }
-        subtitle={`Shopify Order ${invoice.shopifyOrder} · ${formatDateTime(invoice.date)}`}
+        subtitle={`${invoice.shopifyOrder ? `Shopify Order ${invoice.shopifyOrder}` : 'Manual / Booking invoice'} · ${formatDateTime(invoice.date)}`}
         actions={
           <>
             <Button variant="outline" size="sm" onClick={printInvoice}><Printer className="h-3.5 w-3.5" /> Print</Button>
@@ -264,6 +300,7 @@ export default function InvoiceDetailPage() {
             {invoice.customerPhone ? (
               <Button variant="outline" size="sm" onClick={shareWhatsApp}><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</Button>
             ) : null}
+            <Button variant="outline" size="sm" onClick={openReturnDialog} disabled={invoice.status === 'refunded' || invoice.status === 'cancelled'}><Undo2 className="h-3.5 w-3.5" /> Return Items</Button>
             <Button variant="soft-danger" size="sm" onClick={refundInvoice} disabled={refunding || invoice.status === 'refunded'}><Undo2 className="h-3.5 w-3.5" /> Refund</Button>
           </>
         }
@@ -353,7 +390,7 @@ export default function InvoiceDetailPage() {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Shopify Order</span>
-                    <span className="font-mono font-medium text-foreground">{invoice.shopifyOrder}</span>
+                    <span className="font-mono font-medium text-foreground">{invoice.shopifyOrder || '—'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Payment Method</span>
@@ -430,7 +467,7 @@ export default function InvoiceDetailPage() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Shopify Order</span>
                 <Link to="/sales/orders" className="flex items-center gap-1 font-mono font-medium text-primary-700 hover:underline">
-                  {invoice.shopifyOrder} <ShoppingBag className="h-3 w-3" />
+                  {invoice.shopifyOrder || 'No linked order'} <ShoppingBag className="h-3 w-3" />
                 </Link>
               </div>
               <div className="flex justify-between">
@@ -448,12 +485,51 @@ export default function InvoiceDetailPage() {
               <Separator className="my-2" />
               <div className="flex items-start gap-2 rounded-md bg-muted/60 p-2.5 text-xs text-muted-foreground">
                 <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success-700" />
-                Invoice generated automatically from Shopify order #{invoice.shopifyOrder.slice(1)}.
+                {invoice.shopifyOrder
+                  ? `Invoice generated automatically from Shopify order #${invoice.shopifyOrder.slice(1)}.`
+                  : 'Invoice generated from a booking or manual order.'}
               </div>
             </CardContent>
           </Card>
         </div>
       </div>
+
+      <Dialog open={returnOpen} onOpenChange={setReturnOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Return items — {invoice.number}</DialogTitle>
+            <DialogDescription>Choose quantities to return. A credit note is generated automatically.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {invoice.items.filter((it) => it.sku).map((it) => (
+              <div key={it.sku} className="flex items-center justify-between gap-2 rounded-md border p-2">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium">{it.product}</p>
+                  <p className="text-[11px] text-muted-foreground">{it.sku} · invoiced qty {it.qty}</p>
+                </div>
+                <Input
+                  type="number"
+                  min={0}
+                  max={it.qty}
+                  value={returnQty[it.sku] ?? 0}
+                  onChange={(e) => setReturnQty((q) => ({ ...q, [it.sku]: Math.max(0, Math.min(it.qty, Number(e.target.value) || 0)) }))}
+                  className="w-20"
+                />
+              </div>
+            ))}
+            <label className="flex items-center gap-2 pt-1 text-xs">
+              <input type="checkbox" checked={restock} onChange={(e) => setRestock(e.target.checked)} />
+              Restock returned items into inventory
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setReturnOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={submitReturn} disabled={returning}>
+              {returning ? 'Processing…' : 'Process return & credit note'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

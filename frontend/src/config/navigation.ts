@@ -10,6 +10,7 @@ import {
   FileText,
   Gem,
   HandCoins,
+  KanbanSquare,
   Landmark,
   LayoutDashboard,
   ListOrdered,
@@ -59,8 +60,10 @@ export const navSections: NavSection[] = [
     items: [
       { title: 'Sales Invoices', path: '/sales/invoices', icon: FileText },
       { title: 'Sales Orders', path: '/sales/orders', icon: ListOrdered },
+      { title: 'Order Pipeline', path: '/sales/pipeline', icon: KanbanSquare },
       { title: 'Customers', path: '/sales/customers', icon: Users },
       { title: 'Returns', path: '/sales/returns', icon: Undo2 },
+      { title: 'Bookings', path: '/sales/bookings', icon: ShoppingBag },
     ],
   },
   {

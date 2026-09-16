@@ -139,7 +139,7 @@ export default function SalesInvoicesPage() {
         header: 'Payment',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const p = paymentBadge[row.original.paymentStatus]
+          const p = paymentBadge[row.original.paymentStatus] ?? { label: String(row.original.paymentStatus ?? 'Unknown'), variant: 'muted' as const }
           return <Badge variant={p.variant} dot>{p.label}</Badge>
         },
       },
@@ -148,7 +148,7 @@ export default function SalesInvoicesPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusBadge[row.original.status]
+          const s = statusBadge[row.original.status] ?? { label: String(row.original.status ?? 'Unknown'), variant: 'muted' as const }
           return <Badge variant={s.variant}>{s.label}</Badge>
         },
       },

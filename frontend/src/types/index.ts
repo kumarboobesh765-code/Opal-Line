@@ -227,6 +227,7 @@ export interface Product {
   name: string
   sku: string
   barcode: string
+  huid?: string | null
   category: string
   collection: string
   purity: number
@@ -325,6 +326,8 @@ export interface SalesOrder {
   lineItems?: SalesOrderLineItem[] | null
   billingAddress?: Record<string, string> | null
   shippingAddress?: Record<string, string> | null
+  isBooking?: boolean | null
+  advancePaid?: number | null
 }
 
 export type OrderStatus =

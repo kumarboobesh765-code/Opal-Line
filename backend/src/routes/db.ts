@@ -443,6 +443,347 @@ dbRouter.post('/sales-orders/:id/create-invoice', requirePermission('sales', 'cr
   }
 })
 
+// ─── Bulk product import (CSV rows parsed client-side) ───────────────────────
+const PRODUCT_FIELD_ALIASES: Record<string, string> = {
+  name: 'name', title: 'name', product: 'name', 'product name': 'name',
+  sku: 'sku', 'item code': 'sku', code: 'sku',
+  barcode: 'barcode', 'bar code': 'barcode',
+  category: 'category', type: 'category',
+  collection: 'collection',
+  purity: 'purity',
+  grossweight: 'grossWeight', 'gross weight': 'grossWeight',
+  stoneweight: 'stoneWeight', 'stone weight': 'stoneWeight',
+  netweight: 'netWeight', 'net weight': 'netWeight',
+  makingcharge: 'makingCharge', 'making charge': 'makingCharge', mc: 'makingCharge',
+  gst: 'gst', 'gst rate': 'gst',
+  hsn: 'hsn', 'hsn code': 'hsn',
+  supplier: 'supplier',
+  silverrate: 'silverRate', 'silver rate': 'silverRate', rate: 'silverRate',
+  sellingprice: 'sellingPrice', 'selling price': 'sellingPrice', price: 'sellingPrice',
+  compareatprice: 'compareAtPrice', 'compare at price': 'compareAtPrice', mrp: 'compareAtPrice',
+  stock: 'stock', quantity: 'stock', qty: 'stock',
+  reorderlevel: 'reorderLevel', 'reorder level': 'reorderLevel',
+  status: 'status',
+  vendor: 'vendor',
+  producttype: 'productType', 'product type': 'productType',
+  tags: 'tags',
+  huid: 'huid',
+}
+
+function normalizeHeader(h: string): string {
+  const key = h.trim().toLowerCase().replace(/[\s_-]+/g, ' ')
+  return PRODUCT_FIELD_ALIASES[key] ?? PRODUCT_FIELD_ALIASES[key.replace(/\s/g, '')] ?? ''
+}
+
+function toNum(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(String(v).replace(/[^0-9.\-]/g, ''))
+  return Number.isFinite(n) ? n : null
+}
+
+dbRouter.post('/products/bulk-import', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const rawRows: unknown[] = Array.isArray(req.body?.rows) ? req.body.rows : []
+    if (rawRows.length === 0) return res.status(400).json({ error: 'rows is required (array of objects with CSV headers as keys)' })
+    if (rawRows.length > 2000) return res.status(400).json({ error: 'Maximum 2000 rows per import' })
+
+    const errors: string[] = []
+    let created = 0
+    let updated = 0
+
+    // Load existing products by normalized SKU for upsert
+    const existing = await db!.select({ id: s.products.id, sku: s.products.sku }).from(s.products)
+    const bySku = new Map(existing.map((p) => [p.sku.trim().toLowerCase(), p]))
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const raw = rawRows[i] as Record<string, unknown>
+      if (!raw || typeof raw !== 'object') continue
+      const mapped: Record<string, string> = {}
+      for (const [k, v] of Object.entries(raw)) {
+        const field = normalizeHeader(k)
+        if (field && v != null && String(v).trim() !== '') mapped[field] = String(v).trim()
+      }
+      const rowNo = i + 2 // +2: header row + 1-indexed
+      const name = mapped.name
+      const sku = mapped.sku
+      if (!name) { errors.push(`Row ${rowNo}: missing name — skipped`); continue }
+      if (!sku) { errors.push(`Row ${rowNo}: missing SKU — skipped`); continue }
+      const skuKey = sku.toLowerCase()
+      const numeric = {
+        purity: toNum(mapped.purity),
+        grossWeight: toNum(mapped.grossWeight),
+        stoneWeight: toNum(mapped.stoneWeight),
+        netWeight: toNum(mapped.netWeight),
+        makingCharge: toNum(mapped.makingCharge),
+        gst: toNum(mapped.gst),
+        silverRate: toNum(mapped.silverRate),
+        sellingPrice: toNum(mapped.sellingPrice),
+        compareAtPrice: toNum(mapped.compareAtPrice),
+        stock: toNum(mapped.stock),
+        reorderLevel: toNum(mapped.reorderLevel),
+      }
+      const text = {
+        name,
+        barcode: mapped.barcode ?? null,
+        category: mapped.category ?? 'Imported',
+        collection: mapped.collection ?? null,
+        hsn: mapped.hsn ?? null,
+        supplier: mapped.supplier ?? null,
+        status: mapped.status ?? 'active',
+        vendor: mapped.vendor ?? null,
+        productType: mapped.productType ?? null,
+        tags: mapped.tags ?? null,
+        huid: mapped.huid ?? null,
+      }
+      try {
+        const hit = bySku.get(skuKey)
+        if (hit) {
+          const patch: Record<string, unknown> = { ...text }
+          for (const [k, v] of Object.entries(numeric)) if (v != null) patch[k] = v
+          await db!.update(s.products).set(patch).where(eq(s.products.id, hit.id))
+          updated++
+        } else {
+          const values: Record<string, unknown> = {
+            id: randomUUID(), sku, ...text, ...numeric,
+            stock: numeric.stock ?? 0,
+            reorderLevel: numeric.reorderLevel ?? 5,
+            purity: numeric.purity ?? 92.5,
+            trackInventory: true,
+            chargeOnTax: true,
+            createdAt: new Date().toISOString().slice(0, 10),
+          }
+          const [row] = await db!.insert(s.products).values(values as typeof s.products.$inferInsert).returning()
+          bySku.set(skuKey, { id: row.id, sku })
+          created++
+        }
+      } catch (rowErr) {
+        const base = rowErr instanceof Error ? rowErr.message : 'insert failed'
+        const cause = rowErr instanceof Error && (rowErr as any).cause ? String((rowErr as any).cause?.message ?? (rowErr as any).cause) : ''
+        errors.push(`Row ${rowNo} (${sku}): ${`${base} ${cause}`.replace(/\s+/g, ' ')}`)
+      }
+    }
+    recordCrud('products', 'Created', req, { created, updated })
+    res.json({ created, updated, errors })
+  } catch (err) {
+    logger.error({ err }, 'bulk import failed')
+    res.status(500).json({ error: 'Bulk import failed' })
+  }
+})
+
+// ─── Bulk image upload, auto-matched to products by SKU from filename ────────
+dbRouter.post('/products/bulk-images', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const images: Array<{ filename?: unknown; dataUrl?: unknown }> = Array.isArray(req.body?.images) ? req.body.images : []
+    if (images.length === 0) return res.status(400).json({ error: 'images is required ([{ filename, dataUrl }])' })
+    if (images.length > 200) return res.status(400).json({ error: 'Maximum 200 images per batch' })
+
+    const { saveUploadedImage } = await import('../uploads')
+    const all = await db!.select({ id: s.products.id, sku: s.products.sku }).from(s.products)
+    const bySku = new Map(all.map((p) => [p.sku.trim().toLowerCase(), p.id]))
+
+    let matched = 0
+    const unmatched: string[] = []
+    const errors: string[] = []
+    for (const img of images) {
+      const filename = typeof img.filename === 'string' ? img.filename : ''
+      const dataUrl = typeof img.dataUrl === 'string' ? img.dataUrl : ''
+      if (!filename || !dataUrl) { errors.push(`${filename || 'image'}: missing filename or data`); continue }
+      const base = filename.split('/').pop() ?? filename
+      const sku = base.replace(/\.[^.]+$/, '').trim().toLowerCase()
+      const productId = bySku.get(sku)
+      if (!productId) { unmatched.push(filename); continue }
+      const path = saveUploadedImage(dataUrl)
+      if (!path) { errors.push(`${filename}: invalid image data (must be a data:image/... URL)`); continue }
+      const [prod] = await db!.select({ images: s.products.images, image: s.products.image }).from(s.products).where(eq(s.products.id, productId)).limit(1)
+      const gallery = Array.isArray(prod?.images) ? (prod!.images as string[]) : []
+      if (!gallery.includes(path)) gallery.push(path)
+      await db!.update(s.products).set({ images: gallery, image: prod?.image ?? path }).where(eq(s.products.id, productId))
+      matched++
+    }
+    res.json({ matched, unmatched, errors })
+  } catch (err) {
+    logger.error({ err }, 'bulk image match failed')
+    res.status(500).json({ error: 'Bulk image upload failed' })
+  }
+})
+
+// ─── Order status pipeline (kanban drag & drop) ──────────────────────────────
+dbRouter.patch('/sales-orders/:id/status', requirePermission('sales', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const status = String(req.body?.status ?? '').trim()
+    const allowed = ['imported', 'confirmed', 'processing', 'fulfilled', 'cancelled']
+    if (!allowed.includes(status)) return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` })
+    const [row] = await db!.update(s.salesOrders).set({ status }).where(eq(s.salesOrders.id, req.params.id)).returning()
+    if (!row) return res.status(404).json({ error: 'Order not found' })
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Updated Order Status',
+      module: 'sales',
+      entity: row.internalId ?? row.id,
+      details: `Status → ${status}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json(row)
+  } catch (err) {
+    res.status(400).json({ error: 'Failed to update order status' })
+  }
+})
+
+// ─── Returns & credit notes: return invoice items, restock, credit note ─────
+dbRouter.post('/invoices/:id/return', requirePermission('sales', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
+    const invItems = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, invoice.id))
+    if (invItems.length === 0) return res.status(400).json({ error: 'Invoice has no line items to return' })
+
+    // Return spec: explicit items list (partial) or whole invoice
+    const requested: Array<{ sku?: string; qty: number }> = Array.isArray(req.body?.items) && req.body.items.length > 0
+      ? req.body.items
+      : invItems.map((it) => ({ sku: it.sku ?? undefined, qty: it.qty ?? 1 }))
+    const qtyBySku = new Map<string, number>()
+    for (const r of requested) {
+      if (r.sku && Number(r.qty) > 0) qtyBySku.set(r.sku, (qtyBySku.get(r.sku) ?? 0) + Number(r.qty))
+    }
+    const returnItems = invItems
+      .filter((it) => it.sku && qtyBySku.has(it.sku))
+      .map((it) => {
+        const sku = it.sku as string
+        const qty = Math.min(qtyBySku.get(sku) ?? 0, it.qty ?? 1)
+        return {
+          product: it.product, sku, qty,
+          amount: Math.round(((it.amount ?? 0) * qty) / (it.qty || 1) * 100) / 100,
+        }
+      })
+      .filter((it) => it.qty > 0)
+    if (returnItems.length === 0) return res.status(400).json({ error: 'No matching items to return (SKU + qty required)' })
+
+    const amount = Math.round(returnItems.reduce((a, it) => a + (it.amount ?? 0), 0) * 100) / 100
+    const restock = req.body?.restock !== false
+    if (restock) {
+      for (const it of returnItems) {
+        const [prod] = await db!.select({ id: s.products.id, stock: s.products.stock }).from(s.products).where(eq(s.products.sku, it.sku!)).limit(1)
+        if (prod) {
+          await db!.update(s.products).set({ stock: (prod.stock ?? 0) + it.qty }).where(eq(s.products.id, prod.id))
+        }
+      }
+    }
+
+    const now = new Date()
+    const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+    let number = `CR${ym}-${Math.floor(100000 + Math.random() * 900000)}`
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [dup] = await db!.select({ id: s.salesReturns.id }).from(s.salesReturns).where(eq(s.salesReturns.number, number)).limit(1)
+      if (!dup) break
+      number = `CR${ym}-${Math.floor(100000 + Math.random() * 900000)}`
+    }
+
+    const [ret] = await db!.insert(s.salesReturns).values({
+      id: randomUUID(),
+      number,
+      invoiceId: invoice.id,
+      creditNoteNumber: number,
+      restocked: restock,
+      returnItems,
+      order: invoice.shopifyOrder,
+      customer: invoice.customer,
+      items: returnItems.reduce((a, it) => a + it.qty, 0),
+      amount,
+      status: 'processed',
+      date: now.toISOString(),
+    }).returning()
+
+    // Accounting trail: negative payment against the invoice
+    await db!.insert(s.payments).values({
+      id: randomUUID(), ref: number, invoice: invoice.number, customer: invoice.customer,
+      amount: -amount, method: 'Credit Note', gateway: 'return', status: 'refunded', date: now.toISOString(),
+    })
+
+    recordCrud('sales-returns', 'Created', req, ret)
+    res.json({ return: ret, creditNoteNumber: number, amount, restocked: restock })
+  } catch (err) {
+    logger.error({ err }, 'invoice return failed')
+    res.status(500).json({ error: 'Failed to process return' })
+  }
+})
+
+// ─── Booking orders: advance payment, convert to invoice on completion ──────
+dbRouter.post('/bookings', requirePermission('sales', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const customer = String(req.body?.customer ?? '').trim()
+    const rawItems: Array<{ product?: unknown; sku?: unknown; qty?: unknown; price?: unknown }> = Array.isArray(req.body?.items) ? req.body.items : []
+    if (!customer) return res.status(400).json({ error: 'customer is required' })
+    const items = rawItems
+      .map((it) => ({ title: String(it.product ?? ''), sku: String(it.sku ?? ''), quantity: Number(it.qty ?? 0), price: Number(it.price ?? 0) }))
+      .filter((it) => it.title && it.quantity > 0)
+    if (items.length === 0) return res.status(400).json({ error: 'at least one item with product + qty is required' })
+    const discount = toNum(req.body?.discount) ?? 0
+    const value = Math.round((items.reduce((a, it) => a + it.price * it.quantity, 0) - discount) * 100) / 100
+    const advancePaid = Math.min(Math.max(toNum(req.body?.advanceAmount) ?? 0, 0), value)
+
+    const now = new Date()
+    const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+    const internalId = `BK${ym}-${Math.floor(100000 + Math.random() * 900000)}`
+    const [row] = await db!.insert(s.salesOrders).values({
+      id: randomUUID(),
+      internalId,
+      customer,
+      value,
+      payment: advancePaid >= value && value > 0 ? 'paid' : 'pending',
+      fulfillment: 'pending',
+      status: 'confirmed',
+      date: now.toISOString(),
+      items: items.reduce((a, it) => a + it.quantity, 0),
+      tags: 'booking',
+      currency: 'INR',
+      discount,
+      lineItems: items,
+      isBooking: true,
+      advancePaid,
+    }).returning()
+    recordCrud('sales-orders', 'Created', req, row)
+    res.json(row)
+  } catch (err) {
+    logger.error({ err }, 'booking create failed')
+    res.status(500).json({ error: 'Failed to create booking' })
+  }
+})
+
+dbRouter.post('/bookings/:id/convert', requirePermission('sales', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Booking not found' })
+    if (order.invoice) return res.status(400).json({ error: `Already converted to invoice ${order.invoice}` })
+    const value = Number(order.value ?? 0)
+    const advancePaid = Number(order.advancePaid ?? 0)
+    const fullyPaid = advancePaid >= value && value > 0
+    await db!.update(s.salesOrders).set({ payment: fullyPaid ? 'paid' : 'pending' }).where(eq(s.salesOrders.id, order.id))
+    const [fresh] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, order.id)).limit(1)
+    const { createInvoiceForOrderRow } = await import('../orderEmailIngest')
+    const invoiceNumber = await createInvoiceForOrderRow(fresh!)
+    if (!invoiceNumber) return res.status(400).json({ error: 'Conversion failed: booking has no convertible line items' })
+    await db!.update(s.salesOrders).set({ invoice: invoiceNumber, status: 'completed' }).where(eq(s.salesOrders.id, order.id))
+    if (advancePaid > 0) {
+      await db!.insert(s.payments).values({
+        id: randomUUID(), ref: order.internalId ?? order.id, invoice: invoiceNumber, customer: order.customer,
+        amount: advancePaid, method: 'Advance', gateway: 'booking', status: 'paid', date: new Date().toISOString(),
+      })
+    }
+    recordCrud('sales-orders', 'Updated', req, { id: order.id, invoice: invoiceNumber })
+    res.json({ invoiceNumber, advanceApplied: advancePaid, balance: Math.round((value - advancePaid) * 100) / 100 })
+  } catch (err) {
+    logger.error({ err }, 'booking convert failed')
+    res.status(500).json({ error: 'Failed to convert booking' })
+  }
+})
+
 dbRouter.get('/purchase-orders', listOf(s.purchaseOrders, s.purchaseOrders.date))
 dbRouter.get('/purchase-orders/:id', oneOf(s.purchaseOrders, s.purchaseOrders.id))
 

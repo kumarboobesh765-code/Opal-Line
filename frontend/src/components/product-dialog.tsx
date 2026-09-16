@@ -32,6 +32,7 @@ interface ProductForm {
   name: string
   sku: string
   barcode: string
+  huid: string
   category: string
   collection: string
   purity: string
@@ -75,6 +76,7 @@ const EMPTY_FORM: ProductForm = {
   name: '',
   sku: '',
   barcode: '',
+  huid: '',
   category: 'Rings',
   collection: '',
   purity: '92.5',
@@ -104,6 +106,7 @@ function fromProduct(p: Product): ProductForm {
     name: p.name ?? '',
     sku: p.sku ?? '',
     barcode: p.barcode ?? '',
+    huid: p.huid ?? '',
     category: p.category ?? 'Rings',
     collection: p.collection ?? '',
     purity: p.purity != null ? String(p.purity) : '92.5',
@@ -143,6 +146,7 @@ function buildBody(form: ProductForm, silverRate: number, sellingPrice: number) 
     name: form.name.trim(),
     sku: form.sku.trim(),
     barcode: form.barcode.trim() || null,
+    huid: form.huid.trim() || null,
     category: form.category,
     collection: form.collection.trim() || null,
     purity: parseFloat(form.purity) || null,
@@ -353,6 +357,9 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
               </Field>
               <Field label="Barcode">
                 <Input value={form.barcode} onChange={(e) => set('barcode', e.target.value)} placeholder="12-digit EAN" />
+              </Field>
+              <Field label="HUID (Hallmark)">
+                <Input value={form.huid} onChange={(e) => set('huid', e.target.value)} placeholder="e.g. HUIA07" />
               </Field>
               <Field label="Category">
                 <Select

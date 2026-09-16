@@ -11,6 +11,7 @@ interface ProductLabel {
   weight?: number
   category?: string
   hsn?: string
+  huid?: string
 }
 
 interface LabelOptions {
@@ -51,7 +52,7 @@ export async function fetchProductLabels(productIds: string[]): Promise<ProductL
   if (!client) return []
   try {
     const products = await client.unsafe(
-      `SELECT name, sku, barcode, selling_price, net_weight, category, hsn FROM products WHERE id = ANY($1)`,
+      `SELECT name, sku, barcode, selling_price, net_weight, category, hsn, huid FROM products WHERE id = ANY($1)`,
       [productIds]
     )
     return products.map((p: any) => ({
@@ -62,6 +63,7 @@ export async function fetchProductLabels(productIds: string[]): Promise<ProductL
       weight: Number(p.net_weight || 0),
       category: p.category || undefined,
       hsn: p.hsn || '7113',
+      huid: p.huid || undefined,
     }))
   } catch (err) {
     logger.error({ err }, 'Failed to fetch product labels')
@@ -74,7 +76,7 @@ export async function fetchAllProductLabels(): Promise<ProductLabel[]> {
   if (!client) return []
   try {
     const products = await client.unsafe(
-      `SELECT name, sku, barcode, selling_price, net_weight, category, hsn FROM products ORDER BY name`
+      `SELECT name, sku, barcode, selling_price, net_weight, category, hsn, huid FROM products ORDER BY name`
     )
     return products.map((p: any) => ({
       name: p.name || 'Product',
@@ -84,6 +86,7 @@ export async function fetchAllProductLabels(): Promise<ProductLabel[]> {
       weight: Number(p.net_weight || 0),
       category: p.category || undefined,
       hsn: p.hsn || '7113',
+      huid: p.huid || undefined,
     }))
   } catch (err) {
     logger.error({ err }, 'Failed to fetch all product labels')
@@ -180,10 +183,16 @@ export async function generateLabelsPDF(
       doc.fontSize(5.5).font('Helvetica').fillColor('#6b728b')
       doc.text(`SKU: ${product.sku}`, textX, actualY + margin + 16, { width: textW })
 
+      // HUID (hallmark number) — mandatory on gold jewelry tags
+      if (product.huid) {
+        doc.fontSize(5.5).font('Helvetica-Bold').fillColor('#b45309')
+        doc.text(`HUID: ${product.huid}`, textX, actualY + margin + 23, { width: textW })
+      }
+
       // Category
       if (product.category) {
         doc.fontSize(5).fillColor('#9ca3af')
-        doc.text(product.category, textX, actualY + margin + 24, { width: textW })
+        doc.text(product.category, textX, actualY + margin + (product.huid ? 31 : 24), { width: textW })
       }
 
       // Price

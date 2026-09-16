@@ -11,6 +11,7 @@ interface InvoiceItem {
   silverRate: number
   makingCharge: number
   amount: number
+  huid?: string | null
 }
 
 interface InvoiceData {
@@ -103,6 +104,14 @@ export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | nu
     const items = await client.unsafe(`SELECT * FROM sales_invoice_items WHERE invoice_id = $1`, [invoiceId])
     const [settings] = await client.unsafe(`SELECT * FROM settings LIMIT 1`) as any[]
 
+    // HUID lookup: join through SKU so printed invoices carry hallmark numbers
+    const skus = items.map((item: any) => String(item.sku || '')).filter(Boolean)
+    const huidBySku = new Map<string, string>()
+    if (skus.length > 0) {
+      const prods = await client.unsafe(`SELECT sku, huid FROM products WHERE sku = ANY($1)`, [skus]) as any[]
+      for (const p of prods) if (p.sku && p.huid) huidBySku.set(p.sku, p.huid)
+    }
+
     const itemData: InvoiceItem[] = items.map((item: any) => ({
       name: item.name || item.product_name || 'Item',
       hsn: item.hsn || '7113',
@@ -112,6 +121,7 @@ export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | nu
       silverRate: Number(item.silver_rate || item.rate || 0),
       makingCharge: Number(item.making_charge || 0),
       amount: Number(item.amount || 0),
+      huid: (item.sku && huidBySku.get(item.sku)) || null,
     }))
 
     const subtotal = Number(inv.subtotal || 0)
@@ -267,16 +277,21 @@ function createPDFBuffer(data: InvoiceData): Buffer {
     for (let i = 0; i < data.items.length; i++) {
       const item = data.items[i]
       const rowY = doc.y
+      const rowH = item.huid ? 24 : 16
 
       // Alternating row background
       if (i % 2 === 0) {
         doc.save()
-        doc.rect(left, rowY - 2, contentW, 16).fill(COLORS.lightBg)
+        doc.rect(left, rowY - 2, contentW, rowH).fill(COLORS.lightBg)
         doc.restore()
       }
 
       doc.fillColor(COLORS.text)
       doc.text(item.name, cols[0].x, rowY, { width: cols[0].w, align: cols[0].align })
+      if (item.huid) {
+        doc.fontSize(6.5).fillColor(COLORS.muted).text(`HUID: ${item.huid}`, cols[0].x + 2, rowY + 10, { width: cols[0].w, align: 'left' })
+        doc.fontSize(8).fillColor(COLORS.text)
+      }
       doc.text(item.hsn, cols[1].x, rowY, { width: cols[1].w, align: cols[1].align })
       doc.text(String(item.quantity), cols[2].x, rowY, { width: cols[2].w, align: cols[2].align })
       doc.text(item.netWeight.toFixed(2), cols[3].x, rowY, { width: cols[3].w, align: cols[3].align })
@@ -285,7 +300,7 @@ function createPDFBuffer(data: InvoiceData): Buffer {
       doc.font('Helvetica-Bold').text(formatCurrency(item.amount), cols[6].x, rowY, { width: cols[6].w, align: cols[6].align })
       doc.font('Helvetica')
 
-      doc.y = rowY + 16
+      doc.y = rowY + rowH
     }
 
     // Table bottom border

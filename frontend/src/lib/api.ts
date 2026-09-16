@@ -467,6 +467,33 @@ export const dbApi = {
 
   getProducts: () => list<Product>('/db/products', PAGED),
   getProductById: (id: string) => maybe<Product>(`/db/products/${id}`),
+  bulkImportProducts: (rows: Array<Record<string, string>>) =>
+    request<{ created: number; updated: number; errors: string[] }>('/db/products/bulk-import', {
+      method: 'POST',
+      body: JSON.stringify({ rows }),
+    }),
+  bulkUploadProductImages: (images: Array<{ filename: string; dataUrl: string }>) =>
+    request<{ matched: number; unmatched: string[]; errors: string[] }>('/db/products/bulk-images', {
+      method: 'POST',
+      body: JSON.stringify({ images }),
+    }),
+  updateOrderStatus: (orderId: string, status: string) =>
+    request<SalesOrder>(`/db/sales-orders/${orderId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+  createReturn: (invoiceId: string, payload: { items?: Array<{ sku: string; qty: number }>; restock?: boolean }) =>
+    request<{ creditNoteNumber: string; amount: number; restocked: boolean }>(`/db/invoices/${invoiceId}/return`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  createBooking: (payload: { customer: string; items: Array<{ product: string; sku?: string; qty: number; price: number }>; advanceAmount?: number; discount?: number }) =>
+    request<SalesOrder>('/db/bookings', { method: 'POST', body: JSON.stringify(payload) }),
+  convertBooking: (orderId: string) =>
+    request<{ invoiceNumber: string; advanceApplied: number; balance: number }>(`/db/bookings/${orderId}/convert`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   getCustomers: () => list<Customer>('/db/customers', PAGED),
   getSuppliers: () => list<Supplier>('/db/suppliers', PAGED),
   getInvoices: async (): Promise<Invoice[]> => {

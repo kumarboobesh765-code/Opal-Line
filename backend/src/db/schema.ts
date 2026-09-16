@@ -36,6 +36,7 @@ export const products = pgTable('products', {
   name: text('name').notNull(),
   sku: text('sku').notNull().unique(),
   barcode: text('barcode'),
+  huid: text('huid'),
   category: text('category').notNull(),
   collection: text('collection'),
   purity: numericNumber('purity'),
@@ -121,6 +122,8 @@ export const salesOrders = pgTable('sales_orders', {
   lineItems: jsonb('line_items'),
   billingAddress: jsonb('billing_address'),
   shippingAddress: jsonb('shipping_address'),
+  isBooking: boolean('is_booking'),
+  advancePaid: numericNumber('advance_paid'),
 }, (table) => ({
   shopifyIdIdx: uniqueIndex('sales_orders_shopify_id_idx').on(table.shopifyId),
   internalIdIdx: index('sales_orders_internal_id_idx').on(table.internalId),
@@ -217,6 +220,10 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
 export const salesReturns = pgTable('sales_returns', {
   id: text('id').primaryKey(),
   number: text('number').notNull().unique(),
+  invoiceId: text('invoice_id'),
+  creditNoteNumber: text('credit_note_number'),
+  restocked: boolean('restocked'),
+  returnItems: jsonb('return_items'),
   order: text('order'),
   customer: text('customer'),
   items: integer('items'),

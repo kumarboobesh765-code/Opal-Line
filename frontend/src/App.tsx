@@ -15,6 +15,8 @@ const SilverRatePage = lazy(() => import('@/pages/SilverRate'))
 const SalesInvoicesPage = lazy(() => import('@/pages/SalesInvoices'))
 const InvoiceDetailPage = lazy(() => import('@/pages/InvoiceDetail'))
 const SalesOrdersPage = lazy(() => import('@/pages/SalesOrders'))
+const OrderBoardPage = lazy(() => import('@/pages/OrderBoard'))
+const BookingsPage = lazy(() => import('@/pages/Bookings'))
 const CustomersPage = lazy(() => import('@/pages/Customers'))
 const ReturnsPage = lazy(() => import('@/pages/Returns'))
 const PurchaseOrdersPage = lazy(() => import('@/pages/PurchaseOrders'))
@@ -98,8 +100,9 @@ function App() {
             <Route path="/sales/invoices" element={guarded('sales', <SalesInvoicesPage />)} />
             <Route path="/sales/invoices/:id" element={guarded('sales', <InvoiceDetailPage />)} />
             <Route path="/sales/orders" element={guarded('sales', <SalesOrdersPage />)} />
-            <Route path="/sales/customers" element={guarded('sales', <CustomersPage />)} />
+            <Route path="/sales/pipeline" element={guarded('sales', <OrderBoardPage />)} />            <Route path="/sales/customers" element={guarded('sales', <CustomersPage />)} />
             <Route path="/sales/returns" element={guarded('sales', <ReturnsPage />)} />
+            <Route path="/sales/bookings" element={guarded('sales', <BookingsPage />)} />
 
             <Route path="/purchase/orders" element={guarded('purchase', <PurchaseOrdersPage />)} />
             <Route path="/purchase/invoices" element={guarded('purchase', <PurchaseInvoicesPage />)} />
