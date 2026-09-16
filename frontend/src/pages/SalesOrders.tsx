@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Printer,
   RefreshCw,
   ScanBarcode,
   Search,
@@ -954,7 +955,7 @@ export default function SalesOrdersPage() {
       </Dialog>
 
       <Dialog open={viewOrder !== null} onOpenChange={(open) => { if (!open) setViewOrder(null) }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg print-dialog">
           <DialogHeader>
             <DialogTitle>Order {viewOrder?.shopifyId ?? ''}</DialogTitle>
             <DialogDescription>
@@ -1055,8 +1056,11 @@ export default function SalesOrdersPage() {
               ) : null}
             </div>
           ) : null}
-          <DialogFooter className="mt-2">
+          <DialogFooter className="no-print mt-2">
             <Button variant="outline" onClick={() => setViewOrder(null)}>Close</Button>
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="h-4 w-4" /> Print / PDF
+            </Button>
             <Button
               disabled={Boolean(viewOrder?.invoice) || invoiceSavingId === viewOrder?.id}
               onClick={() => viewOrder && createInvoiceFor(viewOrder)}

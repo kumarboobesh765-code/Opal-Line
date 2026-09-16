@@ -102,3 +102,28 @@
     text-wrap: balance;
   }
 }
+
+/* Print support: print only the open dialog (used by detail dialogs) */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .print-dialog,
+  .print-dialog * {
+    visibility: visible !important;
+  }
+  .print-dialog {
+    position: absolute !important;
+    inset: 0 !important;
+    max-height: none !important;
+    max-width: none !important;
+    width: 100% !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    padding: 0 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

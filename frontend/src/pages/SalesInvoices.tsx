@@ -266,7 +266,7 @@ export default function SalesInvoicesPage() {
       </Card>
 
       <Dialog open={viewInvoice !== null} onOpenChange={(open) => { if (!open) setViewInvoice(null) }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg print-dialog">
           <DialogHeader>
             <DialogTitle>{viewInvoice?.number}</DialogTitle>
             <DialogDescription>{viewInvoice ? `Linked order ${viewInvoice.shopifyOrder || '—'} · ${formatDate(viewInvoice.date ?? '')}` : ''}</DialogDescription>
@@ -310,8 +310,11 @@ export default function SalesInvoicesPage() {
               ) : null}
             </div>
           ) : null}
-          <DialogFooter>
+          <DialogFooter className="no-print">
             <Button variant="outline" onClick={() => setViewInvoice(null)}>Close</Button>
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="h-4 w-4" /> Print / PDF
+            </Button>
             <Button asChild>
               <Link to={`/sales/invoices/${viewInvoice?.id ?? ''}`}>
                 <Eye className="h-4 w-4" /> Open Full Page

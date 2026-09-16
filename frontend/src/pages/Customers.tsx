@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Customer, SalesOrder } from '@/types'
+import type { Customer, Invoice, SalesOrder } from '@/types'
 import { formatCurrency, formatDate, formatNumber } from '@/lib/format'
 import { initials } from '@/lib/utils'
 
@@ -46,11 +46,13 @@ export default function CustomersPage() {
   const [addCity, setAddCity] = useState('')
   const [viewCustomer, setViewCustomer] = useState<Customer | null>(null)
   const [customerOrders, setCustomerOrders] = useState<SalesOrder[]>([])
+  const [customerInvoices, setCustomerInvoices] = useState<Invoice[]>([])
 
-  // Load the customer's recent orders whenever the detail dialog opens
+  // Load the customer's recent orders + invoice statement whenever the detail dialog opens
   useEffect(() => {
     if (!viewCustomer) {
       setCustomerOrders([])
+      setCustomerInvoices([])
       return
     }
     let cancelled = false
@@ -62,6 +64,17 @@ export default function CustomersPage() {
             .filter((o) => o.customer === viewCustomer.name)
             .sort((a, b) => String(b.date).localeCompare(String(a.date)))
             .slice(0, 5),
+        )
+      })
+      .catch(() => undefined)
+    dbApi
+      .getInvoices()
+      .then((invoices) => {
+        if (cancelled) return
+        setCustomerInvoices(
+          invoices
+            .filter((inv) => inv.customer === viewCustomer.name)
+            .sort((a, b) => String(b.date).localeCompare(String(a.date))),
         )
       })
       .catch(() => undefined)
@@ -323,6 +336,60 @@ export default function CustomersPage() {
                   ))}
                 </div>
               )}
+            </div>
+            <div className="mt-3 border-t border-border/60 pt-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Statement</p>
+              {(() => {
+                const totalInvoiced = customerInvoices.reduce((a, inv) => a + (inv.grandTotal ?? 0), 0)
+                const totalPaid = customerInvoices
+                  .filter((inv) => inv.paymentStatus === 'paid')
+                  .reduce((a, inv) => a + (inv.grandTotal ?? 0), 0)
+                const outstanding = customerInvoices
+                  .filter((inv) => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'refunded')
+                  .reduce((a, inv) => a + (inv.grandTotal ?? 0), 0)
+                return (
+                  <div>
+                    <div className="mb-2 grid grid-cols-3 gap-2">
+                      <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-center">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Invoiced</p>
+                        <p className="text-sm font-semibold tabular-nums text-foreground">{formatCurrency(totalInvoiced)}</p>
+                      </div>
+                      <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-center">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Paid</p>
+                        <p className="text-sm font-semibold tabular-nums text-emerald-600">{formatCurrency(totalPaid)}</p>
+                      </div>
+                      <div className={`rounded-md border px-2 py-1.5 text-center ${outstanding > 0 ? 'border-amber-500/40 bg-amber-500/10' : 'border-border/60 bg-muted/30'}`}>
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
+                        <p className={`text-sm font-semibold tabular-nums ${outstanding > 0 ? 'text-amber-600' : 'text-foreground'}`}>{formatCurrency(outstanding)}</p>
+                      </div>
+                    </div>
+                    {customerInvoices.length === 0 ? (
+                      <p className="py-1 text-sm text-muted-foreground">No invoices on record.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        {customerInvoices.slice(0, 6).map((inv) => (
+                          <button
+                            key={inv.id}
+                            type="button"
+                            onClick={() => { setViewCustomer(null); navigate(`/sales/invoices?highlight=${encodeURIComponent(inv.number)}`) }}
+                            className="flex w-full items-center justify-between gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-left text-sm hover:bg-muted/60"
+                          >
+                            <span className="shrink-0 font-medium text-foreground">{inv.number}</span>
+                            <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                              <span className="truncate">{formatDate(inv.date)}</span>
+                              <Badge variant={inv.paymentStatus === 'paid' ? 'success' : inv.paymentStatus === 'pending' ? 'warning' : 'muted'} dot>{inv.paymentStatus}</Badge>
+                              <span className="shrink-0 tabular-nums font-medium text-foreground">{formatCurrency(inv.grandTotal)}</span>
+                            </span>
+                          </button>
+                        ))}
+                        {customerInvoices.length > 6 ? (
+                          <p className="pt-0.5 text-right text-[11px] text-muted-foreground">+{customerInvoices.length - 6} more invoices</p>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
             </>
           ) : null}
