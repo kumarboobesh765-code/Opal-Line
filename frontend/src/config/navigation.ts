@@ -99,6 +99,7 @@ export const navSections: NavSection[] = [
       { title: 'GST Reports', path: '/reports/gst', icon: Receipt },
       { title: 'Sales Analysis', path: '/reports/sales', icon: TrendingUp },
       { title: 'Inventory Reports', path: '/reports/inventory', icon: PackageSearch },
+      { title: 'Outstanding Dues', path: '/reports/dues', icon: HandCoins },
     ],
   },
   {

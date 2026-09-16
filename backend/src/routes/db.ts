@@ -976,6 +976,38 @@ dbRouter.get('/search', async (req, res) => {
   }
 })
 
+// ─── Dues: outstanding summary + on-demand statement email ────────────────
+
+dbRouter.get('/dues', requirePermission('sales', 'view'), async (_req, res) => {
+  try {
+    const { collectDues } = await import('../statements')
+    const dues = await collectDues()
+    const total = dues.reduce((a, d) => a + d.total, 0)
+    res.json({ dues, total, customerCount: dues.length })
+  } catch (err) {
+    logger.error({ err }, 'Dues collection failed')
+    res.status(500).json({ error: 'Failed to collect dues' })
+  }
+})
+
+dbRouter.post('/dues/email', requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const [settingsRow] = await db!.select().from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+    const recipient = String(req.body?.to || '').trim() || process.env.NOTIFICATION_EMAIL?.trim() || settingsRow?.email?.trim()
+    if (!recipient) return res.status(400).json({ error: 'No recipient (no "to", NOTIFICATION_EMAIL, or settings.email)' })
+    const { collectDues, generateDuesStatementPDF } = await import('../statements')
+    const statement = await generateDuesStatementPDF()
+    if (!statement) return res.status(200).json({ sent: false, reason: 'No outstanding dues — nothing to send' })
+    const { notifyDuesStatement } = await import('../notifications')
+    const sent = await notifyDuesStatement(recipient, statement)
+    if (sent) logger.info({ recipient }, 'On-demand dues statement emailed')
+    res.json({ sent, recipient, total: statement.totalDue, customerCount: statement.customerCount })
+  } catch (err) {
+    logger.error({ err }, 'Dues statement email failed')
+    res.status(500).json({ error: 'Failed to send dues statement' })
+  }
+})
+
 // ─── Invoice PDF Download ──────────────────────────────────────────────────
 
 dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {

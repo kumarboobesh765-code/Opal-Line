@@ -161,6 +161,30 @@ export async function notifyLowStock(
   })
 }
 
+/** Standalone dues statement email (used by the Dues page "Email Statement" action). */
+export async function notifyDuesStatement(
+  recipientEmail: string,
+  statement: { buffer: Buffer; totalDue: number; customerCount: number },
+): Promise<boolean> {
+  const money = (n: number) => '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+  return sendEmail({
+    to: recipientEmail,
+    subject: `💳 Outstanding Dues Statement — ${money(statement.totalDue)} across ${statement.customerCount} customer${statement.customerCount === 1 ? '' : 's'}`,
+    attachments: [{ filename: `dues-statement-${new Date().toISOString().slice(0, 10)}.pdf`, content: statement.buffer }],
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color:#dc2626;">💳 Outstanding Dues Statement</h2>
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          <tr><td style="padding: 12px; color: #666;">Total Outstanding</td><td style="padding: 12px; font-weight: bold; font-size: 18px; color: #dc2626;">${money(statement.totalDue)}</td></tr>
+          <tr><td style="padding: 12px; color: #666;">Customers with dues</td><td style="padding: 12px; font-weight: bold;">${statement.customerCount}</td></tr>
+        </table>
+        <p style="color:#666;">The full per-customer breakdown is attached as a PDF.</p>
+        <p style="color: #999; font-size: 12px;">Opal Line ERP — Dues Statement</p>
+      </div>
+    `,
+  })
+}
+
 export async function notifyDailySummary(
   recipientEmail: string,
   opts: {

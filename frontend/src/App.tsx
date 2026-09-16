@@ -44,6 +44,7 @@ const BusinessReportsPage = lazy(() => import('@/pages/BusinessReports'))
 const GstReportsPage = lazy(() => import('@/pages/GstReports'))
 const SalesAnalysisPage = lazy(() => import('@/pages/SalesAnalysis'))
 const InventoryReportsPage = lazy(() => import('@/pages/InventoryReports'))
+const DuesPage = lazy(() => import('@/pages/Dues'))
 const UsersPage = lazy(() => import('@/pages/Users'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
 const BackupRestorePage = lazy(() => import('@/pages/BackupRestore'))
@@ -120,6 +121,7 @@ function App() {
             <Route path="/reports/gst" element={guarded('reports', <GstReportsPage />)} />
             <Route path="/reports/sales" element={guarded('reports', <SalesAnalysisPage />)} />
             <Route path="/reports/inventory" element={guarded('reports', <InventoryReportsPage />)} />
+            <Route path="/reports/dues" element={guarded('sales', <DuesPage />)} />
 
             <Route path="/shopify/dashboard" element={guarded('shopify', <ShopifyDashboardPage />)} />
             <Route path="/shopify/orders" element={guarded('shopify', <ShopifyOrdersPage />)} />

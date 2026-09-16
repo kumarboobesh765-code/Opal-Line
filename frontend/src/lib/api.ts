@@ -466,6 +466,13 @@ export const dbApi = {
     request<{ created: boolean; invoiceNumber: string | null }>(`/db/sales-orders/${encodeURIComponent(orderId)}/create-invoice`, {
       method: 'POST',
     }),
+  getDues: () =>
+    request<{ dues: Array<{ customer: string; invoiceCount: number; total: number; oldestDate: string | null; invoiceNumbers: string[] }>; total: number; customerCount: number }>('/db/dues'),
+  emailDuesStatement: (to?: string) =>
+    request<{ sent: boolean; reason?: string; recipient?: string; total?: number; customerCount?: number }>('/db/dues/email', {
+      method: 'POST',
+      body: JSON.stringify({ to }),
+    }),
   getPurchaseOrders: () => list<PurchaseOrder>('/db/purchase-orders', PAGED),
   getPurchaseInvoices: () => list<PurchaseInvoice>('/db/purchase-invoices', PAGED),
   getSalesReturns: () => list<SalesReturn>('/db/sales-returns', PAGED),
