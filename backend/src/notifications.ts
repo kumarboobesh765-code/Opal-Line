@@ -10,10 +10,16 @@ function getClient(): Resend | null {
   return resendClient
 }
 
+export interface EmailAttachment {
+  filename: string
+  content: Buffer
+}
+
 export interface NotificationOptions {
   to: string
   subject: string
   html: string
+  attachments?: EmailAttachment[]
 }
 
 /**
@@ -55,6 +61,7 @@ export async function sendEmail(opts: NotificationOptions): Promise<boolean> {
         to: [opts.to],
         subject: opts.subject,
         html: opts.html,
+        attachments: opts.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString('base64') })),
       })
       if (error) {
         logger.error({ error: error.message }, 'Email send failed')
@@ -79,6 +86,7 @@ export async function sendEmail(opts: NotificationOptions): Promise<boolean> {
       to: opts.to,
       subject: opts.subject,
       html: opts.html,
+      attachments: opts.attachments?.map((a) => ({ filename: a.filename, content: a.content })),
     })
     return true
   } catch (err) {
@@ -160,11 +168,20 @@ export async function notifyDailySummary(
     todayOrders: number
     pendingPayments: number
     lowStockCount: number
+    duesTotal?: number
+    duesCustomers?: number
+    attachment?: { filename: string; content: Buffer }
   }
 ): Promise<boolean> {
+  const money = (n: number) => '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+  const duesRow =
+    opts.duesTotal != null && opts.duesTotal > 0
+      ? `\n        <tr><td style="padding: 12px; color: #666;">Outstanding Dues</td><td style="padding: 12px; font-weight: bold; color: #dc2626;">${money(opts.duesTotal)} <span style="font-weight: normal; color: #999;">(${opts.duesCustomers ?? 0} customers — see attached statement)</span></td></tr>`
+      : ''
   return sendEmail({
     to: recipientEmail,
     subject: `📊 Daily Summary — ${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`,
+    attachments: opts.attachment ? [opts.attachment] : undefined,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #2563eb;">📊 Daily Business Summary</h2>
@@ -172,7 +189,7 @@ export async function notifyDailySummary(
           <tr><td style="padding: 12px; color: #666;">Today's Sales</td><td style="padding: 12px; font-weight: bold; font-size: 18px;">₹${opts.todaySales.toLocaleString('en-IN')}</td></tr>
           <tr><td style="padding: 12px; color: #666;">Orders Today</td><td style="padding: 12px; font-weight: bold;">${opts.todayOrders}</td></tr>
           <tr><td style="padding: 12px; color: #666;">Pending Payments</td><td style="padding: 12px; color: ${opts.pendingPayments > 0 ? '#dc2626' : '#16a34a'};">${opts.pendingPayments}</td></tr>
-          <tr><td style="padding: 12px; color: #666;">Low Stock Items</td><td style="padding: 12px; color: ${opts.lowStockCount > 0 ? '#dc2626' : '#16a34a'};">${opts.lowStockCount}</td></tr>
+          <tr><td style="padding: 12px; color: #666;">Low Stock Items</td><td style="padding: 12px; color: ${opts.lowStockCount > 0 ? '#dc2626' : '#16a34a'};">${opts.lowStockCount}</td></tr>${duesRow}
         </table>
         <p style="color: #999; font-size: 12px;">Opal Line ERP — Daily Summary</p>
       </div>

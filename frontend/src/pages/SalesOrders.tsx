@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  MessageCircle,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -1061,6 +1062,25 @@ export default function SalesOrdersPage() {
             <Button variant="outline" onClick={() => window.print()}>
               <Printer className="h-4 w-4" /> Print / PDF
             </Button>
+            {(() => {
+              const phone = viewOrder?.shippingAddress?.phone || viewOrder?.billingAddress?.phone || customers.find((c) => c.name === viewOrder?.customer)?.phone || ''
+              if (!phone) return null
+              return (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const digits = phone.replace(/\D/g, '')
+                    const withCc = digits.length === 10 ? '91' + digits : digits
+                    const text = encodeURIComponent(
+                      `Order ${viewOrder?.shopifyId || viewOrder?.internalId}\nCustomer: ${viewOrder?.customer}\nAmount: ₹${Number(viewOrder?.value ?? 0).toLocaleString('en-IN')}\n\n— Opal Line`,
+                    )
+                    window.open(`https://wa.me/${withCc}?text=${text}`, '_blank')
+                  }}
+                >
+                  <MessageCircle className="h-4 w-4" /> WhatsApp
+                </Button>
+              )
+            })()}
             <Button
               disabled={Boolean(viewOrder?.invoice) || invoiceSavingId === viewOrder?.id}
               onClick={() => viewOrder && createInvoiceFor(viewOrder)}

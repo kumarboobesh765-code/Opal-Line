@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BarChart3, Boxes, CalendarDays, Download, IndianRupee, LayoutDashboard, Package, TrendingUp, Users } from 'lucide-react'
+import { BarChart3, Boxes, CalendarDays, Clock, Download, IndianRupee, LayoutDashboard, Package, TrendingUp, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -7,6 +7,12 @@ import { Select } from '@/components/ui/select'
 import { dbApi } from '@/lib/api'
 import type { SilverRate } from '@/types'
 import { formatCurrency, todayIST } from '@/lib/format'
+
+interface AgingBucket {
+  label: string
+  count: number
+  amount: number
+}
 
 interface BusinessStats {
   revenueMonth: number
@@ -17,6 +23,8 @@ interface BusinessStats {
   inventoryValue: number
   lowStockCount: number
   returnRatePct: number
+  aging: AgingBucket[]
+  agingTotal: number
 }
 
 export default function BusinessReportsPage() {
@@ -40,6 +48,21 @@ export default function BusinessReportsPage() {
       const monthInvoices = invoices.filter((i) => String(i.date ?? '').startsWith(monthKey))
       const grossProfitMonth = monthInvoices.reduce((a, i) => a + (i.grandTotal - i.silverValue - i.makingCharge), 0)
       const inventoryValue = s.totalStockWeight * (r?.rate ?? 0)
+      // Outstanding aging: unpaid, non-cancelled/refunded invoices bucketed by age
+      const open = invoices.filter((i) => i.paymentStatus !== 'paid' && i.status !== 'cancelled' && i.status !== 'refunded')
+      const nowMs = Date.now()
+      const buckets: AgingBucket[] = [
+        { label: '0–30 days', count: 0, amount: 0 },
+        { label: '31–60 days', count: 0, amount: 0 },
+        { label: '61–90 days', count: 0, amount: 0 },
+        { label: '90+ days', count: 0, amount: 0 },
+      ]
+      for (const inv of open) {
+        const ageDays = Math.floor((nowMs - new Date(inv.date).getTime()) / 86_400_000)
+        const idx = ageDays <= 30 ? 0 : ageDays <= 60 ? 1 : ageDays <= 90 ? 2 : 3
+        buckets[idx].count += 1
+        buckets[idx].amount += inv.grandTotal ?? 0
+      }
       setSummary(s)
       setRate(r)
       setStats({
@@ -51,6 +74,8 @@ export default function BusinessReportsPage() {
         inventoryValue,
         lowStockCount: lowStock.length,
         returnRatePct: invoices.length > 0 ? (returnsList.length / invoices.length) * 100 : 0,
+        aging: buckets,
+        agingTotal: buckets.reduce((a, b) => a + b.amount, 0),
       })
     }).catch(() => {})
   }, [period])
@@ -157,6 +182,65 @@ export default function BusinessReportsPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardContent className="p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <h3 className="font-semibold text-foreground">Outstanding Aging</h3>
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {stats.agingTotal > 0 ? `${formatCurrency(stats.agingTotal)} outstanding` : 'Nothing outstanding'}
+                </span>
+              </div>
+              {stats.agingTotal === 0 ? (
+                <p className="text-sm text-muted-foreground">All invoices are settled — no outstanding receivables.</p>
+              ) : (
+                <div>
+                  {/* stacked bar */}
+                  <div className="mb-3 flex h-3 w-full overflow-hidden rounded-full bg-muted">
+                    {stats.aging.map((b) =>
+                      b.amount > 0 ? (
+                        <div
+                          key={b.label}
+                          className={b.label === '0–30 days' ? 'bg-emerald-500' : b.label === '31–60 days' ? 'bg-amber-500' : b.label === '61–90 days' ? 'bg-orange-500' : 'bg-red-500'}
+                          style={{ width: `${(b.amount / stats.agingTotal) * 100}%` }}
+                        />
+                      ) : null,
+                    )}
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="pb-2 font-medium">Age</th>
+                        <th className="pb-2 text-right font-medium">Invoices</th>
+                        <th className="pb-2 text-right font-medium">Amount</th>
+                        <th className="pb-2 text-right font-medium">Share</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.aging.map((b) => (
+                        <tr key={b.label} className="border-t border-border/60">
+                          <td className="py-2">
+                            <span className="inline-flex items-center gap-2">
+                              <span
+                                className={`h-2 w-2 rounded-full ${b.label === '0–30 days' ? 'bg-emerald-500' : b.label === '31–60 days' ? 'bg-amber-500' : b.label === '61–90 days' ? 'bg-orange-500' : 'bg-red-500'}`}
+                              />
+                              {b.label}
+                            </span>
+                          </td>
+                          <td className="py-2 text-right tabular-nums">{b.count}</td>
+                          <td className="py-2 text-right tabular-nums font-medium text-foreground">{formatCurrency(b.amount)}</td>
+                          <td className="py-2 text-right tabular-nums text-muted-foreground">
+                            {stats.agingTotal > 0 ? `${((b.amount / stats.agingTotal) * 100).toFixed(0)}%` : '0%'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardContent className="flex items-center gap-3 p-5">

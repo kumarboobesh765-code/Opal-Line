@@ -141,11 +141,29 @@ async function runDailySummary(): Promise<void> {
       .select({ count: sql<number>`count(*)::int` })
       .from(schema.products)
       .where(and(isNotNull(schema.products.stock), isNotNull(schema.products.reorderLevel), lte(schema.products.stock, schema.products.reorderLevel)))
+    // Dues statement: collect outstanding invoices and attach a PDF when any exist
+    let attachment: { filename: string; content: Buffer } | undefined
+    let duesTotal: number | undefined
+    let duesCustomers: number | undefined
+    try {
+      const { generateDuesStatementPDF } = await import('./statements')
+      const statement = await generateDuesStatementPDF()
+      if (statement) {
+        attachment = { filename: `dues-statement-${new Date().toISOString().slice(0, 10)}.pdf`, content: statement.buffer }
+        duesTotal = statement.totalDue
+        duesCustomers = statement.customerCount
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Dues statement attachment skipped')
+    }
     const sent = await notifyDailySummary(recipient, {
       todaySales: Number(salesRow?.total ?? 0),
       todayOrders: Number(ordersRow?.count ?? 0),
       pendingPayments: Number(pendingRow?.count ?? 0),
       lowStockCount: Number(lowStockRow?.count ?? 0),
+      duesTotal,
+      duesCustomers,
+      attachment,
     })
     if (sent) logger.info({ recipient }, 'Daily summary email sent')
   } catch (err) {

@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Download, Eye, FileText, MoreHorizontal, Plus, Printer, Search, Undo2, X } from 'lucide-react'
+import { Download, Eye, FileText, MessageCircle, MoreHorizontal, Plus, Printer, Search, Undo2, X } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -56,6 +56,7 @@ export default function SalesInvoicesPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null)
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([])
+  const [customers, setCustomers] = useState<Array<{ name: string; phone?: string | null }>>([])
 
   const setInvoiceStatus = async (inv: Invoice, status: Invoice['status']) => {
     if (!window.confirm(`Mark invoice ${inv.number} as ${status}?`)) return
@@ -74,6 +75,7 @@ export default function SalesInvoicesPage() {
       setInvoices(d)
       setLoading(false)
     }).catch(() => setLoading(false))
+    dbApi.getCustomers().then((d) => setCustomers(d)).catch(() => undefined)
   }, [])
 
   const filtered = useMemo(() => {
@@ -315,6 +317,27 @@ export default function SalesInvoicesPage() {
             <Button variant="outline" onClick={() => window.print()}>
               <Printer className="h-4 w-4" /> Print / PDF
             </Button>
+            {(() => {
+              const inv = viewInvoice
+              if (!inv) return null
+              const phone = inv.customerPhone || customers.find((c) => c.name === inv.customer)?.phone || ''
+              if (!phone) return null
+              return (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const digits = phone.replace(/\D/g, '')
+                    const withCc = digits.length === 10 ? '91' + digits : digits
+                    const text = encodeURIComponent(
+                      `Invoice ${inv.number}\nCustomer: ${inv.customer}\nAmount: ₹${inv.grandTotal.toLocaleString('en-IN')}\nStatus: ${inv.paymentStatus}\n\n— Opal Line`,
+                    )
+                    window.open(`https://wa.me/${withCc}?text=${text}`, '_blank')
+                  }}
+                >
+                  <MessageCircle className="h-4 w-4" /> WhatsApp
+                </Button>
+              )
+            })()}
             <Button asChild>
               <Link to={`/sales/invoices/${viewInvoice?.id ?? ''}`}>
                 <Eye className="h-4 w-4" /> Open Full Page
