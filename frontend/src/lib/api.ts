@@ -494,6 +494,11 @@ export const dbApi = {
       method: 'POST',
       body: JSON.stringify({}),
     }),
+  bookingPaymentLink: (bookingId: string) =>
+    request<{ url: string; id: string; amount: number; configured: boolean }>(`/db/bookings/${bookingId}/payment-link`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   getCustomers: () => list<Customer>('/db/customers', PAGED),
   getSuppliers: () => list<Supplier>('/db/suppliers', PAGED),
   getInvoices: async (): Promise<Invoice[]> => {
@@ -745,6 +750,14 @@ export const backupApi = {
   downloadInvoicePDF: (invoiceId: string) => {
     window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank')
   },
+  downloadCreditNotePDF: (returnId: string) => {
+    window.open(`${API_BASE}/db/credit-notes/${encodeURIComponent(returnId)}/pdf`, '_blank')
+  },
+  bookingPaymentLink: (bookingId: string) =>
+    request<{ url: string; id: string; amount: number; configured: boolean }>(`/db/bookings/${bookingId}/payment-link`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   downloadGstExport: (month: number, year: number, format: 'csv' | 'json') => {
     window.open(`${API_BASE}/dashboard/reports/gst/export?month=${month}&year=${year}&format=${format}`, '_blank')
   },
@@ -756,12 +769,13 @@ export const backupApi = {
       method: 'POST',
       body: JSON.stringify({ to }),
     }),
-  downloadAllLabels: (opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) => {
+  downloadAllLabels: (opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean; ids?: string[] }) => {
     const params = new URLSearchParams()
     if (opts?.preset) params.set('preset', opts.preset)
     if (opts?.showPrice === false) params.set('price', 'false')
     if (opts?.showWeight === false) params.set('weight', 'false')
     if (opts?.showQR === false) params.set('qr', 'false')
+    if (opts?.ids && opts.ids.length > 0) params.set('ids', opts.ids.join(','))
     window.open(`${API_BASE}/db/products/labels?${params.toString()}`, '_blank')
   },
   downloadProductLabels: (productIds: string[], opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) =>

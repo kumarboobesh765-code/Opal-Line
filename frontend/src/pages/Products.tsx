@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Tags,
   Upload,
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -41,7 +42,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ProductDialog } from '@/components/product-dialog'
 import { BulkImportDialog } from '@/components/bulk-import-dialog'
-import { dbApi, shopifyApi } from '@/lib/api'
+import { dbApi, shopifyApi, backupApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
 import type { Product } from '@/types'
 import { formatCurrency, formatWeight } from '@/lib/format'
@@ -100,6 +101,7 @@ export default function ProductsPage() {
   const [stockStatus, setStockStatus] = useState('')
   const [addOpen, setAddOpen] = useState(false)
   const [bulkMode, setBulkMode] = useState<'csv' | 'images' | null>(null)
+  const [selectedProducts, setSelectedProducts] = useState<Product[]>([])
   const [viewProduct, setViewProduct] = useState<Product | null>(null)
   const [reorderFor, setReorderFor] = useState<Product | null>(null)
   const [reorderQty, setReorderQty] = useState('')
@@ -338,6 +340,11 @@ export default function ProductsPage() {
             <Button variant="outline" size="sm" onClick={() => setBulkMode('images')}>
               <Images className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Bulk Images</span>
             </Button>
+            {selectedProducts.length > 0 && (
+              <Button variant="outline" size="sm" onClick={() => backupApi.downloadAllLabels({ ids: selectedProducts.map((p) => p.id) })}>
+                <Tags className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Print Labels ({selectedProducts.length})</span>
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => exportTable('products.csv', columns, filtered)}>
               <Download className="h-3.5 w-3.5" /> Export
             </Button>
@@ -527,6 +534,7 @@ export default function ProductsPage() {
 
           <DataTable
             onRowClick={(p) => setViewProduct(p)}
+            onSelectionChange={setSelectedProducts}
             columns={columns}
             data={filtered}
             loading={loading}

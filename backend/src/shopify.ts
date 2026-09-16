@@ -826,6 +826,7 @@ interface LocalProductForPush {
   name: string
   sku: string
   barcode: string | null
+  huid: string | null
   category: string | null
   collection: string | null
   purity: number | null
@@ -866,6 +867,7 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
     local.chargeOnTax !== false ? `opal-chargeontax:true` : `opal-chargeontax:false`,
     local.category,
     local.purity != null ? `${local.purity}%` : null,
+    local.huid ? `huid:${local.huid}` : null,
     ...(local.tags ? local.tags.split(',').map((t) => t.trim()).filter(Boolean) : []),
   ]
     .filter(Boolean)
@@ -1970,6 +1972,12 @@ function mapImportedFulfillment(status: string | null | undefined): string {
 
 function mapImportedStatus(raw: any): string {
   if (raw.cancelled_at || String(raw.financial_status ?? '') === 'voided') return 'cancelled'
+  // Map Shopify fulfillment into pipeline stages so the kanban reflects reality
+  if (raw.fulfillment_status === 'fulfilled') return 'fulfilled'
+  if (raw.fulfillment_status === 'partial') return 'processing'
+  if (Array.isArray(raw.fulfillments) && raw.fulfillments.length > 0) return 'processing'
+  const closedAt = raw.closed_at ? Date.parse(raw.closed_at) : NaN
+  if (Number.isFinite(closedAt)) return 'fulfilled'
   return 'imported'
 }
 

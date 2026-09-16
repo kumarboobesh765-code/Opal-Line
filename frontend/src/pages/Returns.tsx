@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { CheckCircle2, MoreHorizontal, RefreshCw, Search, Undo2, XCircle } from 'lucide-react'
+import { CheckCircle2, FileDown, MoreHorizontal, RefreshCw, Search, Undo2, XCircle } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -15,7 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { dbApi } from '@/lib/api'
+import { dbApi, backupApi } from '@/lib/api'
 import { formatCurrency, formatDate } from '@/lib/format'
 
 const statusMeta: Record<string, { label: string; variant: 'success' | 'warning' | 'muted' }> = {
@@ -118,7 +118,8 @@ export default function ReturnsPage() {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem>View Return</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => backupApi.downloadCreditNotePDF(row.original.id)}><FileDown className="h-3.5 w-3.5" /> Download Credit Note PDF</DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setReturnStatus(row.original.id, 'approved')}><CheckCircle2 className="h-3.5 w-3.5" /> Approve</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setReturnStatus(row.original.id, 'rejected')}><XCircle className="h-3.5 w-3.5" /> Reject</DropdownMenuItem>
               <DropdownMenuSeparator />

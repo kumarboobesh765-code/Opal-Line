@@ -21,6 +21,8 @@ interface DataTableProps<TData extends RowData> {
   className?: string
   initialVisibility?: ColumnVisibilityState
   onRowClick?: (row: TData) => void
+  /** Called whenever the set of selected rows changes (checkbox column shown when provided). */
+  onSelectionChange?: (selectedRows: TData[]) => void
 }
 
 export function DataTable<TData extends RowData>({
@@ -31,6 +33,7 @@ export function DataTable<TData extends RowData>({
   className,
   initialVisibility,
   onRowClick,
+  onSelectionChange,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
   const [rowSelection, setRowSelection] = React.useState({})
@@ -44,7 +47,15 @@ export function DataTable<TData extends RowData>({
     columns,
     state: { sorting, rowSelection, columnVisibility },
     enableRowSelection: true,
-    onRowSelectionChange: setRowSelection,
+    onRowSelectionChange: (updater) => {
+      setRowSelection((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater
+        if (onSelectionChange) {
+          onSelectionChange(Object.keys(next).filter((k) => next[k]).map((k) => data[Number(k)]).filter(Boolean))
+        }
+        return next
+      })
+    },
     onSortingChange: setSorting,
     onColumnVisibilityChange: setColumnVisibility,
   })
@@ -55,6 +66,18 @@ export function DataTable<TData extends RowData>({
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id} className="bg-muted/30 hover:bg-muted/30">
+              {onSelectionChange && (
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    className="cursor-pointer"
+                    checked={table.getIsAllRowsSelected()}
+                    ref={(el) => { if (el) el.indeterminate = table.getIsSomeRowsSelected() }}
+                    onChange={table.getToggleAllRowsSelectedHandler()}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </TableHead>
+              )}
               {headerGroup.headers.map((header) => {
                 const canSort = header.column.getCanSort()
                 const sorted = header.column.getIsSorted()
@@ -103,12 +126,23 @@ export function DataTable<TData extends RowData>({
               <TableRow
                 key={row.id}
                 data-state={row.getIsSelected() && 'selected'}
-                className={onRowClick ? 'cursor-pointer' : undefined}
+                className={onRowClick || onSelectionChange ? 'cursor-pointer' : undefined}
                 onClick={onRowClick ? (e) => {
                   if ((e.target as HTMLElement).closest('button, a, [role=menuitem], input, select, textarea')) return
                   onRowClick(row.original)
-                } : undefined}
+                } : onSelectionChange ? () => row.toggleSelected() : undefined}
               >
+                {onSelectionChange && (
+                  <TableCell>
+                    <input
+                      type="checkbox"
+                      className="cursor-pointer"
+                      checked={row.getIsSelected()}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={row.getToggleSelectedHandler()}
+                    />
+                  </TableCell>
+                )}
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}

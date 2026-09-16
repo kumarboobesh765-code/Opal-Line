@@ -167,12 +167,14 @@ dbRouter.get('/products/labels/presets', requirePermission('inventory', 'view'),
 
 dbRouter.get('/products/labels', requirePermission('inventory', 'view'), async (req, res) => {
   try {
-    const { fetchAllProductLabels, generateLabelsPDF, LABEL_PRESETS } = await import('../barcodeLabels')
+    const { fetchAllProductLabels, fetchProductLabels, generateLabelsPDF, LABEL_PRESETS } = await import('../barcodeLabels')
     const preset = String(req.query.preset || 'zlabel-50x30')
     const showPrice = req.query.price !== 'false'
     const showWeight = req.query.weight !== 'false'
     const showQR = req.query.qr !== 'false'
-    const products = await fetchAllProductLabels()
+    // Optional `ids` query (comma-separated product IDs) → labels for selected products only
+    const idsParam = String(req.query.ids ?? '').split(',').map((x) => x.trim()).filter(Boolean)
+    const products = idsParam.length > 0 ? await fetchProductLabels(idsParam) : await fetchAllProductLabels()
     if (products.length === 0) return res.status(404).json({ error: 'No products found' })
     const opts = LABEL_PRESETS[preset] ?? {}
     const pdf = await generateLabelsPDF(products, { ...opts, showPrice, showWeight, showQR, businessName: 'Opal Line' })
@@ -752,6 +754,33 @@ dbRouter.post('/bookings', requirePermission('sales', 'create'), async (req, res
   } catch (err) {
     logger.error({ err }, 'booking create failed')
     res.status(500).json({ error: 'Failed to create booking' })
+  }
+})
+
+// Booking advance payment link — customers pay their advance online via Razorpay
+dbRouter.post('/bookings/:id/payment-link', requirePermission('sales', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [booking] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    if (!booking) return res.status(404).json({ error: 'Booking not found' })
+    if (!booking.isBooking) return res.status(400).json({ error: 'Order is not a booking' })
+    const value = Number(booking.value ?? 0)
+    const advancePaid = Number(booking.advancePaid ?? 0)
+    const remaining = Math.round((value - advancePaid) * 100) / 100
+    if (remaining <= 0) return res.status(400).json({ error: 'Booking is already fully paid' })
+    const { createRazorpayPaymentLink, isRazorpayConfigured } = await import('../paymentLinks')
+    if (!isRazorpayConfigured()) return res.status(400).json({ error: 'Razorpay not configured (set RAZORPAY_KEY_ID + RAZORPAY_KEY_SECRET)', configured: false })
+    const link = await createRazorpayPaymentLink({
+      amount: remaining,
+      customer: booking.customer ?? 'Customer',
+      description: `Advance for booking ${booking.internalId ?? booking.id} — Opal Line`,
+      referenceId: `BK-${booking.internalId ?? booking.id}`.replace(/[^a-zA-Z0-9-]/g, ''),
+    })
+    if (!link) return res.status(500).json({ error: 'Failed to create payment link' })
+    res.json({ url: link.url, id: link.id, amount: remaining, configured: true })
+  } catch (err) {
+    logger.error({ err }, 'booking payment link failed')
+    res.status(500).json({ error: 'Payment link generation failed' })
   }
 })
 
@@ -1585,6 +1614,21 @@ dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req
     res.send(pdf)
   } catch (err) {
     res.status(500).json({ error: 'PDF generation failed' })
+  }
+})
+
+// ─── Credit Note PDF Download (for a sales return) ──────────────────────────
+
+dbRouter.get('/credit-notes/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const { generateCreditNotePDF } = await import('../creditNotePdf')
+    const pdf = await generateCreditNotePDF(req.params.id)
+    if (!pdf) return res.status(404).json({ error: 'Credit note not found or PDF generation failed' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="credit-note-${req.params.id}.pdf"`)
+    res.send(pdf)
+  } catch (err) {
+    res.status(500).json({ error: 'Credit note PDF generation failed' })
   }
 })
 

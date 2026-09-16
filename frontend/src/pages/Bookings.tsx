@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, RefreshCw, Receipt, Plus, Trash2 } from 'lucide-react'
+import { Loader2, RefreshCw, Receipt, Plus, Trash2, Link2 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -80,6 +80,15 @@ export default function Bookings() {
     }
   }
 
+  const sendPaymentLink = async (b: SalesOrder) => {
+    try {
+      const r = await dbApi.bookingPaymentLink(b.id)
+      window.open(r.url, '_blank', 'noopener')
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Payment link failed')
+    }
+  }
+
   const convert = async (b: SalesOrder) => {
     if (!window.confirm(`Convert booking ${b.internalId || b.id} to invoice? Advance of ${formatCurrency(Number(b.advancePaid ?? 0))} will be applied.`)) return
     setConverting(b.id)
@@ -136,10 +145,15 @@ export default function Bookings() {
       header: '',
       cell: ({ row }) =>
         !row.original.invoice ? (
-          <Button size="sm" variant="outline" onClick={() => convert(row.original)} disabled={converting === row.original.id}>
-            {converting === row.original.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Receipt className="h-3.5 w-3.5" />}
-            Convert to Invoice
-          </Button>
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => convert(row.original)} disabled={converting === row.original.id}>
+              {converting === row.original.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Receipt className="h-3.5 w-3.5" />}
+              Convert
+            </Button>
+            <Button size="sm" variant="ghost" title="Send a Razorpay payment link for the remaining advance" onClick={() => sendPaymentLink(row.original)}>
+              <Link2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         ) : null,
     },
   ], [converting])
