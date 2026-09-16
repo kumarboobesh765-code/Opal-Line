@@ -588,22 +588,15 @@ async function deductStock(tx: any, sku: string, qty: number): Promise<void> {
 }
 
 /**
- * Auto-raise a tax invoice when an email-synced order is created/updated.
- * Idempotent: skips orders that already have an invoice; refreshes the
- * customer snapshot when new contact details arrive in a later email.
+ * Raise a tax invoice for any order row (email-synced or manual).
+ * Idempotent: returns the existing invoice number if one is already linked.
+ * Returns null when the order has no line items to invoice.
  */
-export async function autoInvoiceOrder(d: OrderEmailData): Promise<{ created: boolean; invoiceNumber: string | null }> {
-  if (!db) return { created: false, invoiceNumber: null }
-  const shopifyId = `#${d.orderNumber}`
-  const [order] = await db
-    .select()
-    .from(schema.salesOrders)
-    .where(eq(schema.salesOrders.shopifyId, shopifyId))
-    .limit(1)
-  if (!order || order.invoice) return { created: false, invoiceNumber: order?.invoice ?? null }
-
+export async function createInvoiceForOrderRow(order: typeof schema.salesOrders.$inferSelect): Promise<string | null> {
+  if (!db) return null
+  if (order.invoice) return order.invoice
   const lineItems = Array.isArray(order.lineItems) ? (order.lineItems as OrderEmailData['items']) : []
-  if (lineItems.length === 0) return { created: false, invoiceNumber: null }
+  if (lineItems.length === 0) return null
 
   // Settings: gst rate + invoice prefix
   const [settingsRow] = await db.select().from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
@@ -647,7 +640,7 @@ export async function autoInvoiceOrder(d: OrderEmailData): Promise<{ created: bo
     await tx.insert(schema.salesInvoices).values({
       id: invoiceId,
       number,
-      shopifyOrder: shopifyId,
+      shopifyOrder: order.shopifyId ?? null,
       customer: order.customer,
       customerEmail: customer?.email ?? '',
       customerPhone: customer?.phone ?? String(addr.phone ?? ''),
@@ -674,7 +667,38 @@ export async function autoInvoiceOrder(d: OrderEmailData): Promise<{ created: bo
     }
     await tx.update(schema.salesOrders).set({ invoice: number }).where(eq(schema.salesOrders.id, order.id))
   })
-  return { created: true, invoiceNumber: number }
+  return number
+}
+
+/**
+ * Auto-raise a tax invoice when an email-synced order is created/updated.
+ * Idempotent: skips orders that already have an invoice.
+ */
+export async function autoInvoiceOrder(d: OrderEmailData): Promise<{ created: boolean; invoiceNumber: string | null }> {
+  if (!db) return { created: false, invoiceNumber: null }
+  const shopifyId = `#${d.orderNumber}`
+  const [order] = await db
+    .select()
+    .from(schema.salesOrders)
+    .where(eq(schema.salesOrders.shopifyId, shopifyId))
+    .limit(1)
+  if (!order) return { created: false, invoiceNumber: null }
+  const number = await createInvoiceForOrderRow(order)
+  return { created: Boolean(number) && !order.invoice, invoiceNumber: number }
+}
+
+/** Raise an invoice for an order identified by its Shopify order number. */
+export async function createInvoiceForOrderNumber(shopifyOrderNumber: string): Promise<{ created: boolean; invoiceNumber: string | null }> {
+  if (!db) return { created: false, invoiceNumber: null }
+  const shopifyId = shopifyOrderNumber.startsWith('#') ? shopifyOrderNumber : `#${shopifyOrderNumber}`
+  const [order] = await db
+    .select()
+    .from(schema.salesOrders)
+    .where(eq(schema.salesOrders.shopifyId, shopifyId))
+    .limit(1)
+  if (!order) return { created: false, invoiceNumber: null }
+  const number = await createInvoiceForOrderRow(order)
+  return { created: Boolean(number) && !order.invoice, invoiceNumber: number }
 }
 
 // ─── IMAP polling ───────────────────────────────────────────────────

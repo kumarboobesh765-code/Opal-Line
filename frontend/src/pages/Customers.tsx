@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Customer } from '@/types'
+import type { Customer, SalesOrder } from '@/types'
 import { formatCurrency, formatDate, formatNumber } from '@/lib/format'
 import { initials } from '@/lib/utils'
 
@@ -45,6 +45,30 @@ export default function CustomersPage() {
   const [addPhone, setAddPhone] = useState('')
   const [addCity, setAddCity] = useState('')
   const [viewCustomer, setViewCustomer] = useState<Customer | null>(null)
+  const [customerOrders, setCustomerOrders] = useState<SalesOrder[]>([])
+
+  // Load the customer's recent orders whenever the detail dialog opens
+  useEffect(() => {
+    if (!viewCustomer) {
+      setCustomerOrders([])
+      return
+    }
+    let cancelled = false
+    dbApi.getSalesOrders()
+      .then((orders) => {
+        if (cancelled) return
+        setCustomerOrders(
+          orders
+            .filter((o) => o.customer === viewCustomer.name)
+            .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+            .slice(0, 5),
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [viewCustomer])
 
   useEffect(() => {
     dbApi.getCustomers().then((d) => {
@@ -259,6 +283,7 @@ export default function CustomersPage() {
             <DialogDescription>Customer details and activity</DialogDescription>
           </DialogHeader>
           {viewCustomer ? (
+            <>
             <div className="space-y-0.5 text-sm">
               <DetailRow label="Email" value={viewCustomer.email || '—'} />
               <DetailRow label="Phone" value={viewCustomer.phone || '—'} />
@@ -275,6 +300,31 @@ export default function CustomersPage() {
                 <DetailRow label="Email Verified" value={viewCustomer.emailVerified ? 'Yes' : 'No'} />
               ) : null}
             </div>
+            <div className="mt-3 border-t border-border/60 pt-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent Orders</p>
+              {customerOrders.length === 0 ? (
+                <p className="py-1 text-sm text-muted-foreground">No orders found for this customer.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {customerOrders.map((o) => (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => { setViewCustomer(null); navigate('/sales/orders') }}
+                      className="flex w-full items-center justify-between gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-left text-sm hover:bg-muted/60"
+                    >
+                      <span className="shrink-0 font-medium text-foreground">{o.shopifyId || o.internalId}</span>
+                      <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                        <span className="truncate">{formatDate(o.date)}</span>
+                        <Badge variant={o.payment === 'paid' ? 'success' : 'muted'} dot>{o.payment}</Badge>
+                        <span className="shrink-0 tabular-nums font-medium text-foreground">{formatCurrency(o.value)}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            </>
           ) : null}
           <DialogFooter>
             {viewCustomer?.phone ? (

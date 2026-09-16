@@ -215,72 +215,19 @@ export default function SalesOrdersPage() {
       if (invoiceSavingId) return
       setInvoiceSavingId(o.id)
       try {
-        const settings = await dbApi.getSettings().catch(() => null)
-        const gst = settings?.gstRate ?? 3
-        // Customer snapshot: prefer the customer record (email/phone), fall back to
-        // the order's own shipping/billing address for contact + full address block.
-        const addr = (o.shippingAddress && (o.shippingAddress.address1 || o.shippingAddress.city)) ? o.shippingAddress : (o.billingAddress ?? undefined)
-        const fmtAddr = addr
-          ? [addr.address1, addr.address2].filter(Boolean).join(', ')
-          : ''
-        const customer = customers.find((c) => c.name === o.customer)
-          ?? customers.find((c) => c.email && o.shippingAddress && (o.shippingAddress as any).phone && c.phone === (o.shippingAddress as any).phone)
-          ?? null
-        const items = (o.lineItems ?? [])
-          .map((li) => {
-            const qty = Number(li.quantity ?? 0)
-            const price = Number(li.price ?? 0)
-            const amount = Math.round(price * qty * 100) / 100
-            return {
-              product: String(li.title ?? '').trim(),
-              sku: String(li.sku ?? ''),
-              qty,
-              weight: 0,
-              silverRate: 0,
-              makingCharge: 0,
-              tax: Math.round((amount * gst) / 100 * 100) / 100,
-              amount,
-            }
-          })
-          .filter((it) => it.product !== '' && it.qty > 0)
-        const subtotal = Math.round(items.reduce((a, it) => a + it.amount, 0) * 100) / 100
-        const gstAmount = Math.round((subtotal * gst) / 100 * 100) / 100
-        const discount = Math.round(Number(o.discount ?? 0) * 100) / 100
-        const grandTotal = Math.round((subtotal + gstAmount - discount) * 100) / 100
-        const number = `INV-${todayIST().replace(/-/g, '')}${Math.floor(1000 + Math.random() * 9000)}`
-        const inv = await dbApi.create('invoices', {
-          number,
-          shopifyOrder: o.shopifyId,
-          customer: o.customer,
-          customerEmail: customer?.email ?? '',
-          customerPhone: customer?.phone ?? (addr as any)?.phone ?? '',
-          customerAddress: fmtAddr || (addr as any)?.address1 || '',
-          customerCity: (addr as any)?.city ?? customer?.city ?? '',
-          customerState: (addr as any)?.province ?? customer?.province ?? '',
-          customerPincode: (addr as any)?.zip ?? '',
-          silverValue: 0,
-          makingCharge: 0,
-          subtotal,
-          gst,
-          gstAmount,
-          discount,
-          grandTotal,
-          paymentMethod: o.payment === 'paid' ? 'Online' : 'Pending',
-          paymentStatus: o.payment,
-          status: o.payment === 'paid' ? 'paid' : 'issued',
-          date: new Date().toISOString(),
-          items,
-        })
-        await dbApi.update('sales-orders', o.id, { invoice: number })
-        setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, invoice: number } : x)))
-        navigate(`/sales/invoices/${inv.id}`)
+        // Server-side creation: same pipeline as auto-invoice (idempotent,
+        // consistent numbering, full customer snapshot, stock deduction).
+        const result = await dbApi.createInvoiceForOrder(o.id)
+        if (!result.invoiceNumber) throw new Error('Order has no line items to invoice')
+        setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, invoice: result.invoiceNumber! } : x)))
+        navigate(`/sales/invoices?highlight=${encodeURIComponent(result.invoiceNumber)}`)
       } catch (err) {
         window.alert(err instanceof Error ? err.message : 'Could not create invoice')
       } finally {
         setInvoiceSavingId(null)
       }
     },
-    [navigate, invoiceSavingId, customers],
+    [navigate, invoiceSavingId],
   )
 
   const viewOnShopify = useCallback(async (o: SalesOrder) => {

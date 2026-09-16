@@ -423,6 +423,26 @@ dbRouter.delete('/invoices/:id', requirePermission('sales', 'delete'), async (re
 dbRouter.get('/sales-orders', listOf(s.salesOrders, s.salesOrders.date))
 dbRouter.get('/sales-orders/:id', oneOf(s.salesOrders, s.salesOrders.id))
 
+/** Raise an invoice for an order that doesn't have one yet (inline action). */
+dbRouter.post('/sales-orders/:id/create-invoice', requirePermission('sales', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    const { createInvoiceForOrderRow } = await import('../orderEmailIngest')
+    const existing = order.invoice
+    const invoiceNumber = await createInvoiceForOrderRow(order)
+    if (invoiceNumber && !existing) {
+      const [fresh] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+      if (fresh) recordCrud('sales-orders', 'Updated', req, fresh)
+    }
+    res.json({ created: Boolean(invoiceNumber) && !existing, invoiceNumber })
+  } catch (err) {
+    logger.error({ err }, 'create-invoice for order failed')
+    res.status(500).json({ error: 'Failed to create invoice from order' })
+  }
+})
+
 dbRouter.get('/purchase-orders', listOf(s.purchaseOrders, s.purchaseOrders.date))
 dbRouter.get('/purchase-orders/:id', oneOf(s.purchaseOrders, s.purchaseOrders.id))
 

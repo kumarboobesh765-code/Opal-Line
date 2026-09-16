@@ -462,6 +462,10 @@ export const dbApi = {
     return withItems(inv)
   },
   getSalesOrders: () => list<SalesOrder>('/db/sales-orders', PAGED),
+  createInvoiceForOrder: (orderId: string) =>
+    request<{ created: boolean; invoiceNumber: string | null }>(`/db/sales-orders/${encodeURIComponent(orderId)}/create-invoice`, {
+      method: 'POST',
+    }),
   getPurchaseOrders: () => list<PurchaseOrder>('/db/purchase-orders', PAGED),
   getPurchaseInvoices: () => list<PurchaseInvoice>('/db/purchase-invoices', PAGED),
   getSalesReturns: () => list<SalesReturn>('/db/sales-returns', PAGED),
