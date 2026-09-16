@@ -473,6 +473,11 @@ export const dbApi = {
       method: 'POST',
       body: JSON.stringify({ to }),
     }),
+  recordPayment: (payload: { customer: string; amount: number; method: string }) =>
+    request<{ ok: boolean; ref: string; settled: string[]; remainingOutstanding: number }>('/db/dues/pay', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getPurchaseOrders: () => list<PurchaseOrder>('/db/purchase-orders', PAGED),
   getPurchaseInvoices: () => list<PurchaseInvoice>('/db/purchase-invoices', PAGED),
   getSalesReturns: () => list<SalesReturn>('/db/sales-returns', PAGED),
@@ -692,6 +697,17 @@ export const backupApi = {
   downloadInvoicePDF: (invoiceId: string) => {
     window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank')
   },
+  downloadGstExport: (month: number, year: number, format: 'csv' | 'json') => {
+    window.open(`${API_BASE}/dashboard/reports/gst/export?month=${month}&year=${year}&format=${format}`, '_blank')
+  },
+  downloadCustomerStatement: (customer: string) => {
+    window.open(`${API_BASE}/db/customers/${encodeURIComponent(customer)}/statement`, '_blank')
+  },
+  emailCustomerStatement: (customer: string, to: string) =>
+    request<{ sent: boolean; invoiceCount: number; outstanding: number }>(`/db/customers/${encodeURIComponent(customer)}/statement/email`, {
+      method: 'POST',
+      body: JSON.stringify({ to }),
+    }),
   downloadAllLabels: (opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) => {
     const params = new URLSearchParams()
     if (opts?.preset) params.set('preset', opts.preset)

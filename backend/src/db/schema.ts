@@ -152,6 +152,7 @@ export const salesInvoices = pgTable('sales_invoices', {
   paymentId: text('payment_id'),
   status: text('status'),
   date: ts('date'),
+  dueDate: ts('due_date'),
 }, (table) => ({
   numberIdx: uniqueIndex('sales_invoices_number_idx').on(table.number),
   shopifyOrderIdx: index('sales_invoices_shopify_order_idx').on(table.shopifyOrder),

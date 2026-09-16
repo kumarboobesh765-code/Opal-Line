@@ -976,6 +976,83 @@ dbRouter.get('/search', async (req, res) => {
   }
 })
 
+// ─── Record a payment against a customer's outstanding invoices ───────────
+
+dbRouter.post('/dues/pay', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: 'Database not configured' })
+    const customer = String(req.body?.customer ?? '').trim()
+    const amount = Number(req.body?.amount ?? 0)
+    const method = String(req.body?.method ?? 'cash').trim().toLowerCase()
+    const allocate = Array.isArray(req.body?.allocate) ? req.body.allocate : null
+    if (!customer) return res.status(400).json({ error: 'customer required' })
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be > 0' })
+
+    // Open (unpaid, non-cancelled/refunded) invoices for this customer, oldest first
+    const open = await db
+      .select()
+      .from(schema.salesInvoices)
+      .where(
+        sql`${schema.salesInvoices.customer} = ${customer} and ${schema.salesInvoices.paymentStatus} is distinct from 'paid' and ${schema.salesInvoices.status} is distinct from 'cancelled' and ${schema.salesInvoices.status} is distinct from 'refunded'`,
+      )
+      .orderBy(sql`${schema.salesInvoices.date} asc`)
+    const outstanding = open.reduce((a, inv) => a + Number(inv.grandTotal ?? 0), 0)
+    if (open.length === 0) return res.status(400).json({ error: 'No outstanding invoices for this customer' })
+    if (amount > outstanding + 0.01) return res.status(400).json({ error: `Amount exceeds outstanding (${outstanding.toFixed(2)})` })
+
+    // Allocation: explicit invoice list or FIFO across oldest first
+    let remaining = amount
+    const settled: string[] = []
+    const touched: Array<{ inv: typeof open[number]; applied: number }> = []
+    const plan = allocate
+      ? open.filter((inv) => allocate.map(String).includes(inv.id))
+      : open
+    for (const inv of plan) {
+      if (remaining <= 0) break
+      const due = Number(inv.grandTotal ?? 0)
+      const applied = Math.min(due, remaining)
+      if (applied <= 0) continue
+      remaining = Math.round((remaining - applied) * 100) / 100
+      touched.push({ inv, applied })
+      if (applied >= due - 0.01) {
+        await db.update(schema.salesInvoices).set({ paymentStatus: 'paid', status: 'paid' }).where(eq(schema.salesInvoices.id, inv.id))
+        settled.push(inv.number)
+      } else {
+        await db.update(schema.salesInvoices).set({ paymentStatus: 'partial' }).where(eq(schema.salesInvoices.id, inv.id))
+      }
+    }
+
+    const ref = `PAY-${Date.now().toString(36).toUpperCase()}`
+    await db.insert(schema.payments).values({
+      id: randomUUID(),
+      ref,
+      invoice: touched[0]?.inv.number ?? null,
+      customer,
+      amount,
+      method,
+      gateway: method === 'razorpay' ? 'razorpay' : null,
+      status: 'success',
+      date: new Date().toISOString(),
+      reconciled: true,
+    } as any)
+
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Recorded Payment',
+      module: 'sales',
+      entity: customer,
+      details: `${ref} · ₹${amount} (${method})${settled.length ? ` · settled ${settled.join(', ')}` : ''}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    logger.info({ ref, customer, amount, method, settled }, 'Payment recorded from Dues page')
+    res.json({ ok: true, ref, settled, remainingOutstanding: Math.round((outstanding - amount) * 100) / 100 })
+  } catch (err) {
+    logger.error({ err }, 'Record payment failed')
+    res.status(500).json({ error: 'Failed to record payment' })
+  }
+})
+
 // ─── Dues: outstanding summary + on-demand statement email ────────────────
 
 dbRouter.get('/dues', requirePermission('sales', 'view'), async (_req, res) => {
@@ -1005,6 +1082,50 @@ dbRouter.post('/dues/email', requirePermission('sales', 'view'), async (req, res
   } catch (err) {
     logger.error({ err }, 'Dues statement email failed')
     res.status(500).json({ error: 'Failed to send dues statement' })
+  }
+})
+
+// ─── Customer account statements (PDF download + email) ───────────────────
+
+dbRouter.get('/customers/:name/statement', requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const customer = decodeURIComponent(req.params.name)
+    const { generateCustomerStatementPDF } = await import('../statements')
+    const statement = await generateCustomerStatementPDF(customer)
+    if (!statement) return res.status(404).json({ error: 'No invoices found for this customer' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="statement-${customer.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.pdf"`)
+    res.send(statement.buffer)
+  } catch (err) {
+    logger.error({ err }, 'Customer statement PDF failed')
+    res.status(500).json({ error: 'Statement generation failed' })
+  }
+})
+
+dbRouter.post('/customers/:name/statement/email', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: 'Database not configured' })
+    const customer = decodeURIComponent(req.params.name)
+    const to = String(req.body?.to ?? '').trim()
+    if (!to) return res.status(400).json({ error: 'Recipient "to" required' })
+    const { generateCustomerStatementPDF } = await import('../statements')
+    const statement = await generateCustomerStatementPDF(customer)
+    if (!statement) return res.status(404).json({ error: 'No invoices found for this customer' })
+    const { notifyCustomerStatement } = await import('../notifications')
+    const sent = await notifyCustomerStatement(to, customer, statement)
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Emailed Customer Statement',
+      module: 'sales',
+      entity: customer,
+      details: `Statement sent to ${to} (${statement.invoiceCount} invoices)`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ sent, invoiceCount: statement.invoiceCount, outstanding: statement.outstanding })
+  } catch (err) {
+    logger.error({ err }, 'Customer statement email failed')
+    res.status(500).json({ error: 'Statement email failed' })
   }
 })
 

@@ -1,0 +1,14 @@
+{
+  "id": "0004_add-due-date",
+  "prevId": "0003_add-product-images",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {},
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": { "columns": {}, "callbacks": 0 }
+}

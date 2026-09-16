@@ -1122,6 +1122,11 @@ const server = app.listen(config.port, async () => {
   startAutoBackup()
   // Daily business summary email (9:00 AM IST).
   startDailySummary()
+  // Monthly customer statements (1st, 08:30) and due-date reminders (daily 09:15).
+  void import('./monthlyStatements').then((m) => m.startMonthlyStatements())
+  void import('./dueReminders').then((d) => d.startDueReminders())
+  // Weekly owner insights (Monday 08:00).
+  void import('./ownerWeekly').then((w) => w.startWeeklyOwnerReport())
   startSilverRateScheduler()
   // Poll the order-notification mailbox so redacted Shopify PII still reaches the ERP
   startOrderEmailIngest()

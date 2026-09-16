@@ -185,6 +185,35 @@ export async function notifyDuesStatement(
   })
 }
 
+/** Per-customer account statement email (statement PDF attached). */
+export async function notifyCustomerStatement(
+  recipientEmail: string,
+  customer: string,
+  statement: { buffer: Buffer; invoiceCount: number; totalBilled: number; totalPaid: number; outstanding: number },
+): Promise<boolean> {
+  const money = (n: number) => '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+  const balance = statement.outstanding > 0 ? `Outstanding balance: <b style="color:#dc2626">${money(statement.outstanding)}</b>` : 'Account fully settled — thank you!'
+  return sendEmail({
+    to: recipientEmail,
+    subject: `Your Opal Line Account Statement — ${statement.invoiceCount} invoice${statement.invoiceCount === 1 ? '' : 's'}`,
+    attachments: [{ filename: `statement-${customer.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.pdf`, content: statement.buffer }],
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color:#2563eb;">Account Statement — ${customer}</h2>
+        <p style="color:#666;">Hi ${customer}, please find your account statement attached.</p>
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          <tr><td style="padding: 8px 12px; color: #666;">Invoices</td><td style="padding: 8px 12px; font-weight: bold;">${statement.invoiceCount}</td></tr>
+          <tr><td style="padding: 8px 12px; color: #666;">Total billed</td><td style="padding: 8px 12px; font-weight: bold;">${money(statement.totalBilled)}</td></tr>
+          <tr><td style="padding: 8px 12px; color: #666;">Total paid</td><td style="padding: 8px 12px; font-weight: bold; color: #16a34a;">${money(statement.totalPaid)}</td></tr>
+          <tr><td style="padding: 8px 12px; color: #666;">Balance</td><td style="padding: 8px 12px; font-weight: bold;">${statement.outstanding > 0 ? money(statement.outstanding) : '₹0.00'}</td></tr>
+        </table>
+        <p>${balance}</p>
+        <p style="color: #999; font-size: 12px;">Opal Line ERP</p>
+      </div>
+    `,
+  })
+}
+
 export async function notifyDailySummary(
   recipientEmail: string,
   opts: {

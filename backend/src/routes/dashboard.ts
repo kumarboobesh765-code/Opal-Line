@@ -679,6 +679,73 @@ dashboardRouter.get('/reports/gst', async (req, res) => {
   }
 })
 
+// GSTR-1 style CSV export (b2b + b2c rows, one line per invoice) + JSON summary
+dashboardRouter.get('/reports/gst/export', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [invoices] = await Promise.all([loadInvoices()])
+    const monthParam = Number(req.query.month)
+    const target = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12 ? monthParam : new Date().getMonth() + 1
+    const yearParam = Number(req.query.year)
+    const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
+    const prefix = `${year}-${pad(target)}`
+    const rows = invoices.filter((i) => String(i.date ?? '').startsWith(prefix))
+
+    const isBusiness = (name: string) => /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i.test(String(name ?? ''))
+    const esc = (v: unknown) => {
+      const s = String(v ?? '')
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const lines: string[] = []
+    lines.push('GSTR-1 Export,Period,' + `${prefix}`)
+    lines.push('GSTIN,' + CONSTANTS.GSTIN_DEFAULT)
+    lines.push('')
+    lines.push('Section,GSTIN of Recipient,Receiver Name,Invoice Number,Invoice Date,Invoice Value,Taxable Value,Rate,CGST,SGST,IGST')
+    for (const inv of rows) {
+      if (String(inv.status) === 'cancelled' || String(inv.status) === 'refunded') continue
+      const taxable = num(inv.subtotal) - num(inv.discount)
+      const gst = num(inv.gstAmount)
+      const ratePct = taxable > 0 ? Math.round((gst / taxable) * 100) : 0
+      const section = isBusiness(String(inv.customer ?? '')) ? 'B2B' : 'B2C'
+      lines.push(
+        [
+          section,
+          '',
+          esc(inv.customer),
+          esc(inv.number),
+          inv.date ? new Date(inv.date).toISOString().slice(0, 10) : '',
+          num(inv.grandTotal).toFixed(2),
+          taxable.toFixed(2),
+          `${ratePct}%`,
+          (gst / 2).toFixed(2),
+          (gst / 2).toFixed(2),
+          '0.00',
+        ].join(','),
+      )
+    }
+    lines.push('')
+    const totalTaxable = rows.filter((i) => i.status !== 'cancelled' && i.status !== 'refunded').reduce((a, i) => a + num(i.subtotal) - num(i.discount), 0)
+    const totalGst = rows.filter((i) => i.status !== 'cancelled' && i.status !== 'refunded').reduce((a, i) => a + num(i.gstAmount), 0)
+    lines.push(`TOTAL,,,,,${round2(totalTaxable + totalGst)},${round2(totalTaxable)},,${round2(totalGst / 2)},${round2(totalGst / 2)},0.00`)
+
+    const json = {
+      gstin: CONSTANTS.GSTIN_DEFAULT,
+      period: prefix,
+      summary: { taxable: round2(totalTaxable), outputGst: round2(totalGst), cgst: round2(totalGst / 2), sgst: round2(totalGst / 2), invoiceCount: rows.length },
+    }
+    if (String(req.query.format) === 'json') {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Content-Disposition', `attachment; filename="gstr1-${prefix}.json"`)
+      return res.send(JSON.stringify(json, null, 2))
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="gstr1-${prefix}.csv"`)
+    return res.send('\ufeff' + lines.join('\n'))
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
   if (!requireDb(res)) return
   try {

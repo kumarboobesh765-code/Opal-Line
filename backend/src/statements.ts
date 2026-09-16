@@ -72,6 +72,103 @@ export interface DuesStatement {
   customerCount: number
 }
 
+/** All invoices (paid + unpaid) for one customer, newest first — for account statements. */
+export async function collectCustomerInvoices(customer: string) {
+  if (!db) return []
+  return db
+    .select()
+    .from(schema.salesInvoices)
+    .where(sql`${schema.salesInvoices.customer} = ${customer}`)
+    .orderBy(sql`${schema.salesInvoices.date} desc`)
+}
+
+export interface CustomerStatement {
+  buffer: Buffer
+  invoiceCount: number
+  totalBilled: number
+  totalPaid: number
+  outstanding: number
+}
+
+/** Render an A4 account statement for one customer: every invoice + running balance. */
+export async function generateCustomerStatementPDF(customer: string): Promise<CustomerStatement | null> {
+  try {
+    const invoices = await collectCustomerInvoices(customer)
+    if (invoices.length === 0) return null
+
+    const money = (n: number) => '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const doc = new PDFDocument({ size: 'A4', margin: 50 })
+    const chunks: Buffer[] = []
+    doc.on('data', (c: Buffer) => chunks.push(c))
+    const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))))
+
+    doc.fontSize(20).font('Helvetica-Bold').fillColor('#111827').text('Account Statement')
+    doc.moveDown(0.2)
+    doc.fontSize(13).font('Helvetica').fillColor('#374151').text(customer)
+    doc.fontSize(10).fillColor('#6b7280').text(
+      'Generated ' + new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) + '  ·  Opal Line ERP',
+    )
+    doc.moveDown(1)
+
+    const drawHeader = (y: number) => {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#6b7280')
+      doc.text('INVOICE', 50, y)
+      doc.text('DATE', 160, y)
+      doc.text('STATUS', 250, y)
+      doc.text('AMOUNT', 470, y, { width: 75, align: 'right' })
+      doc.moveTo(50, y + 14).lineTo(545, y + 14).lineWidth(0.75).strokeColor('#d1d5db').stroke()
+    }
+
+    let y = doc.y + 6
+    drawHeader(y)
+    y += 22
+    let totalBilled = 0
+    let totalPaid = 0
+
+    for (const inv of invoices) {
+      if (y > 770) {
+        doc.addPage()
+        y = 60
+        drawHeader(y)
+        y += 22
+      }
+      const amount = Number(inv.grandTotal ?? 0)
+      const paid = inv.paymentStatus === 'paid'
+      const refunded = inv.status === 'refunded' || inv.status === 'cancelled'
+      if (!refunded) totalBilled += amount
+      if (paid && !refunded) totalPaid += amount
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827').text(inv.number, 50, y)
+      doc.font('Helvetica').fontSize(9).fillColor('#374151')
+      doc.text(inv.date ? new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—', 160, y)
+      doc.fillColor(paid ? '#16a34a' : refunded ? '#9ca3af' : '#b91c1c').text(refunded ? inv.status ?? '—' : paid ? 'PAID' : inv.paymentStatus ?? 'due', 250, y)
+      doc.fillColor('#111827').font('Helvetica-Bold').text(money(amount), 470, y, { width: 75, align: 'right' })
+      y += 18
+    }
+
+    const outstanding = Math.round((totalBilled - totalPaid) * 100) / 100
+    if (y + 50 > 800) {
+      doc.addPage()
+      y = 60
+    }
+    doc.moveTo(50, y + 4).lineTo(545, y + 4).lineWidth(0.75).strokeColor('#9ca3af').stroke()
+    doc.font('Helvetica').fontSize(9).fillColor('#6b7280')
+    doc.text('Total billed', 350, y + 12)
+    doc.text('Total paid', 350, y + 26)
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827')
+    doc.text(money(totalBilled), 470, y + 12, { width: 75, align: 'right' })
+    doc.text(money(totalPaid), 470, y + 26, { width: 75, align: 'right' })
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(outstanding > 0 ? '#b91c1c' : '#16a34a')
+    doc.text(outstanding > 0 ? 'OUTSTANDING ' + money(outstanding) : 'FULLY SETTLED', 350, y + 44)
+
+    doc.end()
+    const buffer = await done
+    return { buffer, invoiceCount: invoices.length, totalBilled, totalPaid, outstanding }
+  } catch (err) {
+    logger.error({ err }, 'Customer statement PDF generation failed')
+    return null
+  }
+}
+
 /** Render a clean A4 PDF statement of all outstanding dues, grouped by customer. */
 export async function generateDuesStatementPDF(): Promise<DuesStatement | null> {
   try {

@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Mail, MessageCircle, RefreshCw, Wallet } from 'lucide-react'
+import { IndianRupee, Mail, MessageCircle, RefreshCw, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select } from '@/components/ui/select'
 import { dbApi } from '@/lib/api'
 import { formatCurrency } from '@/lib/format'
 
@@ -48,6 +51,10 @@ export default function DuesPage() {
   const [query, setQuery] = useState('')
   const [emailing, setEmailing] = useState(false)
   const [customers, setCustomers] = useState<Array<{ name: string; phone?: string | null }>>([])
+  const [payFor, setPayFor] = useState<CustomerDue | null>(null)
+  const [payAmount, setPayAmount] = useState('')
+  const [payMethod, setPayMethod] = useState('cash')
+  const [paySaving, setPaySaving] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -77,6 +84,33 @@ export default function DuesPage() {
       window.alert(err instanceof Error ? err.message : 'Email failed')
     } finally {
       setEmailing(false)
+    }
+  }
+
+  const openPayDialog = (d: CustomerDue) => {
+    setPayFor(d)
+    setPayAmount(String(d.total))
+    setPayMethod('cash')
+  }
+
+  const submitPayment = async () => {
+    if (!payFor) return
+    const amount = Number(payAmount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      window.alert('Enter a valid amount')
+      return
+    }
+    setPaySaving(true)
+    try {
+      const res = await dbApi.recordPayment({ customer: payFor.customer, amount, method: payMethod })
+      const settledNote = res.settled.length > 0 ? `\n\nSettled: ${res.settled.join(', ')}` : ''
+      window.alert(`Payment ${res.ref} recorded.${settledNote}\nRemaining outstanding: ${formatCurrency(res.remainingOutstanding)}`)
+      setPayFor(null)
+      load()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Payment failed')
+    } finally {
+      setPaySaving(false)
     }
   }
 
@@ -158,6 +192,9 @@ export default function DuesPage() {
                         <td className="px-4 py-3 text-right font-semibold tabular-nums text-red-600">{formatCurrency(d.total)}</td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-1.5">
+                            <Button variant="outline" size="sm" onClick={() => openPayDialog(d)} title="Record a payment">
+                              <IndianRupee className="h-3.5 w-3.5" /> Pay
+                            </Button>
                             {(() => {
                               const phone = customers.find((c) => c.name === d.customer)?.phone || ''
                               if (!phone) return <span className="text-xs text-muted-foreground">no phone</span>
@@ -194,6 +231,43 @@ export default function DuesPage() {
           </Card>
         </>
       )}
+
+      {/* Record Payment dialog */}
+      <Dialog open={payFor !== null} onOpenChange={(open) => { if (!open) setPayFor(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Record Payment — {payFor?.customer}</DialogTitle>
+            <DialogDescription>
+              Outstanding {formatCurrency(payFor?.total ?? 0)} across {payFor?.invoiceCount ?? 0} invoice(s). Amount is applied oldest-first.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="pay-amount">Amount (₹)</Label>
+              <Input id="pay-amount" type="number" min="0" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Method</Label>
+              <Select
+                options={[
+                  { value: 'cash', label: 'Cash' },
+                  { value: 'upi', label: 'UPI' },
+                  { value: 'bank-transfer', label: 'Bank Transfer' },
+                  { value: 'razorpay', label: 'Razorpay' },
+                ]}
+                value={payMethod}
+                onValueChange={setPayMethod}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayFor(null)}>Cancel</Button>
+            <Button onClick={submitPayment} disabled={paySaving || !payAmount}>
+              {paySaving ? 'Saving…' : 'Record Payment'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

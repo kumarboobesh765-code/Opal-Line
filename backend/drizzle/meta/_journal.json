@@ -29,6 +29,13 @@
       "when": 1788767400179,
       "tag": "0003_add-product-images",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788767401179,
+      "tag": "0004_add-due-date",
+      "breakpoints": true
     }
   ]
 }

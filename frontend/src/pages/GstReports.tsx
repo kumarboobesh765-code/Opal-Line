@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight, Building2, FileCheck2, FileSpreadsheet, FileText, IndianRupee, Landmark, Loader2, Scale } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { dbApi } from '@/lib/api'
+import { dbApi, backupApi } from '@/lib/api'
 import type { GstReportResult } from '@/types'
 import { formatCurrency } from '@/lib/format'
 
@@ -45,7 +46,27 @@ export default function GstReportsPage() {
       <PageHeader
         title="GST Reports"
         subtitle="GSTR-1, GSTR-3B and input credit positions for the registered GSTIN."
-        actions={<Input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} className="w-[170px]" />}
+        actions={
+          <>
+            <Input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} className="w-[170px]" />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => backupApi.downloadGstExport(Number(month.slice(5, 7)), Number(month.slice(0, 4)), 'csv')}
+              title="Download GSTR-1 style CSV"
+            >
+              CSV
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => backupApi.downloadGstExport(Number(month.slice(5, 7)), Number(month.slice(0, 4)), 'json')}
+              title="Download JSON summary"
+            >
+              JSON
+            </Button>
+          </>
+        }
       />
 
       {error ? (
