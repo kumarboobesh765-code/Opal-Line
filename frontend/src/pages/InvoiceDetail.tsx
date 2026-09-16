@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileText,
   Mail,
+  MessageCircle,
   Printer,
   ShieldCheck,
   ShoppingBag,
@@ -205,6 +206,15 @@ export default function InvoiceDetailPage() {
     window.location.href = `mailto:${invoice.customerEmail}?subject=${subject}&body=${body}`
   }
 
+  const shareWhatsApp = () => {
+    const digits = (invoice.customerPhone || '').replace(/\D/g, '')
+    const withCc = digits.length === 10 ? '91' + digits : digits
+    const text = encodeURIComponent(
+      `Invoice ${invoice.number}\nCustomer: ${invoice.customer}\nOrder: ${invoice.shopifyOrder || '—'}\nAmount: ₹${invoice.grandTotal.toLocaleString('en-IN')}\nStatus: ${invoice.paymentStatus}\n\nThank you for shopping with Opal Line ✨`,
+    )
+    window.open(`https://wa.me/${withCc}?text=${text}`, '_blank', 'noopener')
+  }
+
   const refundInvoice = async () => {
     if (!window.confirm(`Mark invoice ${invoice.number} as refunded? This cannot be undone.`)) return
     setRefunding(true)
@@ -251,6 +261,9 @@ export default function InvoiceDetailPage() {
             <Button variant="outline" size="sm" onClick={printInvoice}><Printer className="h-3.5 w-3.5" /> Print</Button>
             <Button variant="outline" size="sm" onClick={printInvoice}><Download className="h-3.5 w-3.5" /> Save as PDF</Button>
             <Button variant="outline" size="sm" onClick={emailInvoice}><Mail className="h-3.5 w-3.5" /> Email</Button>
+            {invoice.customerPhone ? (
+              <Button variant="outline" size="sm" onClick={shareWhatsApp}><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</Button>
+            ) : null}
             <Button variant="soft-danger" size="sm" onClick={refundInvoice} disabled={refunding || invoice.status === 'refunded'}><Undo2 className="h-3.5 w-3.5" /> Refund</Button>
           </>
         }

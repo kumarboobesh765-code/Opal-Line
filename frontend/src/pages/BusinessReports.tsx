@@ -32,6 +32,8 @@ export default function BusinessReportsPage() {
   const [rate, setRate] = useState<SilverRate | null>(null)
   const [stats, setStats] = useState<BusinessStats | null>(null)
   const [period, setPeriod] = useState('month')
+  const [openInvoices, setOpenInvoices] = useState<Array<{ id: string; number: string; customer: string; grandTotal: number; date: string; paymentStatus: string }>>([])
+  const [drillBucket, setDrillBucket] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -63,6 +65,11 @@ export default function BusinessReportsPage() {
         buckets[idx].count += 1
         buckets[idx].amount += inv.grandTotal ?? 0
       }
+      setOpenInvoices(
+        open
+          .map((i) => ({ id: i.id, number: i.number, customer: i.customer, grandTotal: i.grandTotal ?? 0, date: String(i.date ?? ''), paymentStatus: i.paymentStatus }))
+          .sort((a, b) => a.date.localeCompare(b.date)),
+      )
       setSummary(s)
       setRate(r)
       setStats({
@@ -79,6 +86,11 @@ export default function BusinessReportsPage() {
       })
     }).catch(() => {})
   }, [period])
+
+  const bucketOf = (dateStr: string) => {
+    const ageDays = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000)
+    return ageDays <= 30 ? '0–30 days' : ageDays <= 60 ? '31–60 days' : ageDays <= 90 ? '61–90 days' : '90+ days'
+  }
 
   const exportPdf = () => {
     if (!summary || !stats) return
@@ -219,7 +231,11 @@ export default function BusinessReportsPage() {
                     </thead>
                     <tbody>
                       {stats.aging.map((b) => (
-                        <tr key={b.label} className="border-t border-border/60">
+                        <tr
+                          key={b.label}
+                          className={`border-t border-border/60 ${b.count > 0 ? 'cursor-pointer hover:bg-muted/60' : ''}`}
+                          onClick={() => { if (b.count > 0) setDrillBucket(drillBucket === b.label ? null : b.label) }}
+                        >
                           <td className="py-2">
                             <span className="inline-flex items-center gap-2">
                               <span
@@ -237,6 +253,24 @@ export default function BusinessReportsPage() {
                       ))}
                     </tbody>
                   </table>
+                  {drillBucket ? (
+                    <div className="mt-3 rounded-md border border-border/60 bg-muted/20 p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{drillBucket} — by invoice</p>
+                        <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setDrillBucket(null)}>✕ close</button>
+                      </div>
+                      <div className="space-y-1">
+                        {openInvoices.filter((inv) => bucketOf(inv.date) === drillBucket).map((inv) => (
+                          <div key={inv.id} className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-sm">
+                            <span className="shrink-0 font-medium text-foreground">{inv.number}</span>
+                            <span className="min-w-0 flex-1 truncate text-muted-foreground">{inv.customer}</span>
+                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>
+                            <span className="shrink-0 tabular-nums font-medium text-foreground">{formatCurrency(inv.grandTotal)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </CardContent>
