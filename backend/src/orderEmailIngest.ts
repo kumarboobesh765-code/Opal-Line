@@ -490,20 +490,25 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
   const shippingAddress = d.shipping ?? undefined
 
   const [existing] = await db
-    .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress, lineItems: schema.salesOrders.lineItems })
+    .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress, shippingAddress: schema.salesOrders.shippingAddress, lineItems: schema.salesOrders.lineItems })
     .from(schema.salesOrders)
     .where(eq(schema.salesOrders.shopifyId, shopifyId))
     .limit(1)
 
   if (existing) {
     const curAddr = (existing.billingAddress ?? {}) as Record<string, unknown>
-    const hasRealAddr = Boolean(curAddr && typeof curAddr === 'object' && (curAddr.address1 || curAddr.phone))
+    const curShip = (existing.shippingAddress ?? {}) as Record<string, unknown>
+    const hasRealAddr = Boolean(
+      (curAddr && typeof curAddr === 'object' && (curAddr.address1 || curAddr.phone)) ||
+      (curShip && typeof curShip === 'object' && (curShip.address1 || curShip.phone)),
+    )
     const guestish = !existing.customer || existing.customer === 'Guest' || existing.customer === ''
-    const needAddr = !hasRealAddr && billingAddress
+    const needAddr = !hasRealAddr && Boolean(billingAddress || shippingAddress)
     if (!guestish && hasRealAddr) {
       return { updated: false, created: false } // already complete
     }
-    const newAddr = needAddr ? billingAddress : undefined
+    const newAddr = needAddr ? (billingAddress ?? shippingAddress) : undefined
+    const newShipAddr = needAddr && billingAddress && shippingAddress ? shippingAddress : undefined
     const newCustomer = d.customerName && d.customerName !== 'Guest' ? d.customerName : undefined
     const newTotal = d.total > 0 ? d.total : undefined
     // Union line items across emails — the same order arrives via both the
@@ -528,7 +533,7 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
         items: newItems,
         lineItems: newLineItems,
         billingAddress: newAddr,
-        shippingAddress: newAddr && shippingAddress ? shippingAddress : undefined,
+        shippingAddress: newShipAddr,
       })
       .where(eq(schema.salesOrders.shopifyId, shopifyId))
     await ensureCustomerFromEmail(d)

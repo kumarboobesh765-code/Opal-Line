@@ -308,7 +308,15 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
               'shopify',
             )
             const [row] = await db.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, local.id)).limit(1)
-            if (row) void notifyOrderFulfilled({ ...row, trackingId, carrier })
+            if (row) {
+              // PII redaction: the API customer object can be blanked, so the
+              // notification email (which carries full customer data) is the
+              // source of truth. Pull it in BEFORE notifying so the customer
+              // row and order details are complete when the message is built.
+              const { kickEmailIngest } = await import('./orderEmailIngest')
+              kickEmailIngest()
+              void notifyOrderFulfilled({ ...row, trackingId, carrier })
+            }
             logger.info({ topic, shopifyId, trackingId }, 'Webhook: order marked fulfilled locally')
           } else {
             // Fulfillment arrived before the order was ever imported — import now,
@@ -332,6 +340,8 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
                   : `Order marked fulfilled via Shopify webhook (${shopifyId})`,
                 'shopify',
               )
+              const { kickEmailIngest } = await import('./orderEmailIngest')
+              kickEmailIngest()
               void notifyOrderFulfilled({ ...row, trackingId, carrier })
               logger.info({ topic, shopifyId, trackingId }, 'Webhook: order imported + marked fulfilled')
             } else {
@@ -1196,6 +1206,8 @@ const server = app.listen(config.port, async () => {
   startSilverRateScheduler()
   // Poll the order-notification mailbox so redacted Shopify PII still reaches the ERP
   startOrderEmailIngest()
+  // Register Shopify webhooks when a public base URL is configured (non-fatal)
+  void import('./webhookRegistration').then((m) => m.registerShopifyWebhooks())
 
   // Auto-enrich incomplete orders/customers on startup (background, non-blocking)
   if (isConfigured()) {
