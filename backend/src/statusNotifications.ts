@@ -92,15 +92,22 @@ export async function notifyOrderFulfilled(order: OrderLike & { trackingId?: str
       ? `Tracking: <strong>${order.trackingId}</strong>${order.carrier ? ` (${order.carrier})` : ''}<br/>`
       : ''
     const subject = `Your order ${ref} is on its way! — Opal Line`
+    const trackingUrl = order.trackingId
+      ? `https://trackcourier.pythonanywhere.com/Search/AWB/${encodeURIComponent(order.trackingId)}`
+      : null
     const html = `<div style="font-family:sans-serif;max-width:520px">
       <h2 style="margin:0 0 8px">Good news, ${name}! 🎉</h2>
       <p>Your order <strong>${ref}</strong>${order.items ? ` (${order.items} item${order.items === 1 ? '' : 's'})` : ''} worth <strong>₹${fmtAmount(order.value)}</strong> has been packed and is on its way to you.</p>
       ${trackingLine}
+      ${trackingUrl ? `<p><a href="${trackingUrl}">Track your shipment</a></p>` : ''}
       <p style="color:#64748b;font-size:13px">Thank you for shopping with Opal Line.</p>
     </div>`
     if (prefs.email && email) await sendEmail({ to: email, subject, html })
     if (prefs.whatsapp && phone && isWhatsAppConfigured()) {
-      await sendWhatsAppMessage(phone, `Good news, ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been fulfilled and is on its way.${order.trackingId ? ` Tracking: ${order.trackingId}${order.carrier ? ` (${order.carrier})` : ''}` : ''} — Opal Line`)
+      const trackSuffix = order.trackingId
+        ? `\nTrack: ${trackingUrl}`
+        : ''
+      await sendWhatsAppMessage(phone, `Good news, ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been fulfilled and is on its way.${order.trackingId ? `\nTracking: ${order.trackingId}${order.carrier ? ` (${order.carrier})` : ''}${trackSuffix}` : ''}\n\n— Opal Line`)
     }
     logger.info({ ref, emailed: Boolean(email && prefs.email), whatsapped: Boolean(phone && prefs.whatsapp) }, 'Order fulfilled notification processed')
   } catch (err) {
