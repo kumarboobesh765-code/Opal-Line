@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Mail, MessageCircle, RefreshCw, Save } from 'lucide-react'
+import { Mail, MessageCircle, RefreshCw, Save, PackageCheck } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,6 +14,10 @@ interface NotificationSettings {
   dueRemindersEnabled: boolean
   weeklyReportEnabled: boolean
   recipientEmail: string
+  orderFulfilledEmail?: boolean
+  orderFulfilledWhatsapp?: boolean
+  returnProcessedEmail?: boolean
+  returnProcessedWhatsapp?: boolean
 }
 
 export default function NotificationSettingsPage() {
@@ -23,6 +27,10 @@ export default function NotificationSettingsPage() {
     dueRemindersEnabled: true,
     weeklyReportEnabled: true,
     recipientEmail: '',
+    orderFulfilledEmail: true,
+    orderFulfilledWhatsapp: true,
+    returnProcessedEmail: true,
+    returnProcessedWhatsapp: true,
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -124,6 +132,58 @@ export default function NotificationSettingsPage() {
                 onCheckedChange={(checked) => setSettings({ ...settings, weeklyReportEnabled: checked })}
               />
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <PackageCheck className="h-5 w-5 text-emerald-600" />
+            Customer Order Notifications
+          </CardTitle>
+          <CardDescription>Automatic emails/WhatsApp messages to customers when their order status changes.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <p className="font-medium">Order Fulfilled — Email</p>
+              <p className="text-sm text-muted-foreground">Email the customer when their order is fulfilled/shipped (includes tracking number when available).</p>
+            </div>
+            <Switch
+              checked={settings.orderFulfilledEmail !== false}
+              onCheckedChange={(checked) => setSettings({ ...settings, orderFulfilledEmail: checked })}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <p className="font-medium">Order Fulfilled — WhatsApp</p>
+              <p className="text-sm text-muted-foreground">WhatsApp the customer when their order is fulfilled/shipped.</p>
+            </div>
+            <Switch
+              checked={settings.orderFulfilledWhatsapp !== false}
+              onCheckedChange={(checked) => setSettings({ ...settings, orderFulfilledWhatsapp: checked })}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <p className="font-medium">Return Processed — Email</p>
+              <p className="text-sm text-muted-foreground">Email the customer when a return is processed with their credit note.</p>
+            </div>
+            <Switch
+              checked={settings.returnProcessedEmail !== false}
+              onCheckedChange={(checked) => setSettings({ ...settings, returnProcessedEmail: checked })}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <p className="font-medium">Return Processed — WhatsApp</p>
+              <p className="text-sm text-muted-foreground">WhatsApp the customer when a return is processed with their credit note.</p>
+            </div>
+            <Switch
+              checked={settings.returnProcessedWhatsapp !== false}
+              onCheckedChange={(checked) => setSettings({ ...settings, returnProcessedWhatsapp: checked })}
+            />
           </div>
         </CardContent>
       </Card>

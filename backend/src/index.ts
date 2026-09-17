@@ -279,9 +279,16 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
     } else if (topic === 'orders/fulfilled') {
       // Targeted fulfillment: mark the local order fulfilled immediately and
       // record it on the order timeline — no full reimport needed.
-      const order = req.body as { id?: number; name?: string } | undefined
+      const order = req.body as {
+        id?: number
+        name?: string
+        fulfillments?: Array<{ tracking_number?: string | null; tracking_company?: string | null; tracking_url?: string | null }>
+      } | undefined
       const orderNumber = order?.name ? String(order.name).replace(/^#/, '') : order?.id != null ? String(order.id) : ''
       const shopifyId = orderNumber ? `#${orderNumber}` : null
+      const f = order?.fulfillments?.find((x) => x?.tracking_number)
+      const trackingId = f?.tracking_number?.trim() || null
+      const carrier = f?.tracking_company?.trim() || null
       if (shopifyId && db) {
         try {
           const [local] = await db
@@ -292,12 +299,44 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
           if (local) {
             const { insertOrderEvent } = await import('./routes/db')
             const { notifyOrderFulfilled } = await import('./statusNotifications')
-            await insertOrderEvent(local.id, 'Fulfilled', `Order marked fulfilled via Shopify webhook (${shopifyId})`, 'shopify')
+            await insertOrderEvent(
+              local.id,
+              'Fulfilled',
+              trackingId
+                ? `Order fulfilled via Shopify webhook (${shopifyId}) — tracking ${trackingId}${carrier ? ` (${carrier})` : ''}`
+                : `Order marked fulfilled via Shopify webhook (${shopifyId})`,
+              'shopify',
+            )
             const [row] = await db.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, local.id)).limit(1)
-            if (row) void notifyOrderFulfilled(row)
-            logger.info({ topic, shopifyId }, 'Webhook: order marked fulfilled locally')
+            if (row) void notifyOrderFulfilled({ ...row, trackingId, carrier })
+            logger.info({ topic, shopifyId, trackingId }, 'Webhook: order marked fulfilled locally')
           } else {
-            logger.warn({ topic, shopifyId }, 'Webhook: orders/fulfilled matched no local order')
+            // Fulfillment arrived before the order was ever imported — import now,
+            // then record the timeline event and notify on the imported row.
+            const { importShopifyOrders } = await import('./shopify')
+            await importShopifyOrders()
+            const [row] = await db.select().from(schema.salesOrders).where(eq(schema.salesOrders.shopifyId, shopifyId)).limit(1)
+            if (row) {
+              const { insertOrderEvent } = await import('./routes/db')
+              const { notifyOrderFulfilled } = await import('./statusNotifications')
+              // The webhook is authoritative that fulfillment happened — the fresh
+              // import may still carry the pre-fulfillment state (timing race).
+              if (row.status !== 'fulfilled' && row.status !== 'cancelled') {
+                await db.update(schema.salesOrders).set({ status: 'fulfilled' }).where(eq(schema.salesOrders.id, row.id))
+              }
+              await insertOrderEvent(
+                row.id,
+                'Fulfilled',
+                trackingId
+                  ? `Order fulfilled via Shopify webhook (${shopifyId}) — tracking ${trackingId}${carrier ? ` (${carrier})` : ''}`
+                  : `Order marked fulfilled via Shopify webhook (${shopifyId})`,
+                'shopify',
+              )
+              void notifyOrderFulfilled({ ...row, trackingId, carrier })
+              logger.info({ topic, shopifyId, trackingId }, 'Webhook: order imported + marked fulfilled')
+            } else {
+              logger.warn({ topic, shopifyId }, 'Webhook: orders/fulfilled matched no local order and import found none')
+            }
           }
         } catch (err) {
           logger.error({ topic, shopifyId, err: { message: err instanceof Error ? err.message : 'Unknown error' } }, 'Webhook: fulfilled handling failed')

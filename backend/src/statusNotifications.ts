@@ -1,5 +1,5 @@
 import { db, schema } from './db/client'
-import { eq } from 'drizzle-orm'
+import { eq, sql, desc } from 'drizzle-orm'
 import { logger } from './logger'
 import { sendEmail } from './notifications'
 import { sendWhatsAppMessage, isWhatsAppConfigured } from './whatsapp'
@@ -16,6 +16,8 @@ interface OrderLike {
   customer?: string | null
   value?: number | string | null
   items?: number | null
+  shippingAddress?: unknown
+  billingAddress?: unknown
 }
 
 function orderRef(o: OrderLike): string {
@@ -25,12 +27,34 @@ function orderRef(o: OrderLike): string {
 async function findCustomerContact(name: string | null | undefined): Promise<{ email: string | null; phone: string | null }> {
   if (!db || !name) return { email: null, phone: null }
   try {
-    const [c] = await db.select({ email: schema.customers.email, phone: schema.customers.phone }).from(schema.customers).where(eq(schema.customers.name, name)).limit(1)
-    return { email: c?.email ?? null, phone: c?.phone ?? null }
+    // Several customer rows can share a name; prefer ones that actually have
+    // contact details rather than a random LIMIT 1 match.
+    const rows = await db
+      .select({ email: schema.customers.email, phone: schema.customers.phone })
+      .from(schema.customers)
+      .where(eq(schema.customers.name, name))
+      .orderBy(desc(sql`(${schema.customers.email} IS NOT NULL)::int + (${schema.customers.phone} IS NOT NULL)::int`))
+      .limit(1)
+    return { email: rows[0]?.email ?? null, phone: rows[0]?.phone ?? null }
   } catch (err) {
     logger.warn({ err }, 'status notification: customer lookup failed')
     return { email: null, phone: null }
   }
+}
+
+/**
+ * Fallback: pull the phone from the order's own shipping/billing address.
+ * Shopify dev stores redact customer PII, but the address phone usually
+ * survives — and this is also the only source when the customer row is missing.
+ */
+function phoneFromAddresses(order: OrderLike): string | null {
+  for (const addr of [order.shippingAddress, order.billingAddress]) {
+    if (addr && typeof addr === 'object') {
+      const phone = (addr as Record<string, unknown>).phone
+      if (typeof phone === 'string' && phone.replace(/\D/g, '').length >= 10) return phone
+    }
+  }
+  return null
 }
 
 function fmtAmount(v: number | string | null | undefined): string {
@@ -38,23 +62,47 @@ function fmtAmount(v: number | string | null | undefined): string {
   return Number.isFinite(n) ? n.toLocaleString('en-IN') : '0'
 }
 
-/** Notify the customer that their order has been fulfilled/shipped. */
-export async function notifyOrderFulfilled(order: OrderLike): Promise<void> {
+/** Read per-type notification toggles from settings (default ON). */
+async function prefsEnabled(keys: Array<'orderFulfilledEmail' | 'orderFulfilledWhatsapp' | 'returnProcessedEmail' | 'returnProcessedWhatsapp'>): Promise<{ email: boolean; whatsapp: boolean }> {
+  const out = { email: true, whatsapp: true }
+  if (!db) return out
   try {
+    const [row] = await db.select({ notificationSettings: schema.settings.notificationSettings }).from(schema.settings).where(sql`${schema.settings.id} = 'app'`).limit(1)
+    const n = (row?.notificationSettings ?? {}) as Record<string, unknown>
+    for (const k of keys) {
+      if (k.endsWith('Email') && n[k] === false) out.email = false
+      if (k.endsWith('Whatsapp') && n[k] === false) out.whatsapp = false
+    }
+  } catch {
+    // settings unavailable — default to sending
+  }
+  return out
+}
+
+/** Notify the customer that their order has been fulfilled/shipped. */
+export async function notifyOrderFulfilled(order: OrderLike & { trackingId?: string | null; carrier?: string | null }): Promise<void> {
+  try {
+    const prefs = await prefsEnabled(['orderFulfilledEmail', 'orderFulfilledWhatsapp'])
+    if (!prefs.email && !prefs.whatsapp) return
     const ref = orderRef(order)
     const name = order.customer ?? 'Customer'
-    const { email, phone } = await findCustomerContact(order.customer)
+    const { email, phone: custPhone } = await findCustomerContact(order.customer)
+    const phone = custPhone ?? phoneFromAddresses(order)
+    const trackingLine = order.trackingId
+      ? `Tracking: <strong>${order.trackingId}</strong>${order.carrier ? ` (${order.carrier})` : ''}<br/>`
+      : ''
     const subject = `Your order ${ref} is on its way! — Opal Line`
     const html = `<div style="font-family:sans-serif;max-width:520px">
       <h2 style="margin:0 0 8px">Good news, ${name}! 🎉</h2>
       <p>Your order <strong>${ref}</strong>${order.items ? ` (${order.items} item${order.items === 1 ? '' : 's'})` : ''} worth <strong>₹${fmtAmount(order.value)}</strong> has been packed and is on its way to you.</p>
+      ${trackingLine}
       <p style="color:#64748b;font-size:13px">Thank you for shopping with Opal Line.</p>
     </div>`
-    if (email) await sendEmail({ to: email, subject, html })
-    if (phone && isWhatsAppConfigured()) {
-      await sendWhatsAppMessage(phone, `Good news, ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been fulfilled and is on its way. — Opal Line`)
+    if (prefs.email && email) await sendEmail({ to: email, subject, html })
+    if (prefs.whatsapp && phone && isWhatsAppConfigured()) {
+      await sendWhatsAppMessage(phone, `Good news, ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been fulfilled and is on its way.${order.trackingId ? ` Tracking: ${order.trackingId}${order.carrier ? ` (${order.carrier})` : ''}` : ''} — Opal Line`)
     }
-    logger.info({ ref, emailed: Boolean(email), whatsapped: Boolean(phone) }, 'Order fulfilled notification processed')
+    logger.info({ ref, emailed: Boolean(email && prefs.email), whatsapped: Boolean(phone && prefs.whatsapp) }, 'Order fulfilled notification processed')
   } catch (err) {
     logger.warn({ err }, 'notifyOrderFulfilled failed (non-fatal)')
   }
@@ -69,6 +117,8 @@ export async function notifyReturnProcessed(opts: {
   creditNoteNumber?: string
 }): Promise<void> {
   try {
+    const prefs = await prefsEnabled(['returnProcessedEmail', 'returnProcessedWhatsapp'])
+    if (!prefs.email && !prefs.whatsapp) return
     const name = opts.customer ?? 'Customer'
     const { email, phone } = await findCustomerContact(opts.customer)
     const subject = `Return processed for invoice ${opts.invoiceNumber} — Opal Line`
@@ -83,11 +133,11 @@ export async function notifyReturnProcessed(opts: {
       </ul>
       <p style="color:#64748b;font-size:13px">If you have any questions, just reply to this email.</p>
     </div>`
-    if (email) await sendEmail({ to: email, subject, html })
-    if (phone && isWhatsAppConfigured()) {
+    if (prefs.email && email) await sendEmail({ to: email, subject, html })
+    if (prefs.whatsapp && phone && isWhatsAppConfigured()) {
       await sendWhatsAppMessage(phone, `Return processed for invoice ${opts.invoiceNumber}: ₹${opts.amount.toLocaleString('en-IN')} credited${opts.creditNoteNumber ? ` (Credit note ${opts.creditNoteNumber})` : ''}. — Opal Line`)
     }
-    logger.info({ invoice: opts.invoiceNumber, emailed: Boolean(email), whatsapped: Boolean(phone) }, 'Return notification processed')
+    logger.info({ invoice: opts.invoiceNumber, emailed: Boolean(email && prefs.email), whatsapped: Boolean(phone && prefs.whatsapp) }, 'Return notification processed')
   } catch (err) {
     logger.warn({ err }, 'notifyReturnProcessed failed (non-fatal)')
   }
