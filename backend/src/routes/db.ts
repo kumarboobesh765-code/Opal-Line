@@ -209,6 +209,40 @@ dbRouter.post('/products/labels', requirePermission('inventory', 'view'), async 
   }
 })
 
+// Product catalog PDF + duplicate SKU detection (before /products/:id to avoid param capture)
+dbRouter.get('/products/catalog-pdf', requirePermission('inventory', 'view'), async (_req, res) => {
+  try {
+    const { generateCatalogPDF } = await import('../catalogPdf')
+    const pdf = await generateCatalogPDF()
+    if (!pdf) return res.status(500).json({ error: 'Catalog generation failed' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="product-catalog-${new Date().toISOString().slice(0, 10)}.pdf"`)
+    res.send(pdf)
+  } catch (err) {
+    logger.error({ err }, 'catalog PDF failed')
+    res.status(500).json({ error: 'Catalog generation failed' })
+  }
+})
+
+// Duplicate SKU detection
+dbRouter.get('/products/duplicates', requirePermission('inventory', 'view'), async (_req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const rows = await db!.execute<Record<string, unknown>>(sql`
+      SELECT lower(sku) AS sku, count(*)::int AS cnt,
+             string_agg(name || ' (' || id || ')', ' | ') AS products
+      FROM products
+      GROUP BY lower(sku)
+      HAVING count(*) > 1
+      ORDER BY cnt DESC
+    `)
+    res.json({ data: rows })
+  } catch (err) {
+    logger.error({ err }, 'duplicate check failed')
+    res.status(500).json({ error: 'Duplicate check failed' })
+  }
+})
+
 dbRouter.get('/products/:id', oneOf(s.products, s.products.id))
 
 dbRouter.get('/customers', listOf(s.customers, s.customers.name))
@@ -948,6 +982,127 @@ dbRouter.post('/sales-orders/bulk-invoice', requirePermission('sales', 'create')
     res.status(500).json({ error: 'Bulk invoicing failed' })
   }
 })
+
+// ─── Dispatch / shipments ─────────────────────────────────────────────────
+
+dbRouter.get('/shipments', requirePermission('sales', 'view'), async (_req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const rows = await db!.select().from(s.shipments).orderBy(desc(s.shipments.createdAt)).limit(300)
+    res.json({ data: rows })
+  } catch (err) {
+    logger.error({ err }, 'shipments load failed')
+    res.status(500).json({ error: 'Failed to load shipments' })
+  }
+})
+
+dbRouter.post('/shipments/dispatch', requirePermission('sales', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const orderId = String(req.body?.orderId ?? '').trim()
+    if (!orderId) return res.status(400).json({ error: 'orderId is required' })
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, orderId)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    const courier = String(req.body?.courier ?? '').trim() || null
+    const trackingNumber = String(req.body?.trackingNumber ?? '').trim() || null
+    const expected = req.body?.expectedDelivery ? String(req.body.expectedDelivery).slice(0, 10) : null
+    const notes = String(req.body?.notes ?? '').trim() || null
+    const [existing] = await db!.select().from(s.shipments).where(eq(s.shipments.orderId, orderId)).limit(1)
+    const values = {
+      orderRef: order.internalId ?? order.shopifyId ?? orderId,
+      customer: order.customer,
+      courier,
+      trackingNumber,
+      status: 'dispatched',
+      dispatchedAt: new Date().toISOString(),
+      expectedDelivery: expected,
+      notes,
+    }
+    if (existing) {
+      await db!.update(s.shipments).set(values).where(eq(s.shipments.id, existing.id))
+    } else {
+      await db!.insert(s.shipments).values({ id: randomUUID(), orderId, ...values })
+    }
+    // Keep order fulfillment in sync
+    if (order.status !== 'cancelled') {
+      await db!.update(s.salesOrders).set({ fulfillment: 'fulfilled', status: order.status === 'imported' ? 'processing' : order.status }).where(eq(s.salesOrders.id, orderId))
+    }
+    await insertOrderEvent(orderId, 'Dispatched', `Dispatched via ${courier ?? 'courier'}${trackingNumber ? ` — tracking ${trackingNumber}` : ''}`, actorFromRequest(req).userId ?? 'system')
+    // Customer notification with tracking details
+    void import('../statusNotifications').then((m) => m.notifyOrderFulfilled({ ...order, trackingId: trackingNumber, carrier: courier })).catch(() => undefined)
+    recordCrud('sales-orders', 'Updated', req, { id: orderId, dispatched: true })
+    res.json({ ok: true })
+  } catch (err) {
+    logger.error({ err }, 'dispatch failed')
+    res.status(500).json({ error: 'Dispatch failed' })
+  }
+})
+
+dbRouter.post('/shipments/:id/delivered', requirePermission('sales', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [ship] = await db!.update(s.shipments).set({ status: 'delivered', deliveredAt: new Date().toISOString() }).where(eq(s.shipments.id, req.params.id)).returning()
+    if (!ship) return res.status(404).json({ error: 'Shipment not found' })
+    await insertOrderEvent(ship.orderId, 'Delivered', `Delivery confirmed${ship.trackingNumber ? ` (tracking ${ship.trackingNumber})` : ''}`, actorFromRequest(req).userId ?? 'system')
+    res.json({ ok: true })
+  } catch (err) {
+    logger.error({ err }, 'delivery confirm failed')
+    res.status(500).json({ error: 'Failed to confirm delivery' })
+  }
+})
+
+// ─── Notification log (audit + resend) ────────────────────────────────────
+
+dbRouter.get('/notifications/log', requirePermission('system', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const limit = Math.min(Number(req.query.limit ?? 100), 300)
+    const rows = await db!.select().from(s.notificationLog).orderBy(desc(s.notificationLog.createdAt)).limit(limit)
+    res.json({ data: rows })
+  } catch (err) {
+    logger.error({ err }, 'notification log load failed')
+    res.status(500).json({ error: 'Failed to load notification log' })
+  }
+})
+
+dbRouter.post('/notifications/resend', requirePermission('system', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const id = String(req.body?.id ?? '').trim()
+    const [entry] = await db!.select().from(s.notificationLog).where(eq(s.notificationLog.id, id)).limit(1)
+    if (!entry) return res.status(404).json({ error: 'Notification not found' })
+    if (!entry.recipient) return res.status(400).json({ error: 'Original recipient unknown — cannot resend' })
+    const ref = entry.ref ?? ''
+    const { sendEmail } = await import('../notifications')
+    const { sendWhatsAppMessage } = await import('../whatsapp')
+    let ok = false
+    if (entry.channel === 'email') {
+      ok = await sendEmail({ to: entry.recipient, subject: `[Re-send] ${ref} — Opal Line`, html: `<p>Re-sent notification for <strong>${ref}</strong>.</p><p>Please contact us for the full details.</p>` })
+    } else {
+      ok = (await sendWhatsAppMessage(entry.recipient, `Re-sent notification for ${ref}. — Opal Line`)) !== null
+    }
+    await logResend(entry, ok)
+    res.json({ ok })
+  } catch (err) {
+    logger.error({ err }, 'notification resend failed')
+    res.status(500).json({ error: 'Resend failed' })
+  }
+})
+
+async function logResend(entry: typeof s.notificationLog.$inferSelect, ok: boolean): Promise<void> {
+  try {
+    await db!.insert(s.notificationLog).values({
+      id: randomUUID(),
+      kind: entry.kind,
+      channel: entry.channel,
+      recipient: entry.recipient,
+      ref: entry.ref,
+      status: ok ? 'sent' : 'failed',
+      error: ok ? 'manual resend' : 'manual resend failed',
+      createdAt: new Date().toISOString(),
+    })
+  } catch { /* non-fatal */ }
+}
 
 // ─── Auto reorder suggestions: sales velocity vs. stock on hand ─────────────
 dbRouter.get('/inventory/reorder-suggestions', requirePermission('inventory', 'view'), async (_req, res) => {

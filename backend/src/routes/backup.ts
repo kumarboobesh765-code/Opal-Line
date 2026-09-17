@@ -697,6 +697,16 @@ backupRouter.get('/scopes', requirePermission('system', 'view'), (_req, res) => 
   res.json(BACKUP_SCOPES.map(({ key, label, description }) => ({ key, label, description })))
 })
 
+backupRouter.get('/auto-status', requirePermission('system', 'view'), async (_req, res) => {
+  try {
+    const { getAutoBackupStatus } = await import('../autoBackup')
+    res.json(await getAutoBackupStatus())
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown error' }, 'Auto backup status failed')
+    res.status(500).json({ error: 'Could not load auto backup status' })
+  }
+})
+
 backupRouter.get('/history', requirePermission('system', 'view'), async (_req, res) => {
   const client = getRawClient()
   if (!client) return res.status(503).json({ error: 'Service temporarily unavailable' })

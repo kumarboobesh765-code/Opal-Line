@@ -39,6 +39,8 @@ function BackupRestoreContent() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [cleanupBusy, setCleanupBusy] = useState(false)
   const [notifBusy, setNotifBusy] = useState<string | null>(null)
+  const [autoStatus, setAutoStatus] = useState<{ enabled: boolean; scheduleLabel: string; nextRunAt: string; lastBackup: { fileName: string; exportedAt: string | null; sizeBytes: number } | null; backupCount: number } | null>(null)
+  const [everythingBusy, setEverythingBusy] = useState(false)
 
   const reloadHistory = useCallback(() => {
     backupApi.getHistory().then(setHistory).catch(() => setHistory([])).finally(() => setHistoryLoading(false))
@@ -50,6 +52,7 @@ function BackupRestoreContent() {
 
   useEffect(() => {
     backupApi.getScopes().then(setScopes).catch(() => {})
+    backupApi.getAutoBackupStatus().then(setAutoStatus).catch(() => setAutoStatus(null))
     reloadHistory()
     reloadFiles()
   }, [reloadHistory, reloadFiles])
@@ -77,6 +80,18 @@ function BackupRestoreContent() {
     const safety = result.safetyBackup ? ' Safety backup created.' : ''
     showMsg(true, `${label}: restored ${result.restored ?? 0} records across ${result.tables ?? 0} tables at ${formatDateTime(result.restoredAt ?? new Date())}.${silverNote}${syncNote}${safety}`)
     reloadHistory(); reloadFiles()
+  }
+
+  const runBackupEverything = async (encrypted = false) => {
+    setEverythingBusy(true); setMessage(null)
+    try {
+      const result = encrypted ? await backupApi.backupEverythingEncrypted() : await backupApi.backupEverything()
+      const at = formatDateTime(result.exportedAt ?? new Date())
+      const fileNote = result.fileName ? ` saved as ${result.fileName}.` : '.'
+      showMsg(true, `Full backup exported at ${at}${fileNote}`)
+      reloadHistory(); reloadFiles()
+    } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Full backup failed') }
+    finally { setEverythingBusy(false) }
   }
 
   const doRestore = async (fileName: string) => {
@@ -142,6 +157,18 @@ function BackupRestoreContent() {
       <PageHeader
         title="Backup & Restore"
         subtitle="Export, validate, and restore data backups."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => void runBackupEverything(true)} disabled={everythingBusy || busy !== null}>
+              {everythingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+              Full Backup (Encrypted)
+            </Button>
+            <Button onClick={() => void runBackupEverything(false)} disabled={everythingBusy || busy !== null}>
+              {everythingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <DatabaseBackup className="h-4 w-4" />}
+              Backup Everything
+            </Button>
+          </>
+        }
       />
 
       {message && (
@@ -151,11 +178,43 @@ function BackupRestoreContent() {
       )}
 
       <Card>
-        <CardContent className="space-y-1 p-5">
-          <div className="flex items-center gap-2">
-            <DatabaseBackup className="h-4 w-4 text-muted-foreground" />
-            <h3 className="font-semibold text-foreground">Backup & Restore</h3>
+        <CardContent className="space-y-3 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <DatabaseBackup className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-semibold text-foreground">Scheduled Backup Status</h3>
+            </div>
+            <Badge variant={autoStatus?.enabled ? 'success' : 'warning'}>
+              {autoStatus?.enabled ? 'Active' : 'Unknown'}
+            </Badge>
           </div>
+          {autoStatus ? (
+            <div className="grid gap-3 text-sm sm:grid-cols-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Schedule</p>
+                <p className="font-medium">{autoStatus.scheduleLabel}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Next run</p>
+                <p className="font-medium">{formatDateTime(autoStatus.nextRunAt)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Auto backups stored</p>
+                <p className="font-medium">{autoStatus.backupCount} file{autoStatus.backupCount === 1 ? '' : 's'} (keeps last 15)</p>
+              </div>
+              {autoStatus.lastBackup && (
+                <div className="sm:col-span-3">
+                  <p className="text-xs text-muted-foreground">Most recent auto backup</p>
+                  <p className="font-mono text-[12px]">{autoStatus.lastBackup.fileName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDateTime(autoStatus.lastBackup.exportedAt ?? '')} · {(autoStatus.lastBackup.sizeBytes / 1024).toFixed(0)} KB
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Auto backup runs daily at 7:00 PM IST and keeps the last 15 files.</p>
+          )}
           <p className="text-sm text-muted-foreground">
             Export data backups (plain or encrypted) stored on the server, validate and dry-run before restoring, or restore from a previously saved backup. Restoring replaces matching records; records not present in the backup are untouched.
           </p>

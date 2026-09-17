@@ -248,6 +248,36 @@ export const orderEvents = pgTable('order_events', {
   createdIdx: index('order_events_created_idx').on(table.createdAt),
 }))
 
+export const shipments = pgTable('shipments', {
+  id: text('id').primaryKey(),
+  orderId: text('order_id').notNull(),
+  orderRef: text('order_ref'),
+  customer: text('customer'),
+  courier: text('courier'),
+  trackingNumber: text('tracking_number'),
+  status: text('status').notNull().default('pending'),
+  dispatchedAt: ts('dispatched_at'),
+  expectedDelivery: date('expected_delivery'),
+  deliveredAt: ts('delivered_at'),
+  notes: text('notes'),
+  createdAt: ts('created_at'),
+}, (table) => ({
+  orderIdIdx: index('shipments_order_id_idx').on(table.orderId),
+}))
+
+export const notificationLog = pgTable('notification_log', {
+  id: text('id').primaryKey(),
+  kind: text('kind').notNull(),
+  channel: text('channel').notNull(),
+  recipient: text('recipient'),
+  ref: text('ref'),
+  status: text('status').notNull(),
+  error: text('error'),
+  createdAt: ts('created_at'),
+}, (table) => ({
+  createdIdx: index('notification_log_created_idx').on(table.createdAt),
+}))
+
 export const purchaseReturns = pgTable('purchase_returns', {
   id: text('id').primaryKey(),
   number: text('number').notNull().unique(),

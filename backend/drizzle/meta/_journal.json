@@ -50,6 +50,13 @@
       "when": 1788767403179,
       "tag": "0006_order_events",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788855000000,
+      "tag": "0007_shipments_notif_log",
+      "breakpoints": true
     }
   ]
 }

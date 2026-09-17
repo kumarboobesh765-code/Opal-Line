@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises'
+import { mkdir, writeFile, readdir, readFile, stat } from 'node:fs/promises'
 import { unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { eq, gte, isNotNull, lte, ne, sql, and } from 'drizzle-orm'
@@ -235,6 +235,52 @@ export function startAutoBackup(): void {
   if (timer) return
   schedule()
   logger.info({ next: istFileStamp(new Date(Date.now() + msUntilNextRun())), timezone: IST_TIMEZONE, keepLast: KEEP_BACKUPS }, 'Auto backup scheduled (daily 7:00 PM)')
+}
+
+/** Status for the Backup page card: last auto backup file + next scheduled run. */
+export async function getAutoBackupStatus(): Promise<{
+  enabled: boolean
+  scheduleLabel: string
+  nextRunAt: string
+  lastBackup: { fileName: string; exportedAt: string | null; sizeBytes: number } | null
+  backupCount: number
+}> {
+  const nextRun = new Date()
+  nextRun.setHours(AUTO_BACKUP_HOUR, AUTO_BACKUP_MINUTE, 0, 0)
+  if (nextRun.getTime() <= Date.now()) nextRun.setDate(nextRun.getDate() + 1)
+
+  let lastBackup: { fileName: string; exportedAt: string | null; sizeBytes: number } | null = null
+  let backupCount = 0
+  try {
+    const dir = autoBackupDirectory()
+    const names = (await readdir(dir)).filter((n) => n.endsWith('.json'))
+    backupCount = names.length
+    const files: Array<{ fileName: string; exportedAt: string | null; sizeBytes: number }> = []
+    for (const name of names) {
+      try {
+        const st = await stat(path.join(dir, name))
+        let exportedAt: string | null = null
+        try {
+          const parsed = JSON.parse(await readFile(path.join(dir, name), 'utf8'))
+          const meta = parsed._backup as { exportedAt?: string } | undefined
+          exportedAt = meta?.exportedAt ?? null
+        } catch {
+          exportedAt = null
+        }
+        files.push({ fileName: name, exportedAt: exportedAt ?? st.mtime.toISOString(), sizeBytes: st.size })
+      } catch { /* skip unreadable files */ }
+    }
+    files.sort((a, b) => (b.exportedAt ?? '').localeCompare(a.exportedAt ?? ''))
+    lastBackup = files[0] ?? null
+  } catch { /* directory missing → no backups yet */ }
+
+  return {
+    enabled: timer !== null,
+    scheduleLabel: `Daily at ${String(AUTO_BACKUP_HOUR).padStart(2, '0')}:${String(AUTO_BACKUP_MINUTE).padStart(2, '0')} IST`,
+    nextRunAt: nextRun.toISOString(),
+    lastBackup,
+    backupCount,
+  }
 }
 
 export function stopAutoBackup(): void {

@@ -1,5 +1,6 @@
 import { db, schema } from './db/client'
 import { eq, sql, desc } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
 import { logger } from './logger'
 import { sendEmail } from './notifications'
 import { sendWhatsAppMessage, isWhatsAppConfigured } from './whatsapp'
@@ -62,6 +63,25 @@ function fmtAmount(v: number | string | null | undefined): string {
   return Number.isFinite(n) ? n.toLocaleString('en-IN') : '0'
 }
 
+/** Persist every send attempt so admins can audit / resend later. */
+async function logNotification(entry: { kind: string; channel: 'email' | 'whatsapp'; recipient: string | null; ref: string; ok: boolean; error?: string }): Promise<void> {
+  if (!db) return
+  try {
+    await db.insert(schema.notificationLog).values({
+      id: randomUUID(),
+      kind: entry.kind,
+      channel: entry.channel,
+      recipient: entry.recipient,
+      ref: entry.ref,
+      status: entry.ok ? 'sent' : 'failed',
+      error: entry.error ?? null,
+      createdAt: new Date().toISOString(),
+    })
+  } catch {
+    // logging must never throw
+  }
+}
+
 /** Read per-type notification toggles from settings (default ON). */
 async function prefsEnabled(keys: Array<'orderFulfilledEmail' | 'orderFulfilledWhatsapp' | 'returnProcessedEmail' | 'returnProcessedWhatsapp'>): Promise<{ email: boolean; whatsapp: boolean }> {
   const out = { email: true, whatsapp: true }
@@ -102,14 +122,21 @@ export async function notifyOrderFulfilled(order: OrderLike & { trackingId?: str
       ${trackingUrl ? `<p><a href="${trackingUrl}">Track your shipment</a></p>` : ''}
       <p style="color:#64748b;font-size:13px">Thank you for shopping with Opal Line.</p>
     </div>`
-    if (prefs.email && email) await sendEmail({ to: email, subject, html })
+    let emailOk = false
+    let waOk = false
+    if (prefs.email && email) {
+      emailOk = await sendEmail({ to: email, subject, html })
+      await logNotification({ kind: 'order_fulfilled', channel: 'email', recipient: email, ref, ok: emailOk, error: emailOk ? undefined : 'send failed' })
+    }
     if (prefs.whatsapp && phone && isWhatsAppConfigured()) {
       const trackSuffix = order.trackingId
         ? `\nTrack: ${trackingUrl}`
         : ''
-      await sendWhatsAppMessage(phone, `Good news, ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been fulfilled and is on its way.${order.trackingId ? `\nTracking: ${order.trackingId}${order.carrier ? ` (${order.carrier})` : ''}${trackSuffix}` : ''}\n\n— Opal Line`)
+      const wa = await sendWhatsAppMessage(phone, `Good news, ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been fulfilled and is on its way.${order.trackingId ? `\nTracking: ${order.trackingId}${order.carrier ? ` (${order.carrier})` : ''}${trackSuffix}` : ''}\n\n— Opal Line`)
+      waOk = wa !== null
+      await logNotification({ kind: 'order_fulfilled', channel: 'whatsapp', recipient: phone, ref, ok: waOk, error: waOk ? undefined : 'API send failed' })
     }
-    logger.info({ ref, emailed: Boolean(email && prefs.email), whatsapped: Boolean(phone && prefs.whatsapp) }, 'Order fulfilled notification processed')
+    logger.info({ ref, emailed: emailOk, whatsapped: waOk }, 'Order fulfilled notification processed')
   } catch (err) {
     logger.warn({ err }, 'notifyOrderFulfilled failed (non-fatal)')
   }
@@ -140,9 +167,13 @@ export async function notifyReturnProcessed(opts: {
       </ul>
       <p style="color:#64748b;font-size:13px">If you have any questions, just reply to this email.</p>
     </div>`
-    if (prefs.email && email) await sendEmail({ to: email, subject, html })
+    if (prefs.email && email) {
+      const ok = await sendEmail({ to: email, subject, html })
+      await logNotification({ kind: 'return_processed', channel: 'email', recipient: email, ref: opts.invoiceNumber, ok, error: ok ? undefined : 'send failed' })
+    }
     if (prefs.whatsapp && phone && isWhatsAppConfigured()) {
-      await sendWhatsAppMessage(phone, `Return processed for invoice ${opts.invoiceNumber}: ₹${opts.amount.toLocaleString('en-IN')} credited${opts.creditNoteNumber ? ` (Credit note ${opts.creditNoteNumber})` : ''}. — Opal Line`)
+      const wa = await sendWhatsAppMessage(phone, `Return processed for invoice ${opts.invoiceNumber}: ₹${opts.amount.toLocaleString('en-IN')} credited${opts.creditNoteNumber ? ` (Credit note ${opts.creditNoteNumber})` : ''}. — Opal Line`)
+      await logNotification({ kind: 'return_processed', channel: 'whatsapp', recipient: phone, ref: opts.invoiceNumber, ok: wa !== null, error: wa === null ? 'API send failed' : undefined })
     }
     logger.info({ invoice: opts.invoiceNumber, emailed: Boolean(email && prefs.email), whatsapped: Boolean(phone && prefs.whatsapp) }, 'Return notification processed')
   } catch (err) {

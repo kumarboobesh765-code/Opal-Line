@@ -577,3 +577,29 @@ export interface ReportDefinition {
   category: string
   icon: string
 }
+
+export interface Shipment {
+  id: string
+  orderId: string
+  orderRef: string | null
+  customer: string | null
+  courier: string | null
+  trackingNumber: string | null
+  status: string
+  dispatchedAt: string | null
+  expectedDelivery: string | null
+  deliveredAt: string | null
+  notes: string | null
+  createdAt: string | null
+}
+
+export interface NotificationLogEntry {
+  id: string
+  kind: string
+  channel: string
+  recipient: string | null
+  ref: string | null
+  status: string
+  error: string | null
+  createdAt: string | null
+}

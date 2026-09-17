@@ -106,6 +106,7 @@ export default function ProductsPage() {
   const [reorderFor, setReorderFor] = useState<Product | null>(null)
   const [reorderQty, setReorderQty] = useState('')
   const [reorderSaving, setReorderSaving] = useState(false)
+  const [duplicates, setDuplicates] = useState<Array<{ sku: string; cnt: number; products: string }>>([])
 
   const load = () => {
     setLoading(true)
@@ -120,6 +121,10 @@ export default function ProductsPage() {
         setError(e instanceof Error ? e.message : 'Could not load products')
         setLoading(false)
       })
+    dbApi
+      .getProductDuplicates()
+      .then((r) => setDuplicates(r.data))
+      .catch(() => setDuplicates([]))
   }
 
   useEffect(load, [])
@@ -340,6 +345,9 @@ export default function ProductsPage() {
             <Button variant="outline" size="sm" onClick={() => setBulkMode('images')}>
               <Images className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Bulk Images</span>
             </Button>
+            <Button variant="outline" size="sm" onClick={() => backupApi.downloadCatalogPdf()}>
+              <Download className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Download Catalog</span>
+            </Button>
             {selectedProducts.length > 0 && (
               <Button variant="outline" size="sm" onClick={() => backupApi.downloadAllLabels({ ids: selectedProducts.map((p) => p.id) })}>
                 <Tags className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Print Labels ({selectedProducts.length})</span>
@@ -357,6 +365,26 @@ export default function ProductsPage() {
           </div>
         }
       />
+
+      {duplicates.length > 0 && (
+        <Card>
+          <CardContent className="flex flex-col gap-2 border border-amber-300 bg-amber-50 p-4 dark:border-amber-500/40 dark:bg-amber-950/30">
+            <div className="flex items-center gap-2">
+              <Search className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <h3 className="font-semibold text-foreground">Duplicate SKUs detected ({duplicates.length})</h3>
+            </div>
+            <ul className="space-y-1 text-sm text-muted-foreground">
+              {duplicates.slice(0, 5).map((d) => (
+                <li key={d.sku}>
+                  <span className="font-mono font-medium text-foreground">{d.sku}</span> × {d.cnt} — {d.products}
+                </li>
+              ))}
+              {duplicates.length > 5 && <li>…and {duplicates.length - 5} more</li>}
+            </ul>
+            <p className="text-xs text-muted-foreground">Duplicate SKUs cause inventory sync and barcode conflicts. Rename all but one.</p>
+          </CardContent>
+        </Card>
+      )}
 
       <ProductDialog
         open={addOpen}

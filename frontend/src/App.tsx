@@ -16,6 +16,7 @@ const SalesInvoicesPage = lazy(() => import('@/pages/SalesInvoices'))
 const InvoiceDetailPage = lazy(() => import('@/pages/InvoiceDetail'))
 const SalesOrdersPage = lazy(() => import('@/pages/SalesOrders'))
 const OrderBoardPage = lazy(() => import('@/pages/OrderBoard'))
+const DispatchPage = lazy(() => import('@/pages/Dispatch'))
 const BookingsPage = lazy(() => import('@/pages/Bookings'))
 const CustomersPage = lazy(() => import('@/pages/Customers'))
 const ReturnsPage = lazy(() => import('@/pages/Returns'))
@@ -48,6 +49,7 @@ const SalesAnalysisPage = lazy(() => import('@/pages/SalesAnalysis'))
 const InventoryReportsPage = lazy(() => import('@/pages/InventoryReports'))
 const DuesPage = lazy(() => import('@/pages/Dues'))
 const NotificationSettingsPage = lazy(() => import('@/pages/NotificationSettings'))
+const NotificationLogPage = lazy(() => import('@/pages/NotificationLog'))
 const SupplierDuesPage = lazy(() => import('@/pages/SupplierDues'))
 const UsersPage = lazy(() => import('@/pages/Users'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
@@ -100,7 +102,9 @@ function App() {
             <Route path="/sales/invoices" element={guarded('sales', <SalesInvoicesPage />)} />
             <Route path="/sales/invoices/:id" element={guarded('sales', <InvoiceDetailPage />)} />
             <Route path="/sales/orders" element={guarded('sales', <SalesOrdersPage />)} />
-            <Route path="/sales/pipeline" element={guarded('sales', <OrderBoardPage />)} />            <Route path="/sales/customers" element={guarded('sales', <CustomersPage />)} />
+            <Route path="/sales/pipeline" element={guarded('sales', <OrderBoardPage />)} />
+            <Route path="/sales/dispatch" element={guarded('sales', <DispatchPage />)} />
+            <Route path="/sales/customers" element={guarded('sales', <CustomersPage />)} />
             <Route path="/sales/returns" element={guarded('sales', <ReturnsPage />)} />
             <Route path="/sales/bookings" element={guarded('sales', <BookingsPage />)} />
 
@@ -142,6 +146,7 @@ function App() {
             <Route path="/system/backup" element={guarded('system', <BackupRestorePage />)} />
             <Route path="/system/settings" element={guarded('system', <SettingsPage />)} />
             <Route path="/system/notifications" element={guarded('system', <NotificationSettingsPage />)} />
+            <Route path="/system/notification-log" element={guarded('system', <NotificationLogPage />)} />
             <Route path="/system/audit" element={guarded('system', <AuditLogsPage />)} />
             <Route path="/system/activity" element={guarded('system', <ActivityLogsPage />)} />
 

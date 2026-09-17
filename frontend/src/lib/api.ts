@@ -41,6 +41,8 @@ import type {
   DbStatus,
   Customer360,
   ReorderSuggestion,
+  Shipment,
+  NotificationLogEntry,
 } from '@/types'
 import type {
   ShopifyStatus,
@@ -533,6 +535,15 @@ export const dbApi = {
     return withItems(inv)
   },
   getSalesOrders: () => list<SalesOrder>('/db/sales-orders', PAGED),
+  getShipments: () => request<{ data: Shipment[] }>('/db/shipments'),
+  dispatchShipment: (orderId: string, opts?: { courier?: string; trackingNumber?: string; expectedDelivery?: string; notes?: string }) =>
+    request<{ ok: boolean }>('/db/shipments/dispatch', { method: 'POST', body: JSON.stringify({ orderId, ...opts }) }),
+  confirmDelivery: (shipmentId: string) =>
+    request<{ ok: boolean }>(`/db/shipments/${encodeURIComponent(shipmentId)}/delivered`, { method: 'POST' }),
+  getNotificationLog: () => request<{ data: NotificationLogEntry[] }>('/db/notifications/log'),
+  resendNotification: (id: string) =>
+    request<{ ok: boolean }>('/db/notifications/resend', { method: 'POST', body: JSON.stringify({ id }) }),
+  getProductDuplicates: () => request<{ data: Array<{ sku: string; cnt: number; products: string }> }>('/db/products/duplicates'),
   createInvoiceForOrder: (orderId: string) =>
     request<{ created: boolean; invoiceNumber: string | null }>(`/db/sales-orders/${encodeURIComponent(orderId)}/create-invoice`, {
       method: 'POST',
@@ -700,7 +711,13 @@ export interface BackupDiffResult {
 export const backupApi = {
   getScopes: (): Promise<BackupScopeInfo[]> => request<BackupScopeInfo[]>('/backup/scopes'),
   getHistory: (): Promise<ActivityLogEntry[]> => request<ActivityLogEntry[]>('/backup/history'),
+  getAutoBackupStatus: (): Promise<{ enabled: boolean; scheduleLabel: string; nextRunAt: string; lastBackup: { fileName: string; exportedAt: string | null; sizeBytes: number } | null; backupCount: number }> =>
+    request('/backup/auto-status'),
   getBackupFiles: (): Promise<BackupFileInfo[]> => request<BackupFileInfo[]>('/backup/files'),
+  backupEverything: (): Promise<BackupResult> =>
+    request<BackupResult>('/backup/export?type=full'),
+  backupEverythingEncrypted: (): Promise<BackupResult> =>
+    request<BackupResult>('/backup/export-encrypted?type=full'),
   exportBackup: (type: string): Promise<BackupResult> =>
     request<BackupResult>(`/backup/export?type=${encodeURIComponent(type)}`),
   exportEncrypted: (type: string): Promise<BackupResult> =>
@@ -790,6 +807,9 @@ export const backupApi = {
     if (opts?.showQR === false) params.set('qr', 'false')
     if (opts?.ids && opts.ids.length > 0) params.set('ids', opts.ids.join(','))
     window.open(`${API_BASE}/db/products/labels?${params.toString()}`, '_blank')
+  },
+  downloadCatalogPdf: () => {
+    window.open(`${API_BASE}/db/products/catalog-pdf`, '_blank')
   },
   downloadProductLabels: (productIds: string[], opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) =>
     request<Blob>('/db/products/labels', {
