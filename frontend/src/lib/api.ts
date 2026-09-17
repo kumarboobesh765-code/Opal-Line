@@ -44,8 +44,10 @@ import type {
   Shipment,
   NotificationLogEntry,
 } from '@/types'
+export type { SyncCompareRow } from '@/types/shopify'
 import type {
   ShopifyStatus,
+  SyncCompareRow,
   SyncCustomer,
   SyncInventory,
   SyncOrder,
@@ -279,6 +281,12 @@ export const shopifyApi = {
     request<{ ok: boolean; imported: number; updated: number; errors: string[]; message?: string }>('/shopify/orders/sync', {
       method: 'POST',
     }),
+  refreshOrder: (orderId: string) =>
+    request<{ ok: boolean; updated?: boolean; message?: string }>(`/shopify/orders/${encodeURIComponent(orderId)}/refresh`, { method: 'POST' }),
+  getAutoSyncStatus: () =>
+    request<{ intervalHours: number | 'loading'; enabled: boolean; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null }>('/shopify/products/auto-sync/status'),
+  runAutoSync: () =>
+    request<{ ok: boolean; synced?: number; created?: number; updated?: number; message?: string }>('/shopify/products/auto-sync', { method: 'POST' }),
   syncCustomers: () =>
     request<{ ok: boolean; imported: number; updated: number; errors: string[]; message?: string }>('/shopify/customers/sync', {
       method: 'POST',
@@ -288,6 +296,9 @@ export const shopifyApi = {
       method: 'POST',
     }),
   getProducts: () => request<{ syncedAt: string | null; data: SyncProduct[] }>('/shopify/products'),
+  compareProducts: () => request<{ ok: boolean; rows: SyncCompareRow[]; syncedAt: string | null; error?: string }>('/shopify/products/compare'),
+  pullProduct: (localId: string) =>
+    request<{ ok: boolean; pulled?: { price: number; stock: number; title: string } }>(`/shopify/products/${encodeURIComponent(localId)}/pull`, { method: 'POST' }),
   getCustomers: () => request<{ syncedAt: string | null; data: SyncCustomer[] }>('/shopify/customers'),
   getInventory: () => request<{ syncedAt: string | null; data: SyncInventory[] }>('/shopify/inventory'),
   getPrice: () => request<{ syncedAt: string | null; data: SyncPrice[] }>('/shopify/price'),

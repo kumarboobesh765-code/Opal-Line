@@ -114,6 +114,7 @@ export const navSections: NavSection[] = [
       { title: 'Shopify Dashboard', path: '/shopify/dashboard', icon: Sparkles },
       { title: 'Orders Sync', path: '/shopify/orders', icon: ListOrdered },
       { title: 'Products Sync', path: '/shopify/products', icon: Package },
+      { title: 'Sync Compare', path: '/shopify/compare', icon: ArrowLeftRight },
       { title: 'Inventory Sync', path: '/shopify/inventory', icon: Boxes },
       { title: 'Customers Sync', path: '/shopify/customers', icon: UsersRound },
       { title: 'Price Sync', path: '/shopify/price', icon: Tags },

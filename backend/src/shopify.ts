@@ -2333,3 +2333,82 @@ export async function importShopifyCustomers(): Promise<ShopifyCustomersImportRe
     return { ok: false, imported: 0, updated: 0, errors: [msg], message: 'Shopify customer sync failed' }
   }
 }
+
+/**
+ * Re-fetch a single order from Shopify by its local row id and update the
+ * local copy (customer, value, payment/fulfillment/status, addresses).
+ * Used by the "Refresh from Shopify" action on the Orders page.
+ */
+export async function refreshShopifyOrder(localOrderId: string): Promise<{ ok: boolean; updated?: boolean; message?: string }> {
+  if (!isConfigured()) return { ok: false, message: 'Shopify is not configured' }
+  if (!db) return { ok: false, message: 'Database is not configured' }
+
+  const [local] = await db.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, localOrderId)).limit(1)
+  if (!local) return { ok: false, message: 'Order not found locally' }
+  const orderNumber = String(local.shopifyId ?? '').replace(/^#/, '')
+  if (!orderNumber) return { ok: false, message: 'Order is not linked to Shopify' }
+
+  // Local shopifyId stores the order NAME (e.g. "#1053"), but the REST
+  // single-order endpoint needs the numeric REST id. Look up by name first
+  // (name query requires status=any to include closed/cancelled orders).
+  const matches = await paginate<any>('orders', `status=any&name=${encodeURIComponent(`#${orderNumber}`)}`)
+  const restId = matches[0]?.id
+  if (!restId) return { ok: false, message: `Order #${orderNumber} not found on Shopify` }
+
+  // Single-order REST endpoint returns { order: {...} } — use shopifyRequest
+  // directly (paginate only collects res.json[resource] arrays). apiPath appends
+  // .json itself, so pass the bare resource path.
+  let res: { json: Record<string, unknown> }
+  try {
+    res = await shopifyRequest<Record<string, unknown>>(`orders/${restId}`, '')
+  } catch (err) {
+    const status = (err as { status?: number }).status
+    if (status === 404) return { ok: false, message: `Order #${orderNumber} not found on Shopify` }
+    throw err
+  }
+  const o = (res.json?.order ?? null) as any
+  if (!o || (!o.id && !o.name)) return { ok: false, message: `Order #${orderNumber} not found on Shopify` }
+
+  const safeStr = (v: unknown) => (typeof v === 'string' && v !== 'undefined' && v.trim()) ? v.trim() : ''
+  const custFirstName = safeStr(o.customer?.first_name) || safeStr(o.billing_address?.first_name) || ''
+  const custLastName = safeStr(o.customer?.last_name) || safeStr(o.billing_address?.last_name) || ''
+  const customerName = `${custFirstName} ${custLastName}`.trim() || (safeStr(o.customer?.email) || safeStr(o.billing_address?.email) || 'Guest')
+  const value = Math.round(Number(o.total_price ?? 0) * 100) / 100
+  const items = o.line_items?.reduce((sum: number, li: any) => sum + Number(li.quantity ?? 0), 0) ?? 0
+  const payment = mapImportedPayment(o.financial_status)
+  const fulfillment = mapImportedFulfillment(o.fulfillment_status)
+
+  const addrFrom = (src: any) => {
+    if (!src) return null
+    const addr = {
+      name: `${safeStr(src.first_name)} ${safeStr(src.last_name)}`.trim(),
+      address1: safeStr(src.address1),
+      address2: safeStr(src.address2),
+      city: safeStr(src.city),
+      province: safeStr(src.province),
+      zip: safeStr(src.zip),
+      country: safeStr(src.country),
+      phone: safeStr(src.phone),
+    }
+    return (addr.name || addr.address1 || addr.city || addr.phone) ? addr : null
+  }
+  const billingAddress = addrFrom(o.billing_address)
+  const shippingAddress = addrFrom(o.shipping_address)
+
+  await db
+    .update(schema.salesOrders)
+    .set({
+      ...(customerName && customerName !== 'Guest' ? { customer: customerName } : {}),
+      value,
+      payment,
+      fulfillment,
+      items,
+      billingAddress: billingAddress ?? undefined,
+      shippingAddress: shippingAddress ?? undefined,
+    })
+    .where(eq(schema.salesOrders.id, localOrderId))
+
+  addLog('orders', 'success', 1, `Refreshed order #${orderNumber} from Shopify`)
+  await persistLog({ entity: 'Order', shopifyId: `#${orderNumber}`, direction: 'in', action: 'Order Refreshed', status: 'success' })
+  return { ok: true, updated: true }
+}

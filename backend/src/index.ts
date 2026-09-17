@@ -748,6 +748,58 @@ app.post('/api/v1/shopify/products/sync-db', requirePermission('shopify', 'creat
   }
 })
 
+// Product sync comparison: local DB vs live Shopify catalog (read-only)
+app.get('/api/v1/shopify/products/compare', requirePermission('shopify', 'view'), async (_req, res) => {
+  try {
+    const { compareProductsWithShopify } = await import('./syncCompare')
+    const result = await compareProductsWithShopify()
+    res.status(result.ok ? 200 : 503).json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
+// Force-pull a single product from Shopify into the local DB (by local product id)
+app.post('/api/v1/shopify/products/:id/pull', requirePermission('shopify', 'edit'), async (req, res) => {
+  try {
+    if (!isConfigured()) return res.status(503).json({ error: 'Shopify is not configured' })
+    const localId = String(req.params.id ?? '').trim()
+    const [dbMod, shopifyMod] = await Promise.all([import('./db/client'), import('./shopify')])
+    const dbh = dbMod.db
+    if (!dbh) return res.status(503).json({ error: 'Database is not configured' })
+    const [local] = await dbh.select().from(dbMod.schema.products).where(eq(dbMod.schema.products.id, localId)).limit(1)
+    if (!local) return res.status(404).json({ error: 'Product not found locally' })
+    if (!local.shopifyId) return res.status(400).json({ error: 'Product is not linked to Shopify' })
+
+    await shopifyMod.ensureSynced('products')
+    const shop = shopifyMod.store.products.find((p: { id: number }) => String(p.id) === String(local.shopifyId))
+    if (!shop) return res.status(404).json({ error: 'Product not found on Shopify' })
+
+    const price = Number(shop.price)
+    await dbh.update(dbMod.schema.products).set({
+      sellingPrice: Number.isFinite(price) ? price : local.sellingPrice,
+      stock: Number.isFinite(shop.inventoryQuantity) ? shop.inventoryQuantity : local.stock,
+      name: shop.title || local.name,
+      image: shop.image ?? local.image,
+    }).where(eq(dbMod.schema.products.id, localId))
+
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Synced Products',
+      module: 'shopify',
+      entity: `Product ${local.sku ?? localId}`,
+      details: `Pulled from Shopify: price ₹${price}, stock ${shop.inventoryQuantity}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, pulled: { price, stock: shop.inventoryQuantity, title: shop.title } })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
 app.get('/api/v1/silver/rate', requirePermission('silver-rate', 'view'), async (_req, res) => {
   try {
     const latest = await getLatestSilverRate()
@@ -794,6 +846,49 @@ app.post('/api/v1/shopify/orders/sync', requirePermission('shopify', 'create'), 
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(502).json({ ok: false, imported: 0, updated: 0, errors: [message], message: 'Shopify order sync failed' })
+  }
+})
+
+// Re-fetch a single order from Shopify and update the local copy
+app.post('/api/v1/shopify/orders/:id/refresh', requirePermission('shopify', 'create'), async (req, res) => {
+  try {
+    const { refreshShopifyOrder } = await import('./shopify')
+    const result = await refreshShopifyOrder(String(req.params.id ?? '').trim())
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Imported Shopify Orders',
+      module: 'shopify',
+      entity: `Order ${req.params.id}`,
+      details: result.ok ? 'Order refreshed from Shopify' : `Refresh failed: ${result.message ?? 'unknown error'}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ ok: false, message })
+  }
+})
+
+// Manual trigger for the product auto-sync scheduler
+app.post('/api/v1/shopify/products/auto-sync', requirePermission('shopify', 'create'), async (req, res) => {
+  try {
+    const { runProductAutoSync } = await import('./productAutoSync')
+    const result = await runProductAutoSync()
+    res.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ ok: false, message })
+  }
+})
+
+app.get('/api/v1/shopify/products/auto-sync/status', requirePermission('shopify', 'view'), async (_req, res) => {
+  try {
+    const { getAutoSyncStatus } = await import('./productAutoSync')
+    res.json(getAutoSyncStatus())
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
   }
 })
 
@@ -1196,6 +1291,8 @@ const server = app.listen(config.port, async () => {
   await loadSecretsFromDb()
   // Schedule the daily automated backup (7:00 PM local time).
   startAutoBackup()
+  // Periodic Shopify product pull (interval from settings; 0 = disabled).
+  void import('./productAutoSync').then((m) => m.startProductAutoSync())
   // Daily business summary email (9:00 AM IST).
   startDailySummary()
   // Monthly customer statements (1st, 08:30) and due-date reminders (daily 09:15).

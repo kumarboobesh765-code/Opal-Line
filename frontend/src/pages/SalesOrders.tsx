@@ -250,6 +250,23 @@ export default function SalesOrdersPage() {
     }
   }, [])
 
+  const refreshFromShopify = useCallback(async (o: SalesOrder) => {
+    setInvoiceSavingId(o.id)
+    try {
+      const res = await shopifyApi.refreshOrder(o.id)
+      if (res.ok) {
+        window.alert(`Order ${o.shopifyId ?? ''} refreshed from Shopify.`)
+        dbApi.getSalesOrders().then((r) => setOrders(r)).catch(() => undefined)
+      } else {
+        window.alert(res.message ?? 'Refresh failed')
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Refresh failed')
+    } finally {
+      setInvoiceSavingId(null)
+    }
+  }, [])
+
   const createInvoiceFor = useCallback(
     async (o: SalesOrder) => {
       if (invoiceSavingId) return
@@ -458,6 +475,11 @@ export default function SalesOrdersPage() {
               <DropdownMenuItem onClick={() => viewOnShopify(row.original)}>
                 <ExternalLink className="h-3.5 w-3.5" /> View on Shopify
               </DropdownMenuItem>
+              {row.original.shopifyId && (
+                <DropdownMenuItem disabled={invoiceSavingId === row.original.id} onClick={() => refreshFromShopify(row.original)}>
+                  <RefreshCw className={`h-3.5 w-3.5 ${invoiceSavingId === row.original.id ? 'animate-spin' : ''}`} /> Refresh from Shopify
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => cancelOrder(row.original)}>Cancel Order</DropdownMenuItem>
             </DropdownMenuContent>
@@ -465,7 +487,7 @@ export default function SalesOrdersPage() {
         ),
       },
     ],
-    [navigate, cancelOrder, createInvoiceFor, viewOnShopify, invoiceSavingId, startEdit],
+    [navigate, cancelOrder, createInvoiceFor, viewOnShopify, refreshFromShopify, invoiceSavingId, startEdit],
   )
 
   const openDialog = () => {

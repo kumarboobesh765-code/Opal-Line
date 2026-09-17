@@ -96,3 +96,21 @@ export interface SyncResult {
   results: Record<SyncResource, { ok: boolean; count: number; message?: string }>
   db?: Record<string, string>
 }
+
+export interface SyncCompareRow {
+  localId: string
+  sku: string
+  name: string
+  localPrice: number | null
+  shopifyPrice: number | null
+  priceDelta: number | null
+  localStock: number | null
+  shopifyStock: number | null
+  stockDelta: number | null
+  shopifyId: number | null
+  shopifyStatus: string | null
+  localStatus: string | null
+  localUpdatedAt: string | null
+  shopifyUpdatedAt: string | null
+  state: 'in-sync' | 'price-diff' | 'stock-diff' | 'both-diff' | 'local-only' | 'shopify-only'
+}

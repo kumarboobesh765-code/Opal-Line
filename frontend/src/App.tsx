@@ -34,6 +34,7 @@ const StockRunningPage = lazy(() => import('@/pages/StockRunning'))
 const ShopifyDashboardPage = lazy(() => import('@/pages/ShopifyDashboard'))
 const ShopifyOrdersPage = lazy(() => import('@/pages/ShopifyOrders'))
 const ShopifyProductsPage = lazy(() => import('@/pages/ShopifyProducts'))
+const SyncComparePage = lazy(() => import('@/pages/SyncCompare'))
 const ShopifyInventoryPage = lazy(() => import('@/pages/ShopifyInventory'))
 const ShopifyCustomersPage = lazy(() => import('@/pages/ShopifyCustomers'))
 const ShopifyPricePage = lazy(() => import('@/pages/ShopifyPrice'))
@@ -136,6 +137,7 @@ function App() {
             <Route path="/shopify/dashboard" element={guarded('shopify', <ShopifyDashboardPage />)} />
             <Route path="/shopify/orders" element={guarded('shopify', <ShopifyOrdersPage />)} />
             <Route path="/shopify/products" element={guarded('shopify', <ShopifyProductsPage />)} />
+            <Route path="/shopify/compare" element={guarded('shopify', <SyncComparePage />)} />
             <Route path="/shopify/inventory" element={guarded('shopify', <ShopifyInventoryPage />)} />
             <Route path="/shopify/customers" element={guarded('shopify', <ShopifyCustomersPage />)} />
             <Route path="/shopify/price" element={guarded('shopify', <ShopifyPricePage />)} />
