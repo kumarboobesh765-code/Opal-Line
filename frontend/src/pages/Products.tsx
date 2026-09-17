@@ -1,7 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import {
+  Copy,
   Download,
   ExternalLink,
   FileSpreadsheet,
@@ -10,6 +11,7 @@ import {
   MoreHorizontal,
   Package,
   PackagePlus,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -18,6 +20,7 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -88,7 +91,6 @@ const productTints: Record<string, { bg: string; text: string }> = {
 }
 
 export default function ProductsPage() {
-  const navigate = useNavigate()
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -296,37 +298,83 @@ export default function ProductsPage() {
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" asChild>
+                <Link to={`/inventory/products/${row.original.id}`}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Link>
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem>
-                <Link to={`/inventory/products/${row.original.id}`} className="flex w-full">View / Edit</Link>
-              </DropdownMenuItem>
-              {row.original.shopifyStatus !== 'synced' ? (
-                <DropdownMenuItem onClick={() => pushProducts([row.original.id])}>
-                  Push to Shopify
+              </TooltipTrigger>
+              <TooltipContent>View / Edit</TooltipContent>
+            </Tooltip>
+            {row.original.shopifyStatus === 'synced' && row.original.shopifyId ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" asChild>
+                  <a href={`/inventory/products/${row.original.id}`} onClick={(e) => { e.preventDefault(); window.open(`https://admin.shopify.com/products/${row.original.shopifyId}`, '_blank') }}>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </Button>
+                </TooltipTrigger>
+                <TooltipContent>View on Shopify</TooltipContent>
+              </Tooltip>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" disabled={pushing} onClick={() => pushProducts([row.original.id])}>
+                  <Upload className={cn('h-3.5 w-3.5', pushing && 'animate-pulse')} />
+                </Button>
+                </TooltipTrigger>
+                <TooltipContent>Push to Shopify</TooltipContent>
+              </Tooltip>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" onClick={() => duplicateProduct(row.original)}>
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>Duplicate</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" asChild>
+                <Link to="/inventory/barcode">
+                  <Tags className="h-3.5 w-3.5" />
+                </Link>
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>Print Label</TooltipContent>
+            </Tooltip>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">More actions</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => toggleStatus(row.original)}>
+                  {row.original.status === 'inactive' ? 'Activate' : 'Deactivate'}
                 </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem onClick={() => duplicateProduct(row.original)}>Duplicate</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate('/inventory/barcode')}>Print Label</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => toggleStatus(row.original)}>
-                {row.original.status === 'inactive' ? 'Activate' : 'Deactivate'}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => toggleStatus(row.original)}>
+                  {row.original.status === 'inactive' ? 'Activate product' : 'Deactivate product'}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],
-    [pushProducts],
+    [pushProducts, pushing, toggleStatus, duplicateProduct],
   )
 
   return (
