@@ -26,29 +26,71 @@ export interface NotificationOptions {
  * Send an email notification. Returns silently if RESEND_API_KEY is not set
  * (graceful degradation — notifications are optional).
  */
-let gmailTransport: import('nodemailer').Transporter | null = null
+let gmailTransport: import('nodemailer').Transporter | null = null // kept for backward compat; port-fallback transports are built per-send
+void gmailTransport
 
 /**
  * Gmail SMTP fallback using the same ORDER_EMAIL_* app-password credentials
  * the order-email ingest already uses. Lets notifications work without a
  * separate Resend account.
+ *
+ * Networks often block SMTP port 465, so we resolve the host to IPv4
+ * ourselves (IPv6 is frequently unreachable) and automatically fall back
+ * from 465 (implicit TLS) to 587 (STARTTLS) when the connection times out.
  */
-function getGmailTransport(): import('nodemailer').Transporter | null {
+let resolvedHost: string | null = null
+
+async function resolveIpv4(host: string): Promise<string> {
+  if (resolvedHost) return resolvedHost
+  try {
+    const dns = require('node:dns') as typeof import('node:dns')
+    const addrs = await dns.promises.resolve4(host)
+    if (addrs?.length) resolvedHost = addrs[0]
+  } catch { /* fall back to hostname */ }
+  return resolvedHost ?? host
+}
+
+async function buildGmailTransport(port: number): Promise<import('nodemailer').Transporter | null> {
   const user = process.env.ORDER_EMAIL_ADDRESS?.trim()
   const passEnc = process.env.ORDER_EMAIL_PASSWORD?.trim()
   if (!user || !passEnc) return null
-  if (!gmailTransport) {
-    // Lazy import keeps nodemailer optional at module-load time
-    const nodemailer = require('nodemailer') as typeof import('nodemailer')
-    const { decryptSecret } = require('./lib/crypto') as typeof import('./lib/crypto')
-    gmailTransport = nodemailer.createTransport({
-      host: process.env.NOTIFICATION_SMTP_HOST?.trim() || 'smtp.gmail.com',
-      port: Number(process.env.NOTIFICATION_SMTP_PORT ?? 465),
-      secure: true,
-      auth: { user, pass: decryptSecret(passEnc) },
-    })
+  const nodemailer = require('nodemailer') as typeof import('nodemailer')
+  const { decryptSecret } = require('./lib/crypto') as typeof import('./lib/crypto')
+  const host = process.env.NOTIFICATION_SMTP_HOST?.trim() || 'smtp.gmail.com'
+  const connectHost = await resolveIpv4(host)
+  return nodemailer.createTransport({
+    host: connectHost,
+    port,
+    secure: port === 465,
+    tls: { servername: host },
+    connectionTimeout: 10_000,
+    auth: { user, pass: decryptSecret(passEnc) },
+  })
+}
+
+async function sendViaGmail(opts: NotificationOptions): Promise<boolean> {
+  const ports = [Number(process.env.NOTIFICATION_SMTP_PORT ?? 465), 587].filter((p, i, a) => a.indexOf(p) === i)
+  for (const port of ports) {
+    const transport = await buildGmailTransport(port)
+    if (!transport) return false
+    try {
+      const user = process.env.ORDER_EMAIL_ADDRESS!.trim()
+      await transport.sendMail({
+        from: process.env.EMAIL_FROM || `Opal Line ERP <${user}>`,
+        to: opts.to,
+        subject: opts.subject,
+        html: opts.html,
+        attachments: opts.attachments?.map((a) => ({ filename: a.filename, content: a.content })),
+      })
+      return true
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? ''
+      logger.warn({ err: { code, message: err instanceof Error ? err.message : 'unknown' }, port }, 'Gmail SMTP attempt failed on this port')
+      // Try the next port on connect-level failures only
+      if (!['ESOCKET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH'].includes(code)) return false
+    }
   }
-  return gmailTransport
+  return false
 }
 
 export async function sendEmail(opts: NotificationOptions): Promise<boolean> {
@@ -74,25 +116,7 @@ export async function sendEmail(opts: NotificationOptions): Promise<boolean> {
     }
   }
   // Fallback: Gmail SMTP with the ingest app password
-  const transport = getGmailTransport()
-  if (!transport) {
-    logger.debug('Email skipped — no RESEND_API_KEY and no ORDER_EMAIL credentials')
-    return false
-  }
-  try {
-    const user = process.env.ORDER_EMAIL_ADDRESS!.trim()
-    await transport.sendMail({
-      from: process.env.EMAIL_FROM || `Opal Line ERP <${user}>`,
-      to: opts.to,
-      subject: opts.subject,
-      html: opts.html,
-      attachments: opts.attachments?.map((a) => ({ filename: a.filename, content: a.content })),
-    })
-    return true
-  } catch (err) {
-    logger.error({ err }, 'Gmail SMTP send failed')
-    return false
-  }
+  return sendViaGmail(opts)
 }
 
 // ─── Pre-built notification templates ───────────────────────────────

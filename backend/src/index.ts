@@ -291,7 +291,10 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
             .returning({ id: schema.salesOrders.id })
           if (local) {
             const { insertOrderEvent } = await import('./routes/db')
+            const { notifyOrderFulfilled } = await import('./statusNotifications')
             await insertOrderEvent(local.id, 'Fulfilled', `Order marked fulfilled via Shopify webhook (${shopifyId})`, 'shopify')
+            const [row] = await db.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, local.id)).limit(1)
+            if (row) void notifyOrderFulfilled(row)
             logger.info({ topic, shopifyId }, 'Webhook: order marked fulfilled locally')
           } else {
             logger.warn({ topic, shopifyId }, 'Webhook: orders/fulfilled matched no local order')

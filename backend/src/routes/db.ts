@@ -710,6 +710,7 @@ dbRouter.post('/invoices/:id/return', requirePermission('sales', 'create'), asyn
 
     recordCrud('sales-returns', 'Created', req, ret)
     if (invoice.id) await insertOrderEvent(invoice.id, 'Return Processed', `Credit note ${number} — ${returnItems.length} item(s), ₹${amount.toLocaleString('en-IN')}${restock ? ', restocked' : ''}`, actorFromRequest(req).userId ?? 'system')
+    void import('../statusNotifications').then((m) => m.notifyReturnProcessed({ customer: invoice.customer, invoiceNumber: invoice.number, amount, restocked: restock, creditNoteNumber: number })).catch(() => undefined)
     res.json({ return: ret, creditNoteNumber: number, amount, restocked: restock })
   } catch (err) {
     logger.error({ err }, 'invoice return failed')
@@ -904,6 +905,7 @@ dbRouter.post('/sales-orders/bulk-status', requirePermission('sales', 'edit'), a
       if (row) {
         updated++
         await insertOrderEvent(id, 'Status Change', `Bulk status moved to ${status}`, actorFromRequest(req).userId ?? 'system')
+        if (status === 'fulfilled') void import('../statusNotifications').then((m) => m.notifyOrderFulfilled(row)).catch(() => undefined)
       }
     }
     recordCrud('sales-orders', 'Updated', req, { bulkStatus: status, updated })
