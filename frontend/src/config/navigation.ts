@@ -85,6 +85,7 @@ export const navSections: NavSection[] = [
       { title: 'Stock Transfer', path: '/inventory/transfers', icon: ArrowLeftRight },
       { title: 'Barcode / Labels', path: '/inventory/barcode', icon: Barcode },
       { title: 'Low Stock Alert', path: '/inventory/low-stock', icon: PackageX },
+      { title: 'Scan Stock Count', path: '/inventory/stock-count', icon: Barcode },
       { title: 'Stock Running', path: '/inventory/stock-running', icon: TrendingUp },
     ],
   },

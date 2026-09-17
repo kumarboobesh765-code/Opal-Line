@@ -4,6 +4,7 @@ import {
   Barcode,
   FileText,
   Gem,
+  LayoutDashboard,
   Package,
   Receipt,
   Search,
@@ -23,6 +24,7 @@ import {
 import { cn } from '@/lib/utils'
 import { dbApi, type SearchResults } from '@/lib/api'
 import { useAuth } from '@/auth/auth-context'
+import { navSections } from '@/config/navigation'
 
 interface SearchResultGroup {
   label: string
@@ -84,7 +86,27 @@ export function SearchCommand({ open, onOpenChange }: SearchCommandProps) {
     const q = query.trim().toLowerCase()
     if (!q || !results) return []
     const match = (...terms: string[]) => terms.some((t) => t?.toLowerCase().includes(q))
+
+    // Jump-to-page group: search all navigation sections by title
+    const pageGroup: SearchResultGroup = {
+      label: 'Pages',
+      icon: LayoutDashboard,
+      module: 'dashboard',
+      path: (id: string) => id,
+      results: navSections
+        .flatMap((section) => section.items)
+        .filter((item) => match(item.title))
+        .slice(0, 6)
+        .map((item) => ({
+          id: item.path,
+          label: item.title,
+          sublabel: 'Jump to page',
+          icon: item.icon,
+        })),
+    }
+
     return [
+      pageGroup,
       {
         label: 'Products',
         icon: Gem,

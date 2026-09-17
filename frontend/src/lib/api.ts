@@ -418,6 +418,8 @@ export const dbApi = {
     return request(`/db/dashboard/sales-overview?${q.toString()}`)
   },
   getTopProducts: (): Promise<TopProduct[]> => request('/db/dashboard/top-products'),
+  getProductMargins: (months = 12): Promise<{ months: number; rows: Array<{ sku: string; name: string; qty: number; revenue: number; cost: number; profit: number; marginPct: number }>; totals: { revenue: number; cost: number; profit: number; marginPct: number } }> =>
+    request(`/db/reports/product-margins?months=${months}`),
   getProfitAnalytics: (months = 12): Promise<ProfitAnalytics> =>
     request(`/db/dashboard/profit?months=${months}`),
   getPaymentStatus: (): Promise<{ segments: PaymentStatusSegment[]; total: number }> =>
@@ -555,6 +557,15 @@ export const dbApi = {
   resendNotification: (id: string) =>
     request<{ ok: boolean }>('/db/notifications/resend', { method: 'POST', body: JSON.stringify({ id }) }),
   getProductDuplicates: () => request<{ data: Array<{ sku: string; cnt: number; products: string }> }>('/db/products/duplicates'),
+  scanProduct: (code: string) =>
+    request<{ data: { id: string; name: string; sku: string; barcode: string | null; stock: number | null; category: string | null } }>(
+      `/db/products/scan?code=${encodeURIComponent(code)}`,
+    ),
+  applyStockCount: (counts: Array<{ id: string; counted: number }>, mode: 'set' | 'adjust') =>
+    request<{ ok: boolean; applied: number; mode: string; errors: string[] }>('/db/inventory/stock-count', {
+      method: 'POST',
+      body: JSON.stringify({ counts, mode }),
+    }),
   createInvoiceForOrder: (orderId: string) =>
     request<{ created: boolean; invoiceNumber: string | null }>(`/db/sales-orders/${encodeURIComponent(orderId)}/create-invoice`, {
       method: 'POST',

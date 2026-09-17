@@ -612,6 +612,70 @@ dashboardRouter.get('/dashboard/stock-categories', async (_req, res) => {
   }
 })
 
+// Product-level profit margins: revenue vs metal-value cost per SKU, with margin %
+dashboardRouter.get('/reports/product-margins', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const months = Math.min(24, Math.max(1, Number(req.query.months) || 12))
+    const cutoff = new Date()
+    cutoff.setMonth(cutoff.getMonth() - months)
+
+    const itemRows = await db!
+      .select({
+        sku: schema.salesInvoiceItems.sku,
+        product: schema.salesInvoiceItems.product,
+        qty: schema.salesInvoiceItems.qty,
+        amount: schema.salesInvoiceItems.amount,
+        weight: schema.salesInvoiceItems.weight,
+        silverRate: schema.salesInvoiceItems.silverRate,
+        makingCharge: schema.salesInvoiceItems.makingCharge,
+        invoiceDate: schema.salesInvoices.date,
+      })
+      .from(schema.salesInvoiceItems)
+      .innerJoin(schema.salesInvoices, eq(schema.salesInvoiceItems.invoiceId, schema.salesInvoices.id))
+
+    const bySku = new Map<string, { name: string; qty: number; revenue: number; cost: number }>()
+    for (const it of itemRows) {
+      const key = String(it.sku ?? it.product ?? '')
+      if (!key) continue
+      if (it.invoiceDate && new Date(String(it.invoiceDate)) < cutoff) continue
+      const entry = bySku.get(key) ?? { name: String(it.product ?? key), qty: 0, revenue: 0, cost: 0 }
+      entry.qty += num(it.qty)
+      entry.revenue += num(it.amount)
+      // Cost basis = metal value (weight × rate); making charge is revenue-generating labour
+      entry.cost += num(it.weight) * num(it.silverRate)
+      bySku.set(key, entry)
+    }
+
+    const rows = [...bySku.entries()]
+      .map(([sku, v]) => ({
+        sku,
+        name: v.name,
+        qty: v.qty,
+        revenue: round2(v.revenue),
+        cost: round2(v.cost),
+        profit: round2(v.revenue - v.cost),
+        marginPct: v.revenue > 0 ? round2(((v.revenue - v.cost) / v.revenue) * 100) : 0,
+      }))
+      .sort((a, b) => b.profit - a.profit)
+
+    const totalRevenue = round2(rows.reduce((a, r) => a + r.revenue, 0))
+    const totalProfit = round2(rows.reduce((a, r) => a + r.profit, 0))
+    res.json({
+      months,
+      rows,
+      totals: {
+        revenue: totalRevenue,
+        cost: round2(rows.reduce((a, r) => a + r.cost, 0)),
+        profit: totalProfit,
+        marginPct: totalRevenue > 0 ? round2((totalProfit / totalRevenue) * 100) : 0,
+      },
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 dashboardRouter.get('/reports/gst', async (req, res) => {
   if (!requireDb(res)) return
   try {

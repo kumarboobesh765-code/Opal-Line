@@ -4,17 +4,43 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { SalesOverviewChart } from '@/components/charts/sales-overview-chart'
 import { dbApi } from '@/lib/api'
 import { exportCsv } from '@/lib/export'
 import type { SalesOverviewPoint, TopProduct } from '@/types'
 import { formatCurrency } from '@/lib/format'
 
+interface MarginRow {
+  sku: string
+  name: string
+  qty: number
+  revenue: number
+  cost: number
+  profit: number
+  marginPct: number
+}
+
+interface MarginData {
+  months: number
+  rows: MarginRow[]
+  totals: { revenue: number; cost: number; profit: number; marginPct: number }
+}
+
 export default function SalesAnalysisPage() {
   const [data, setData] = useState<SalesOverviewPoint[]>([])
   const [top, setTop] = useState<TopProduct[]>([])
   const [repeatRate, setRepeatRate] = useState<number | null>(null)
   const [period, setPeriod] = useState('week')
+  const [margins, setMargins] = useState<MarginData | null>(null)
 
   useEffect(() => {
     dbApi.getSalesOverview(period).then(setData).catch(() => {})
@@ -22,6 +48,10 @@ export default function SalesAnalysisPage() {
 
   useEffect(() => {
     dbApi.getTopProducts().then(setTop).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    dbApi.getProductMargins(12).then(setMargins).catch(() => setMargins(null))
   }, [])
 
   useEffect(() => {
@@ -123,6 +153,63 @@ export default function SalesAnalysisPage() {
               )
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-semibold text-foreground">Product Profit Margins</h3>
+              <p className="text-xs text-muted-foreground">Last 12 months · revenue vs metal-value cost per SKU</p>
+            </div>
+            {margins && (
+              <div className="flex items-center gap-3 text-sm">
+                <Badge variant={margins.totals.marginPct >= 30 ? 'success' : margins.totals.marginPct >= 15 ? 'warning' : 'danger'}>
+                  {margins.totals.marginPct}% avg margin
+                </Badge>
+                <span className="text-muted-foreground">Profit: <strong className="text-foreground">{formatCurrency(margins.totals.profit)}</strong></span>
+              </div>
+            )}
+          </div>
+          {margins && margins.rows.length > 0 ? (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Product</TableHead>
+                    <TableHead className="text-right">Qty sold</TableHead>
+                    <TableHead className="text-right">Revenue</TableHead>
+                    <TableHead className="text-right">Metal cost</TableHead>
+                    <TableHead className="text-right">Profit</TableHead>
+                    <TableHead className="text-right">Margin</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {margins.rows.slice(0, 20).map((r) => (
+                    <TableRow key={r.sku}>
+                      <TableCell className="font-mono text-xs">{r.sku}</TableCell>
+                      <TableCell className="max-w-[220px] truncate text-sm">{r.name}</TableCell>
+                      <TableCell className="text-right text-sm">{r.qty}</TableCell>
+                      <TableCell className="text-right text-sm">{formatCurrency(r.revenue)}</TableCell>
+                      <TableCell className="text-right text-sm text-muted-foreground">{formatCurrency(r.cost)}</TableCell>
+                      <TableCell className={`text-right text-sm font-medium ${r.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {formatCurrency(r.profit)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Badge variant={r.marginPct >= 30 ? 'success' : r.marginPct >= 15 ? 'warning' : 'danger'}>
+                          {r.marginPct}%
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="py-6 text-center text-sm text-muted-foreground">No sales data for margin analysis yet.</p>
+          )}
         </CardContent>
       </Card>
     </div>

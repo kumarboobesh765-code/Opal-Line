@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Router, type Request, type Response } from 'express'
 import argon2 from 'argon2'
-import { desc, eq, ilike, inArray, sql } from 'drizzle-orm'
+import { desc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
 import { requirePermission } from '../rbac'
 import { actorFromRequest, moduleLabel, recordActivity } from '../activity'
@@ -206,6 +206,68 @@ dbRouter.post('/products/labels', requirePermission('inventory', 'view'), async 
     res.send(pdf)
   } catch (err) {
     res.status(500).json({ error: 'Label generation failed' })
+  }
+})
+
+// Scan-based stock count: look up a product by barcode or exact SKU (for scanner guns)
+dbRouter.get('/products/scan', requirePermission('inventory', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const code = String(req.query.code ?? '').trim()
+    if (!code) return res.status(400).json({ error: 'code is required' })
+    const [row] = await db!
+      .select({
+        id: s.products.id,
+        name: s.products.name,
+        sku: s.products.sku,
+        barcode: s.products.barcode,
+        stock: s.products.stock,
+        category: s.products.category,
+      })
+      .from(s.products)
+      .where(or(eq(s.products.barcode, code), eq(s.products.sku, code)))
+      .limit(1)
+    if (!row) return res.status(404).json({ error: 'No product with that barcode/SKU' })
+    res.json({ data: row })
+  } catch (err) {
+    logger.error({ err }, 'product scan lookup failed')
+    res.status(500).json({ error: 'Scan lookup failed' })
+  }
+})
+
+// Bulk stock-count: apply counted quantities for many products at once.
+// body: { counts: [{ id, counted }], mode: 'set' | 'adjust' }
+dbRouter.post('/inventory/stock-count', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const counts = Array.isArray(req.body?.counts) ? req.body.counts : []
+    const mode = req.body?.mode === 'adjust' ? 'adjust' : 'set'
+    if (counts.length === 0) return res.status(400).json({ error: 'counts array is required' })
+    let applied = 0
+    const errors: string[] = []
+    for (const c of counts.slice(0, 500)) {
+      const id = String(c?.id ?? '').trim()
+      const counted = Number(c?.counted)
+      if (!id || !Number.isFinite(counted) || counted < 0) {
+        errors.push(`${id || 'unknown'}: invalid counted value`)
+        continue
+      }
+      try {
+        if (mode === 'set') {
+          await db!.update(s.products).set({ stock: Math.floor(counted) }).where(eq(s.products.id, id))
+        } else {
+          await db!.update(s.products).set({ stock: sql`greatest(0, ${s.products.stock} + ${Math.floor(counted)})` }).where(eq(s.products.id, id))
+        }
+        applied++
+      } catch (err) {
+        errors.push(`${id}: ${err instanceof Error ? err.message : 'update failed'}`)
+      }
+    }
+    recordCrud('products', 'Updated', req, { stockCount: true, applied, mode })
+    res.json({ ok: errors.length === 0, applied, mode, errors })
+  } catch (err) {
+    logger.error({ err }, 'stock count apply failed')
+    res.status(500).json({ error: 'Stock count failed' })
   }
 })
 
