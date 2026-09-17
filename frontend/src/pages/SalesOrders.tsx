@@ -421,7 +421,7 @@ export default function SalesOrdersPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusMeta[row.original.status]
+          const s = statusMeta[row.original.status as OrderStatus] ?? { label: row.original.status || 'Unknown', variant: 'muted' as const }
           return <Badge variant={s.variant} dot>{s.label}</Badge>
         },
       },

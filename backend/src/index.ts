@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser'
 import { randomBytes, randomUUID, createHmac, timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { eq, or, sql } from 'drizzle-orm'
+import { and, eq, ne, or, sql } from 'drizzle-orm'
 import { config, isConfigured, loadSecretsFromDb } from './config'
 import { applyPriceSync, applySilverRate, createShopifyDraftOrder, ensureSynced, getLatestSilverRate, importShopifyOrders, purgeProducts, pushInventoryToShopify, pushProductPriceToShopify, pushProductsToShopify, runSync, store, syncProductsToDb, testShopifyConnection, updateShopifyOrder } from './shopify'
 import type { SyncResource } from './types'
@@ -275,6 +275,30 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
         }
       } else {
         logger.warn({ topic }, 'Webhook: orders/cancelled without an identifiable order')
+      }
+    } else if (topic === 'orders/fulfilled') {
+      // Targeted fulfillment: mark the local order fulfilled immediately and
+      // record it on the order timeline — no full reimport needed.
+      const order = req.body as { id?: number; name?: string } | undefined
+      const orderNumber = order?.name ? String(order.name).replace(/^#/, '') : order?.id != null ? String(order.id) : ''
+      const shopifyId = orderNumber ? `#${orderNumber}` : null
+      if (shopifyId && db) {
+        try {
+          const [local] = await db
+            .update(schema.salesOrders)
+            .set({ status: 'fulfilled' })
+            .where(and(eq(schema.salesOrders.shopifyId, shopifyId), ne(schema.salesOrders.status, 'cancelled')))
+            .returning({ id: schema.salesOrders.id })
+          if (local) {
+            const { insertOrderEvent } = await import('./routes/db')
+            await insertOrderEvent(local.id, 'Fulfilled', `Order marked fulfilled via Shopify webhook (${shopifyId})`, 'shopify')
+            logger.info({ topic, shopifyId }, 'Webhook: order marked fulfilled locally')
+          } else {
+            logger.warn({ topic, shopifyId }, 'Webhook: orders/fulfilled matched no local order')
+          }
+        } catch (err) {
+          logger.error({ topic, shopifyId, err: { message: err instanceof Error ? err.message : 'Unknown error' } }, 'Webhook: fulfilled handling failed')
+        }
       }
     } else if (topic.startsWith('orders/')) {
       // Instant sync: the webhook is the instant signal, the notification email

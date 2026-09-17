@@ -753,6 +753,7 @@ dbRouter.post('/bookings', requirePermission('sales', 'create'), async (req, res
       advancePaid,
     }).returning()
     recordCrud('sales-orders', 'Created', req, row)
+    await insertOrderEvent(row.id, 'Booking Created', `Booking ${internalId} — ${items.reduce((a, it) => a + it.quantity, 0)} item(s), value ₹${value.toLocaleString('en-IN')}, advance ₹${advancePaid.toLocaleString('en-IN')}`, actorFromRequest(req).userId ?? 'system')
     res.json(row)
   } catch (err) {
     logger.error({ err }, 'booking create failed')
@@ -801,7 +802,7 @@ dbRouter.post('/bookings/:id/convert', requirePermission('sales', 'create'), asy
     const { createInvoiceForOrderRow } = await import('../orderEmailIngest')
     const invoiceNumber = await createInvoiceForOrderRow(fresh!)
     if (!invoiceNumber) return res.status(400).json({ error: 'Conversion failed: booking has no convertible line items' })
-    await db!.update(s.salesOrders).set({ invoice: invoiceNumber, status: 'completed' }).where(eq(s.salesOrders.id, order.id))
+    await db!.update(s.salesOrders).set({ invoice: invoiceNumber, status: 'fulfilled' }).where(eq(s.salesOrders.id, order.id))
     if (advancePaid > 0) {
       await db!.insert(s.payments).values({
         id: randomUUID(), ref: order.internalId ?? order.id, invoice: invoiceNumber, customer: order.customer,
@@ -818,7 +819,7 @@ dbRouter.post('/bookings/:id/convert', requirePermission('sales', 'create'), asy
 })
 
 // ─── Order events timeline ───────────────────────────────────────────────────
-async function insertOrderEvent(orderId: string, event: string, details: string, actor?: string | null): Promise<void> {
+export async function insertOrderEvent(orderId: string, event: string, details: string, actor?: string | null): Promise<void> {
   if (!db) return
   try {
     await db.insert(s.orderEvents).values({
