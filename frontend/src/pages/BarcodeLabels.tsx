@@ -27,12 +27,16 @@ export default function BarcodeLabelsPage() {
   const [showWeight, setShowWeight] = useState(true)
   const [showQR, setShowQR] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [duplicates, setDuplicates] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     dbApi.getProducts().then((data) => {
       setProducts(data)
       setLoading(false)
     }).catch(() => setLoading(false))
+    dbApi.getProductDuplicates().then((r) => {
+      setDuplicates(new Set(r.data.map((d) => d.sku.toLowerCase())))
+    }).catch(() => undefined)
   }, [])
 
   const toggleSelect = (id: string) => {
@@ -179,7 +183,12 @@ export default function BarcodeLabelsPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{product.name}</p>
-                      <p className="text-xs text-muted-foreground">{product.sku}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {product.sku}
+                        {product.sku && duplicates.has(product.sku.toLowerCase()) && (
+                          <Badge variant="warning" className="ml-1.5 text-[10px]">Duplicate SKU</Badge>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-semibold text-primary-700">₹{product.sellingPrice.toLocaleString('en-IN')}</p>

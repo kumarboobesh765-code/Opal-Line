@@ -142,6 +142,39 @@ export async function notifyOrderFulfilled(order: OrderLike & { trackingId?: str
   }
 }
 
+/** Notify the customer that their shipment has been delivered. */
+export async function notifyOrderDelivered(order: OrderLike & { trackingId?: string | null; courier?: string | null }): Promise<void> {
+  try {
+    const prefs = await prefsEnabled(['orderFulfilledEmail', 'orderFulfilledWhatsapp'])
+    if (!prefs.email && !prefs.whatsapp) return
+    const ref = orderRef(order)
+    const name = order.customer ?? 'Customer'
+    const { email, phone: custPhone } = await findCustomerContact(order.customer)
+    const phone = custPhone ?? phoneFromAddresses(order)
+    const subject = `Your order ${ref} has been delivered — Opal Line`
+    const html = `<div style="font-family:sans-serif;max-width:520px">
+      <h2 style="margin:0 0 8px">Delivered! 📦</h2>
+      <p>Hi ${name}, your order <strong>${ref}</strong> worth <strong>₹${fmtAmount(order.value)}</strong> has been delivered${order.courier ? ` via ${order.courier}` : ''}.</p>
+      <p>We hope you love your purchase! If anything is not right, just reply to this email within 7 days.</p>
+      <p style="color:#64748b;font-size:13px">Thank you for shopping with Opal Line.</p>
+    </div>`
+    let emailOk = false
+    let waOk = false
+    if (prefs.email && email) {
+      emailOk = await sendEmail({ to: email, subject, html })
+      await logNotification({ kind: 'order_delivered', channel: 'email', recipient: email, ref, ok: emailOk, error: emailOk ? undefined : 'send failed' })
+    }
+    if (prefs.whatsapp && phone && isWhatsAppConfigured()) {
+      const wa = await sendWhatsAppMessage(phone, `Hi ${name}! Your order ${ref} (₹${fmtAmount(order.value)}) has been delivered. We hope you love it! — Opal Line`)
+      waOk = wa !== null
+      await logNotification({ kind: 'order_delivered', channel: 'whatsapp', recipient: phone, ref, ok: waOk, error: waOk ? undefined : 'API send failed' })
+    }
+    logger.info({ ref, emailed: emailOk, whatsapped: waOk }, 'Order delivered notification processed')
+  } catch (err) {
+    logger.warn({ err }, 'notifyOrderDelivered failed (non-fatal)')
+  }
+}
+
 /** Notify the customer that a return has been processed for their invoice. */
 export async function notifyReturnProcessed(opts: {
   customer?: string | null

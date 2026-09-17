@@ -1356,6 +1356,37 @@ backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'
   res.download(filePath, fileName)
 })
 
+// Download all backup files as a single ZIP archive
+backupRouter.get('/files/download-all', requirePermission('system', 'view'), async (_req, res) => {
+  try {
+    const { zipSync, strToU8 } = await import('fflate')
+    const dir = backupDirectory()
+    const names = (await readdir(dir)).filter((n) => n.endsWith('.json'))
+    if (names.length === 0) return res.status(404).json({ error: 'No backup files to download' })
+    const zipEntries: Record<string, Uint8Array> = {}
+    for (const name of names) {
+      try {
+        const buf = await readFile(path.join(dir, name))
+        zipEntries[name] = new Uint8Array(buf)
+      } catch { /* skip unreadable */ }
+    }
+    const zipped = zipSync(zipEntries, { level: 6 })
+    await recordActivity({
+      action: 'Exported Backup',
+      module: 'system',
+      entity: 'backup-archive',
+      details: `Downloaded ZIP of ${Object.keys(zipEntries).length} backup files`,
+      ...actorFromRequest(_req),
+    })
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="opal-line-backups-${new Date().toISOString().slice(0, 10)}.zip"`)
+    res.send(Buffer.from(zipped))
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown error' }, 'Backup ZIP download failed')
+    res.status(500).json({ error: 'Could not create backup archive' })
+  }
+})
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CLEANUP: Prune old backup files (keep last N per scope type)
 // ─────────────────────────────────────────────────────────────────────────────

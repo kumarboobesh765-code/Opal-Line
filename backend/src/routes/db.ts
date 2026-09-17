@@ -1044,6 +1044,13 @@ dbRouter.post('/shipments/:id/delivered', requirePermission('sales', 'edit'), as
     const [ship] = await db!.update(s.shipments).set({ status: 'delivered', deliveredAt: new Date().toISOString() }).where(eq(s.shipments.id, req.params.id)).returning()
     if (!ship) return res.status(404).json({ error: 'Shipment not found' })
     await insertOrderEvent(ship.orderId, 'Delivered', `Delivery confirmed${ship.trackingNumber ? ` (tracking ${ship.trackingNumber})` : ''}`, actorFromRequest(req).userId ?? 'system')
+    // Customer notification (fire-and-forget)
+    void import('../statusNotifications').then((m) => m.notifyOrderDelivered({
+      internalId: ship.orderRef,
+      customer: ship.customer,
+      trackingId: ship.trackingNumber,
+      courier: ship.courier,
+    })).catch(() => undefined)
     res.json({ ok: true })
   } catch (err) {
     logger.error({ err }, 'delivery confirm failed')

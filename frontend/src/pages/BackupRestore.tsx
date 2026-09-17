@@ -41,6 +41,7 @@ function BackupRestoreContent() {
   const [notifBusy, setNotifBusy] = useState<string | null>(null)
   const [autoStatus, setAutoStatus] = useState<{ enabled: boolean; scheduleLabel: string; nextRunAt: string; lastBackup: { fileName: string; exportedAt: string | null; sizeBytes: number } | null; backupCount: number } | null>(null)
   const [everythingBusy, setEverythingBusy] = useState(false)
+  const [zipBusy, setZipBusy] = useState(false)
 
   const reloadHistory = useCallback(() => {
     backupApi.getHistory().then(setHistory).catch(() => setHistory([])).finally(() => setHistoryLoading(false))
@@ -92,6 +93,14 @@ function BackupRestoreContent() {
       reloadHistory(); reloadFiles()
     } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Full backup failed') }
     finally { setEverythingBusy(false) }
+  }
+
+  const downloadAllZip = () => {
+    setZipBusy(true); setMessage(null)
+    try {
+      window.open('/api/v1/backup/files/download-all', '_blank')
+      showMsg(true, 'Backup archive download started.')
+    } finally { setZipBusy(false) }
   }
 
   const doRestore = async (fileName: string) => {
@@ -159,6 +168,10 @@ function BackupRestoreContent() {
         subtitle="Export, validate, and restore data backups."
         actions={
           <>
+            <Button variant="outline" onClick={downloadAllZip} disabled={zipBusy || everythingBusy || busy !== null}>
+              {zipBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Download All (ZIP)
+            </Button>
             <Button variant="outline" onClick={() => void runBackupEverything(true)} disabled={everythingBusy || busy !== null}>
               {everythingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
               Full Backup (Encrypted)
