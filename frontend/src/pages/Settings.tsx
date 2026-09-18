@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Bell, Building2, Check, Database, Eye, EyeOff, Landmark, Loader2, Plug, Save, Settings as SettingsIcon, SlidersHorizontal, Tag, Users, Wifi, WifiOff } from 'lucide-react'
+import { Bell, Building2, Check, Database, Eye, EyeOff, Landmark, Loader2, Mail, Plug, Save, Settings as SettingsIcon, SlidersHorizontal, Tag, Users, Wifi, WifiOff } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,7 +9,7 @@ import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RequireModule } from '@/components/RequirePermission'
-import { dbApi, shopifyApi } from '@/lib/api'
+import { backupApi, dbApi, shopifyApi } from '@/lib/api'
 import type { AppSettings, ConnectionSettings, DbStatus } from '@/types'
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -318,13 +318,18 @@ function ConnectionsTab() {
   const [testingShopify, setTestingShopify] = useState(false)
   const [shopifyTestResult, setShopifyTestResult] = useState<'ok' | 'fail' | null>(null)
   const [shopifyTestMsg, setShopifyTestMsg] = useState('')
+  const [ingest, setIngest] = useState<{ configured: boolean; mailbox: string | null; host: string } | null>(null)
+  const [testEmailTo, setTestEmailTo] = useState('')
+  const [testingEmail, setTestingEmail] = useState(false)
+  const [emailTest, setEmailTest] = useState<{ ok: boolean; to?: string; error?: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
     Promise.allSettled([
       dbApi.getConnectionSettings(),
       dbApi.getDbStatus(),
-    ]).then(([connResult, dbResult]) => {
+      backupApi.emailIngestStatus(),
+    ]).then(([connResult, dbResult, ingestResult]) => {
       if (cancelled) return
       if (connResult.status === 'fulfilled') {
         setConn((c) => ({ ...c, ...connResult.value }))
@@ -334,6 +339,7 @@ function ConnectionsTab() {
       } else {
         setDbStatus({ connected: false, error: 'Failed to fetch status' })
       }
+      if (ingestResult.status === 'fulfilled') setIngest(ingestResult.value)
       setLoaded(true)
     })
     return () => { cancelled = true }
@@ -422,6 +428,19 @@ function ConnectionsTab() {
       setDbStatus({ connected: false, error: 'Health check failed' })
     }
   }, [])
+
+  const runEmailTest = async () => {
+    setTestingEmail(true)
+    setEmailTest(null)
+    try {
+      const res = await shopifyApi.testEmail(testEmailTo.trim() || undefined)
+      setEmailTest(res)
+    } catch (e) {
+      setEmailTest({ ok: false, error: e instanceof Error ? e.message : 'Test failed' })
+    } finally {
+      setTestingEmail(false)
+    }
+  }
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
@@ -615,6 +634,66 @@ function ConnectionsTab() {
           <p className="text-xs text-muted-foreground">
             Database credentials are encrypted and stored securely. Saving new credentials will reconnect the server.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-4 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-semibold text-foreground">Email / Order Ingest</h3>
+            </div>
+            {ingest ? (
+              ingest.configured ? (
+                <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> Mailbox ready</span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not configured</span>
+              )
+            ) : (
+              <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
+            )}
+          </div>
+
+          {ingest?.configured && (
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <Label className="text-xs text-muted-foreground">Mailbox</Label>
+                <p className="font-mono text-foreground">{ingest.mailbox ?? '—'}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground">IMAP Host</Label>
+                <p className="font-mono text-foreground">{ingest.host}</p>
+              </div>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            Shopify "New order" notification emails are read from the mailbox via IMAP and converted into orders.
+            Outgoing alerts use RESEND_API_KEY or Gmail SMTP (NOTIFICATION_SMTP_* vars).
+          </p>
+
+          <div className="space-y-2 pt-1">
+            <Field label="Send test email to">
+              <Input
+                type="email"
+                placeholder="owner@example.com (blank = NOTIFICATION_EMAIL)"
+                value={testEmailTo}
+                onChange={(e) => setTestEmailTo(e.target.value)}
+              />
+            </Field>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={runEmailTest} disabled={testingEmail}>
+                {testingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                {testingEmail ? 'Sending...' : 'Send Test Email'}
+              </Button>
+              {emailTest && (
+                emailTest.ok
+                  ? <span className="text-xs font-medium text-green-600">Sent to {emailTest.to}</span>
+                  : <span className="text-xs font-medium text-red-600 max-w-[22rem]">{emailTest.error}</span>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
 

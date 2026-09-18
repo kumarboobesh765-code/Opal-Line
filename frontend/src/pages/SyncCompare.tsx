@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowDownUp, RefreshCw } from 'lucide-react'
+import { ArrowDownUp, Clock, RefreshCw } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
   Table,
   TableBody,
@@ -43,6 +44,58 @@ export default function SyncComparePage() {
   const [filter, setFilter] = useState<Filter>('diffs')
   const [pulling, setPulling] = useState<string | null>(null)
   const [pullMsg, setPullMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  // Auto-sync scheduler state
+  const [auto, setAuto] = useState<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null } | null>(null)
+  const [intervalDraft, setIntervalDraft] = useState('6')
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoMsg, setAutoMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const loadAuto = useCallback(async () => {
+    try {
+      const s = await shopifyApi.getAutoSyncStatus()
+      setAuto(s)
+      setIntervalDraft(String(s.intervalHours))
+    } catch { /* card simply stays hidden */ }
+  }, [])
+
+  useEffect(() => {
+    void loadAuto()
+  }, [loadAuto])
+
+  const saveInterval = async () => {
+    const hours = Number(intervalDraft)
+    if (!Number.isFinite(hours) || hours < 0 || hours > 168) {
+      setAutoMsg({ ok: false, text: 'Interval must be 0–168 hours (0 disables auto-sync).' })
+      return
+    }
+    setAutoBusy(true)
+    try {
+      await shopifyApi.setAutoSyncInterval(hours)
+      await loadAuto()
+      setAutoMsg({ ok: true, text: hours === 0 ? 'Auto-sync disabled.' : `Auto-sync every ${hours} hour${hours === 1 ? '' : 's'}.` })
+    } catch (e) {
+      setAutoMsg({ ok: false, text: e instanceof Error ? e.message : 'Failed to save interval' })
+    } finally {
+      setAutoBusy(false)
+    }
+  }
+
+  const runNow = async () => {
+    setAutoBusy(true)
+    setAutoMsg(null)
+    try {
+      const r = await shopifyApi.runAutoSync()
+      await loadAuto()
+      setAutoMsg(r.ok
+        ? { ok: true, text: `Synced: ${r.created ?? 0} new, ${r.updated ?? 0} updated.` }
+        : { ok: false, text: r.message ?? 'Sync failed' })
+    } catch (e) {
+      setAutoMsg({ ok: false, text: e instanceof Error ? e.message : 'Sync failed' })
+    } finally {
+      setAutoBusy(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -110,6 +163,52 @@ export default function SyncComparePage() {
 
       {syncedAt && (
         <p className="text-xs text-muted-foreground">Shopify catalog fetched {new Date(syncedAt).toLocaleString()}</p>
+      )}
+
+      {auto && (
+        <Card>
+          <CardContent className="space-y-3 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <h3 className="font-semibold text-foreground">Auto-Sync Schedule</h3>
+              </div>
+              <Badge variant={auto.enabled ? 'success' : 'muted'}>{auto.enabled ? `Every ${auto.intervalHours}h` : 'Disabled'}</Badge>
+            </div>
+            <div className="grid gap-3 text-sm sm:grid-cols-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Last run</p>
+                <p className="font-medium">{auto.lastRunAt ? new Date(auto.lastRunAt).toLocaleString() : 'Not yet run'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Next run</p>
+                <p className="font-medium">{auto.enabled ? (auto.nextRunAt ? new Date(auto.nextRunAt).toLocaleString() : 'On next restart') : '—'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Last result</p>
+                <p className="font-medium">{auto.lastResult ? (auto.lastResult.ok ? `${auto.lastResult.created ?? 0} new · ${auto.lastResult.updated ?? 0} updated` : 'Failed') : '—'}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                type="number"
+                min={0}
+                max={168}
+                value={intervalDraft}
+                onChange={(e) => setIntervalDraft(e.target.value)}
+                className="w-24"
+              />
+              <span className="text-xs text-muted-foreground">hours (0 = off)</span>
+              <Button size="sm" variant="outline" onClick={saveInterval} disabled={autoBusy}>Save Interval</Button>
+              <Button size="sm" variant="outline" onClick={runNow} disabled={autoBusy}>
+                <RefreshCw className={autoBusy ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} /> Sync Now
+              </Button>
+            </div>
+            {autoMsg && (
+              <p className={`text-xs font-medium ${autoMsg.ok ? 'text-success-700' : 'text-destructive'}`}>{autoMsg.text}</p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {pullMsg && (

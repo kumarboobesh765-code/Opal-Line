@@ -285,9 +285,15 @@ export const shopifyApi = {
   refreshOrder: (orderId: string) =>
     request<{ ok: boolean; updated?: boolean; message?: string }>(`/shopify/orders/${encodeURIComponent(orderId)}/refresh`, { method: 'POST' }),
   getAutoSyncStatus: () =>
-    request<{ intervalHours: number | 'loading'; enabled: boolean; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null }>('/shopify/products/auto-sync/status'),
+    request<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null }>('/shopify/products/auto-sync/status'),
+  getAutoSyncInterval: () =>
+    request<{ intervalHours: number }>('/shopify/products/auto-sync/interval'),
+  setAutoSyncInterval: (intervalHours: number) =>
+    request<{ ok: boolean; intervalHours: number }>('/shopify/products/auto-sync/interval', { method: 'POST', body: JSON.stringify({ intervalHours }) }),
   runAutoSync: () =>
     request<{ ok: boolean; synced?: number; created?: number; updated?: number; message?: string }>('/shopify/products/auto-sync', { method: 'POST' }),
+  testEmail: (to?: string) =>
+    request<{ ok: boolean; to?: string; error?: string }>('/settings/test-email', { method: 'POST', body: JSON.stringify({ to }) }),
   syncCustomers: () =>
     request<{ ok: boolean; imported: number; updated: number; errors: string[]; message?: string }>('/shopify/customers/sync', {
       method: 'POST',

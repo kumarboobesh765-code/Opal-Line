@@ -14,6 +14,7 @@ import { logger } from './logger'
 const DEFAULT_INTERVAL_HOURS = 6
 let timer: NodeJS.Timeout | null = null
 let lastRunAt: string | null = null
+let nextRunAt: string | null = null
 let lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null = null
 
 export async function getAutoSyncIntervalHours(): Promise<number> {
@@ -65,9 +66,11 @@ function schedule(): void {
     const hours = await getAutoSyncIntervalHours()
     if (hours <= 0) {
       logger.debug('Product auto-sync disabled (interval = 0)')
+      nextRunAt = null
       return
     }
     await runProductAutoSync()
+    nextRunAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
     timer = setTimeout(schedule, hours * 60 * 60 * 1000)
     timer.unref()
   })()
@@ -83,10 +86,12 @@ export function stopProductAutoSync(): void {
   timer = null
 }
 
-export function getAutoSyncStatus(): { intervalHours: number | 'loading'; enabled: boolean; lastRunAt: string | null; lastResult: typeof lastResult } {
+export async function getAutoSyncStatus(): Promise<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: typeof lastResult }> {
+  const hours = await getAutoSyncIntervalHours()
   return {
-    intervalHours: 'loading',
-    enabled: timer !== null,
+    intervalHours: hours,
+    enabled: hours > 0,
+    nextRunAt,
     lastRunAt,
     lastResult,
   }

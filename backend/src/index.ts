@@ -887,10 +887,57 @@ app.post('/api/v1/shopify/products/auto-sync', requirePermission('shopify', 'cre
 app.get('/api/v1/shopify/products/auto-sync/status', requirePermission('shopify', 'view'), async (_req, res) => {
   try {
     const { getAutoSyncStatus } = await import('./productAutoSync')
-    res.json(getAutoSyncStatus())
+    res.json(await getAutoSyncStatus())
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(502).json({ error: message })
+  }
+})
+
+// Read/update the auto-sync interval (hours; 0 = disabled)
+app.get('/api/v1/shopify/products/auto-sync/interval', requirePermission('shopify', 'view'), async (_req, res) => {
+  try {
+    const { getAutoSyncIntervalHours } = await import('./productAutoSync')
+    res.json({ intervalHours: await getAutoSyncIntervalHours() })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
+app.post('/api/v1/shopify/products/auto-sync/interval', requirePermission('shopify', 'edit'), async (req, res) => {
+  try {
+    const hours = Number(req.body?.intervalHours)
+    if (!Number.isFinite(hours) || hours < 0 || hours > 168) {
+      return res.status(400).json({ error: 'intervalHours must be between 0 and 168' })
+    }
+    const { setAutoSyncIntervalHours, getAutoSyncIntervalHours } = await import('./productAutoSync')
+    await setAutoSyncIntervalHours(hours)
+    // Restart the schedule loop so the new interval applies immediately
+    const { stopProductAutoSync, startProductAutoSync } = await import('./productAutoSync')
+    stopProductAutoSync()
+    startProductAutoSync()
+    res.json({ ok: true, intervalHours: await getAutoSyncIntervalHours() })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
+// Email (SMTP) connection test
+app.post('/api/v1/settings/test-email', requireAuth, requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const to = typeof req.body?.to === 'string' && req.body.to.includes('@') ? req.body.to.trim() : process.env.NOTIFICATION_EMAIL?.trim()
+    if (!to) return res.status(400).json({ ok: false, error: 'No recipient: provide "to" or set NOTIFICATION_EMAIL in .env' })
+    const { sendEmail } = await import('./notifications')
+    const sent = await sendEmail({
+      to,
+      subject: 'Opal Line — test email',
+      html: '<p>This is a test email from your Opal Line ERP. If you received this, email sending is working.</p>',
+    })
+    res.json({ ok: sent, to, error: sent ? undefined : 'Send failed — check RESEND_API_KEY or NOTIFICATION_SMTP_* env vars / server logs' })
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : 'SMTP test failed' })
   }
 })
 
