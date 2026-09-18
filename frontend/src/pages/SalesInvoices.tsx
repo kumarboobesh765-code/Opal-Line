@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DataTable } from '@/components/ui/data-table'
 import {
   Dialog,
@@ -159,29 +160,45 @@ export default function SalesInvoicesPage() {
       },
       {
         id: 'actions',
-        header: '',
-        meta: { align: 'right' as const, headerClassName: 'w-10' },
+        header: 'Actions',
+        meta: { align: 'right' as const },
         cell: ({ row }) => (
-          <DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" asChild>
+                <Link to={`/sales/invoices/${row.original.id}`}>
+                  <Eye className="h-3.5 w-3.5" />
+                </Link>
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>View / Print / PDF</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" onClick={() => navigate(`/sales/invoices/${row.original.id}`)}>
+                <Printer className="h-3.5 w-3.5" />
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>Print</TooltipContent>
+            </Tooltip>
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon-sm">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem>
-                <Link to={`/sales/invoices/${row.original.id}`} className="flex w-full items-center gap-2">
-                  <Eye className="h-3.5 w-3.5" /> View
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate(`/sales/invoices/${row.original.id}`)}><Printer className="h-3.5 w-3.5" /> Print</DropdownMenuItem>
+              <DropdownMenuLabel className="text-xs text-muted-foreground">More actions</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => navigate(`/sales/invoices/${row.original.id}`)}><Download className="h-3.5 w-3.5" /> Download PDF</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setInvoiceStatus(row.original, 'refunded')}><Undo2 className="h-3.5 w-3.5" /> Refund</DropdownMenuItem>
               <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => setInvoiceStatus(row.original, 'cancelled')}><X className="h-3.5 w-3.5" /> Cancel</DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
+            </DropdownMenu>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

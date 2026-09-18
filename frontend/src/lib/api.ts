@@ -436,6 +436,8 @@ export const dbApi = {
   },
   getLowStock: (): Promise<LowStockItem[]> => request('/db/dashboard/low-stock'),
   getRecentActivities: (): Promise<Activity[]> => request('/db/dashboard/activities'),
+  getNotificationFeed: () =>
+    request<{ items: Array<{ type: string; title: string; detail: string | null; at: string | null; href: string }>; counts: { total: number; lowStock: number; alerts: number } }>('/db/notifications/feed'),
   getAnalyticsStats: (): Promise<AnalyticsStat[]> => request('/db/dashboard/analytics'),
   getInventoryOverview: () =>
     request<{

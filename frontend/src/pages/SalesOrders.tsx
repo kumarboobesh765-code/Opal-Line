@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -444,34 +445,48 @@ export default function SalesOrdersPage() {
       },
       {
         id: 'actions',
-        header: '',
-        meta: { align: 'right' as const, headerClassName: 'w-10' },
+        header: 'Actions',
+        meta: { align: 'right' as const },
         cell: ({ row }) => (
-          <DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" onClick={() => setViewOrder(row.original)}>
+                <Eye className="h-3.5 w-3.5" />
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>View order</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" onClick={() => startEdit(row.original)}>
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>Edit order</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={Boolean(row.original.invoice) || invoiceSavingId === row.original.id}
+                onClick={() => createInvoiceFor(row.original)}
+              >
+                {invoiceSavingId === row.original.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>{row.original.invoice ? 'Invoice raised' : 'Create invoice'}</TooltipContent>
+            </Tooltip>
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon-sm">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => setViewOrder(row.original)}>
-                <Eye className="h-3.5 w-3.5" /> View Order
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => startEdit(row.original)}>
-                <Pencil className="h-3.5 w-3.5" /> Edit Order
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={Boolean(row.original.invoice) || invoiceSavingId === row.original.id}
-                onClick={() => createInvoiceFor(row.original)}
-              >
-                {invoiceSavingId === row.original.id ? (
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <FileText className="h-3.5 w-3.5" />
-                )}
-                {row.original.invoice ? 'Invoice Raised' : 'Create Invoice'}
-              </DropdownMenuItem>
+              <DropdownMenuLabel className="text-xs text-muted-foreground">More actions</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => viewOnShopify(row.original)}>
                 <ExternalLink className="h-3.5 w-3.5" /> View on Shopify
               </DropdownMenuItem>
@@ -483,7 +498,9 @@ export default function SalesOrdersPage() {
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => cancelOrder(row.original)}>Cancel Order</DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
+            </DropdownMenu>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],
@@ -724,7 +741,7 @@ export default function SalesOrdersPage() {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] max-h-[90vh] overflow-hidden">
+        <DialogContent className="max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? `Edit Order ${editing.shopifyId}` : 'Create Manual Order'}</DialogTitle>
             <DialogDescription>

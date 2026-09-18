@@ -1,7 +1,8 @@
 ﻿import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Download, MoreHorizontal, Plus, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
+import { Download, FileText, MoreHorizontal, Plus, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -23,7 +24,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi } from '@/lib/api'
@@ -201,28 +201,52 @@ export default function CustomersPage() {
       },
       {
         id: 'actions',
-        header: '',
-        meta: { align: 'right' as const, headerClassName: 'w-10' },
+        header: 'Actions',
+        meta: { align: 'right' as const },
         cell: ({ row }) => {
           const c = row.original
           return (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm">
-                  <MoreHorizontal className="h-4 w-4" />
+            <TooltipProvider delayDuration={200}>
+            <div className="flex items-center justify-end gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" onClick={() => (window.location.href = `tel:${encodeURI(c.phone ?? '')}`)}>
+                  <Phone className="h-3.5 w-3.5" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-                <DropdownMenuItem onClick={() => (window.location.href = `tel:${encodeURI(c.phone ?? '')}`)}><Phone className="h-3.5 w-3.5" /> Call</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => (window.location.href = `mailto:${encodeURI(c.email ?? '')}`)}><Mail className="h-3.5 w-3.5" /> Email</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => navigate('/sales/invoices')}>View Order History</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => toggleStatus(c)}>
-                  {c.status === 'inactive' ? 'Activate' : 'Deactivate'}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </TooltipTrigger>
+                <TooltipContent>Call</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" onClick={() => (window.location.href = `mailto:${encodeURI(c.email ?? '')}`)}>
+                  <Mail className="h-3.5 w-3.5" />
+                </Button>
+                </TooltipTrigger>
+                <TooltipContent>Email</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-sm" onClick={() => navigate('/sales/invoices')}>
+                  <FileText className="h-3.5 w-3.5" />
+                </Button>
+                </TooltipTrigger>
+                <TooltipContent>Order history</TooltipContent>
+              </Tooltip>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">More actions</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => toggleStatus(c)}>
+                    {c.status === 'inactive' ? 'Activate' : 'Deactivate'}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            </TooltipProvider>
           )
         },
       },

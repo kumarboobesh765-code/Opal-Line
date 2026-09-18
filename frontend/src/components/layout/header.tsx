@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowUpRight, ArrowDownRight, Bell, Menu, Settings, ShieldCheck, ChevronDown, LogOut, RefreshCcw, Search } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Bell, FileText, Gem, Menu, Plus, Settings, ShieldCheck, ShoppingBag, UserPlus, ChevronDown, LogOut, RefreshCcw, Search } from 'lucide-react'
 import { useAuth } from '@/auth/auth-context'
 import { useSilverRate } from '@/lib/silver-rate-context'
 import { formatDateTime } from '@/lib/format'
@@ -29,6 +29,7 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
   const { currentUser, logout, refresh, permissionsMeta, hasPermission } = useAuth()
   const navigate = useNavigate()
   const [notifications, setNotifications] = useState<Activity[]>([])
+  const [feed, setFeed] = useState<Array<{ type: string; title: string; detail: string | null; at: string | null; href: string }>>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [lastSeenAt, setLastSeenAt] = useState<string | null>(null)
 
@@ -41,9 +42,15 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
 
   const loadNotifications = useCallback(async () => {
     try {
-      const activities = await dbApi.getRecentActivities()
+      const [activities, feedRes] = await Promise.all([
+        dbApi.getRecentActivities(),
+        dbApi.getNotificationFeed().catch(() => null),
+      ])
       setNotifications(activities)
-      if (lastSeenAt) {
+      if (feedRes?.items) {
+        setFeed(feedRes.items)
+        setUnreadCount(feedRes.counts.alerts)
+      } else if (lastSeenAt) {
         const newUnread = activities.filter((a) => a.time && a.time > lastSeenAt).length
         setUnreadCount(newUnread)
       }
@@ -140,14 +147,39 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
           </TooltipProvider>
           <DropdownMenuContent align="end" className="w-80 max-h-96 overflow-y-auto">
             <DropdownMenuLabel className="flex items-center justify-between">
-              <span>Recent Activity</span>
+              <span>Notifications</span>
               <Link to="/system/activity" className="text-xs font-normal text-muted-foreground hover:text-foreground">View All</Link>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {feed.length > 0 && (
+              <div className="px-4 pb-1">
+                {feed.slice(0, 8).map((f, i) => (
+                  <button
+                    key={`f-${i}`}
+                    className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted"
+                    onClick={() => navigate(f.href)}
+                  >
+                    <span className="flex w-full items-center gap-2">
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                          f.type === 'low-stock' ? 'bg-amber-500' : f.type === 'new-order' ? 'bg-emerald-500' : 'bg-red-500'
+                        }`}
+                      />
+                      <span className="flex-1 truncate text-[13px] font-medium text-foreground">{f.title}</span>
+                    </span>
+                    {f.detail ? <span className="pl-3.5 text-[11px] text-muted-foreground">{f.detail}</span> : null}
+                  </button>
+                ))}
+                <div className="my-1 flex items-center gap-2 px-2">
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Recent activity</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              </div>
+            )}
             {notifications.length === 0 ? (
               <div className="px-4 py-6 text-center text-sm text-muted-foreground">No recent activity</div>
             ) : (
-              notifications.map((a, i) => (
+              notifications.slice(0, 5).map((a, i) => (
                 <DropdownMenuItem key={a.id ?? i} className="flex flex-col items-start gap-1 py-2">
                   <span className="text-sm font-medium leading-tight">{a.title}</span>
                   <span className="text-xs text-muted-foreground">
@@ -155,6 +187,42 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
                   </span>
                 </DropdownMenuItem>
               ))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Quick create">
+                  <Plus className="h-[18px] w-[18px]" />
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Quick create</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuLabel className="text-xs text-muted-foreground">Create new</DropdownMenuLabel>
+            {hasPermission('sales', 'create') && (
+              <DropdownMenuItem onClick={() => navigate('/sales/orders?new=1')}>
+                <ShoppingBag className="h-3.5 w-3.5" /> Sales Order
+              </DropdownMenuItem>
+            )}
+            {hasPermission('sales', 'create') && (
+              <DropdownMenuItem onClick={() => navigate('/sales/bookings?new=1')}>
+                <FileText className="h-3.5 w-3.5" /> Booking
+              </DropdownMenuItem>
+            )}
+            {hasPermission('inventory', 'create') && (
+              <DropdownMenuItem onClick={() => navigate('/inventory/products?new=1')}>
+                <Gem className="h-3.5 w-3.5" /> Product
+              </DropdownMenuItem>
+            )}
+            {hasPermission('sales', 'create') && (
+              <DropdownMenuItem onClick={() => navigate('/sales/customers?new=1')}>
+                <UserPlus className="h-3.5 w-3.5" /> Customer
+              </DropdownMenuItem>
             )}
           </DropdownMenuContent>
         </DropdownMenu>

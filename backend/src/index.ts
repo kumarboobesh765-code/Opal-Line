@@ -392,6 +392,8 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
 app.post('/api/v1/uploads/image', requireAuth, requirePermission('inventory', 'edit'), express.json({ limit: '25mb' }), uploadImageHandler)
 
 app.use('/api/v1/db', requireAuth, enforceRbac)
+import { feedRouter } from './notificationFeed'
+app.use('/api/v1/db', feedRouter)
 app.use('/api/v1/db', dbRouter)
 app.use('/api/v1/db', requireAuth, dashboardRouter)
 app.use('/api/v1/rbac', requireAuth, rbacRouter)
