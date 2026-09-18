@@ -56,6 +56,21 @@ export interface DbStatus {
   user?: string
 }
 
+export interface EnvConfigDef {
+  key: string
+  group: 'shopify' | 'email' | 'notifications' | 'payments' | 'whatsapp' | 'backup' | 'server'
+  label: string
+  secret?: boolean
+  placeholder?: string
+  hint?: string
+}
+
+export interface EnvConfigData {
+  defs: EnvConfigDef[]
+  values: Record<string, string>
+  configured: Record<string, boolean>
+}
+
 export interface GstReportResult {
   summary: {
     taxable: number

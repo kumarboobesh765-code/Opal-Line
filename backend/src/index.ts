@@ -394,6 +394,8 @@ app.post('/api/v1/uploads/image', requireAuth, requirePermission('inventory', 'e
 app.use('/api/v1/db', requireAuth, enforceRbac)
 import { feedRouter } from './notificationFeed'
 app.use('/api/v1/db', feedRouter)
+import { registerEnvConfigRoutes } from './routes/envConfig'
+registerEnvConfigRoutes(app)
 app.use('/api/v1/db', dbRouter)
 app.use('/api/v1/db', requireAuth, dashboardRouter)
 app.use('/api/v1/rbac', requireAuth, rbacRouter)

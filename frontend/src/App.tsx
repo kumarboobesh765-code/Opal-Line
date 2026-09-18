@@ -14,6 +14,7 @@ const OwnerInsightsPage = lazy(() => import('@/pages/OwnerInsights'))
 const SilverRatePage = lazy(() => import('@/pages/SilverRate'))
 const SalesInvoicesPage = lazy(() => import('@/pages/SalesInvoices'))
 const QuotationsPage = lazy(() => import('@/pages/Quotations'))
+const ConnectionsPage = lazy(() => import('@/pages/Connections'))
 const InvoiceDetailPage = lazy(() => import('@/pages/InvoiceDetail'))
 const SalesOrdersPage = lazy(() => import('@/pages/SalesOrders'))
 const OrderBoardPage = lazy(() => import('@/pages/OrderBoard'))
@@ -153,6 +154,7 @@ function App() {
             <Route path="/system/users" element={guarded('system', <UsersPage />)} />
             <Route path="/system/backup" element={guarded('system', <BackupRestorePage />)} />
             <Route path="/system/settings" element={guarded('system', <SettingsPage />)} />
+            <Route path="/system/connections" element={guarded('system', <ConnectionsPage />)} />
             <Route path="/system/notifications" element={guarded('system', <NotificationSettingsPage />)} />
             <Route path="/system/notification-log" element={guarded('system', <NotificationLogPage />)} />
             <Route path="/system/audit" element={guarded('system', <AuditLogsPage />)} />

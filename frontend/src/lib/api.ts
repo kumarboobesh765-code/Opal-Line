@@ -3,6 +3,7 @@ import type {
   ActivityLogEntry,
   AnalyticsStat,
   Quotation,
+  EnvConfigData,
   AppSettings,
   AuditLogEntry,
   NotificationSettings,
@@ -770,6 +771,15 @@ export interface BackupDiffResult {
     modified: string[]
   }>
   summary: { totalAdded: number; totalRemoved: number; totalModified: number }
+}
+
+export const envConfigApi = {
+  get: () => request<EnvConfigData>('/env-config'),
+  update: (values: Record<string, string>) =>
+    request<{ ok: boolean; updated: string[]; skipped: string[] }>('/env-config', {
+      method: 'POST',
+      body: JSON.stringify({ values }),
+    }),
 }
 
 export const backupApi = {
