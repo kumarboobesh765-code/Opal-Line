@@ -60,6 +60,12 @@ async function runAutoBackup(): Promise<void> {
     logger.info({ file: fileName, tables: Object.keys(result.data).length }, 'Auto backup completed')
     await pruneOldBackups()
 
+    // Off-site push (no-op when BACKUP_OFFSITE_* env vars are absent)
+    try {
+      const { pushLatestBackupOffsite } = await import('./offsiteBackup')
+      await pushLatestBackupOffsite(fileName)
+    } catch (err) { logger.debug({ err }, 'Off-site push hook skipped') }
+
     // Send email notification if configured
     try {
       const email = process.env.NOTIFICATION_EMAIL?.trim()

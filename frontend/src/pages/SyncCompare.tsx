@@ -46,7 +46,7 @@ export default function SyncComparePage() {
   const [pullMsg, setPullMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   // Auto-sync scheduler state
-  const [auto, setAuto] = useState<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null } | null>(null)
+  const [auto, setAuto] = useState<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null; history: Array<{ at: string; ok: boolean; created?: number; updated?: number; message?: string }> } | null>(null)
   const [intervalDraft, setIntervalDraft] = useState('6')
   const [autoBusy, setAutoBusy] = useState(false)
   const [autoMsg, setAutoMsg] = useState<{ ok: boolean; text: string } | null>(null)
@@ -206,6 +206,24 @@ export default function SyncComparePage() {
             </div>
             {autoMsg && (
               <p className={`text-xs font-medium ${autoMsg.ok ? 'text-success-700' : 'text-destructive'}`}>{autoMsg.text}</p>
+            )}
+            {auto.history.length > 0 && (
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent runs</p>
+                <div className="max-h-44 overflow-y-auto rounded-md border">
+                  {auto.history.map((h, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5 text-xs last:border-0">
+                      <span className="shrink-0 text-muted-foreground">{new Date(h.at).toLocaleString()}</span>
+                      {h.ok ? (
+                        <span className="font-medium text-success-700">{h.created ?? 0} new · {h.updated ?? 0} updated</span>
+                      ) : (
+                        <span className="max-w-[60%] truncate font-medium text-destructive" title={h.message}>{h.message ?? 'Failed'}</span>
+                      )}
+                    </div>
+                  ))
+                  }
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

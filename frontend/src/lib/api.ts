@@ -285,7 +285,7 @@ export const shopifyApi = {
   refreshOrder: (orderId: string) =>
     request<{ ok: boolean; updated?: boolean; message?: string }>(`/shopify/orders/${encodeURIComponent(orderId)}/refresh`, { method: 'POST' }),
   getAutoSyncStatus: () =>
-    request<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null }>('/shopify/products/auto-sync/status'),
+    request<{ intervalHours: number; enabled: boolean; nextRunAt: string | null; lastRunAt: string | null; lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null; history: Array<{ at: string; ok: boolean; created?: number; updated?: number; message?: string }> }>('/shopify/products/auto-sync/status'),
   getAutoSyncInterval: () =>
     request<{ intervalHours: number }>('/shopify/products/auto-sync/interval'),
   setAutoSyncInterval: (intervalHours: number) =>
@@ -294,6 +294,20 @@ export const shopifyApi = {
     request<{ ok: boolean; synced?: number; created?: number; updated?: number; message?: string }>('/shopify/products/auto-sync', { method: 'POST' }),
   testEmail: (to?: string) =>
     request<{ ok: boolean; to?: string; error?: string }>('/settings/test-email', { method: 'POST', body: JSON.stringify({ to }) }),
+  whatsappStatus: () =>
+    request<{ configured: boolean; phoneNumberId: string | null }>('/settings/whatsapp-status'),
+  testWhatsApp: (to: string) =>
+    request<{ ok: boolean; error?: string }>('/settings/test-whatsapp', { method: 'POST', body: JSON.stringify({ to }) }),
+  webhookHealth: () =>
+    request<{ publicBaseUrl: string | null; expectedAddress: string | null; healthy: boolean; entries: Array<{ topic: string; status: string; address?: string; id?: number }> }>('/settings/webhook-health'),
+  repairWebhooks: () =>
+    request<{ healthy: boolean; entries: Array<{ topic: string; status: string }> }>('/settings/webhook-health/repair', { method: 'POST' }),
+  offsiteBackupStatus: () =>
+    request<{ configured: boolean; bucket: string | null; endpoint: string | null }>('/settings/offsite-backup'),
+  testOffsiteBackup: () =>
+    request<{ ok: boolean; bucket?: string; error?: string }>('/settings/offsite-backup/test', { method: 'POST' }),
+  syncOffsiteBackup: () =>
+    request<{ ok: boolean; uploaded: string[]; skipped: number; error?: string }>('/settings/offsite-backup/sync', { method: 'POST' }),
   syncCustomers: () =>
     request<{ ok: boolean; imported: number; updated: number; errors: string[]; message?: string }>('/shopify/customers/sync', {
       method: 'POST',

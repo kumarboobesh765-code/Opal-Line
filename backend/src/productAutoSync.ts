@@ -16,6 +16,8 @@ let timer: NodeJS.Timeout | null = null
 let lastRunAt: string | null = null
 let nextRunAt: string | null = null
 let lastResult: { ok: boolean; synced?: number; created?: number; updated?: number; message?: string } | null = null
+let consecutiveFailures = 0
+let runHistory: Array<{ at: string; ok: boolean; created?: number; updated?: number; message?: string }> = []
 
 export async function getAutoSyncIntervalHours(): Promise<number> {
   if (!db) return DEFAULT_INTERVAL_HOURS
@@ -42,22 +44,55 @@ export async function setAutoSyncIntervalHours(hours: number): Promise<void> {
 }
 
 export async function runProductAutoSync(): Promise<{ ok: boolean; synced?: number; created?: number; updated?: number; message?: string }> {
+  const record = (ok: boolean, message?: string, created?: number, updated?: number) => {
+    runHistory = [{ at: new Date().toISOString(), ok, message, created, updated }, ...runHistory].slice(0, 50)
+  }
   try {
     const result = await syncProductsToDb()
     lastRunAt = new Date().toISOString()
     lastResult = { ok: result.ok, synced: result.synced, created: result.created, updated: result.updated, message: result.ok ? undefined : result.errors?.[0] }
     if (result.ok) {
+      consecutiveFailures = 0
       logger.info({ synced: result.synced, created: result.created, updated: result.updated }, 'Product auto-sync completed')
+      record(true, undefined, result.created, result.updated)
     } else {
+      consecutiveFailures++
       logger.warn({ err: result.errors?.[0] }, 'Product auto-sync failed')
+      record(false, result.errors?.[0])
+      await maybeAlertSyncFailures()
     }
     return lastResult
   } catch (err) {
     lastRunAt = new Date().toISOString()
     lastResult = { ok: false, message: err instanceof Error ? err.message : 'Unknown error' }
+    consecutiveFailures++
     logger.warn({ err }, 'Product auto-sync failed')
+    record(false, lastResult.message)
+    await maybeAlertSyncFailures()
     return lastResult
   }
+}
+
+/** Email after 2 consecutive failures; re-alert every further failure. */
+async function maybeAlertSyncFailures(): Promise<void> {
+  if (consecutiveFailures < 2) return
+  try {
+    const email = process.env.NOTIFICATION_EMAIL?.trim()
+    if (!email) return
+    const { sendEmail } = await import('./notifications')
+    const sent = await sendEmail({
+      to: email,
+      subject: `⚠️ Product auto-sync failed ${consecutiveFailures}× in a row`,
+      html: `<p>The Shopify product auto-sync has failed <strong>${consecutiveFailures}</strong> times in a row.</p><p>Last error: <code>${lastResult?.message ?? 'unknown'}</code></p><p>Check the Sync page in the ERP for details, or run a manual sync.</p>`,
+    })
+    if (sent) logger.warn({ failures: consecutiveFailures }, 'Sync-failure alert emailed')
+  } catch (err) {
+    logger.warn({ err }, 'Sync-failure alert failed')
+  }
+}
+
+export function getAutoSyncHistory(): Array<{ at: string; ok: boolean; created?: number; updated?: number; message?: string }> {
+  return runHistory
 }
 
 function schedule(): void {

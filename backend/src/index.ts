@@ -886,12 +886,75 @@ app.post('/api/v1/shopify/products/auto-sync', requirePermission('shopify', 'cre
 
 app.get('/api/v1/shopify/products/auto-sync/status', requirePermission('shopify', 'view'), async (_req, res) => {
   try {
-    const { getAutoSyncStatus } = await import('./productAutoSync')
-    res.json(await getAutoSyncStatus())
+    const { getAutoSyncStatus, getAutoSyncHistory } = await import('./productAutoSync')
+    res.json({ ...(await getAutoSyncStatus()), history: getAutoSyncHistory() })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(502).json({ error: message })
   }
+})
+
+// WhatsApp connection status + test message
+app.get('/api/v1/settings/whatsapp-status', requireAuth, requirePermission('system', 'view'), (_req, res) => {
+  const { isWhatsAppConfigured } = require('./whatsapp') as typeof import('./whatsapp')
+  res.json({
+    configured: isWhatsAppConfigured(),
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() ? '••••' + process.env.WHATSAPP_PHONE_NUMBER_ID!.trim().slice(-4) : null,
+  })
+})
+
+app.post('/api/v1/settings/test-whatsapp', requireAuth, requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const to = typeof req.body?.to === 'string' ? req.body.to.trim() : ''
+    if (!to.replace(/\D/g, '')) return res.status(400).json({ ok: false, error: 'Provide a phone number "to"' })
+    const { sendWhatsAppMessage, isWhatsAppConfigured } = await import('./whatsapp')
+    if (!isWhatsAppConfigured()) return res.json({ ok: false, error: 'WhatsApp not configured — set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in .env' })
+    const result = await sendWhatsAppMessage(to, '✅ Test message from your Opal Line ERP — WhatsApp is working.')
+    res.json({ ok: result !== null, error: result ? undefined : 'Send failed (check token/phone number id / server logs)' })
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : 'WhatsApp test failed' })
+  }
+})
+
+// Webhook health: what Shopify has registered vs what we expect
+app.get('/api/v1/settings/webhook-health', requireAuth, requirePermission('system', 'view'), async (_req, res) => {
+  try {
+    const { getWebhookHealth } = await import('./webhookRegistration')
+    res.json(await getWebhookHealth())
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Webhook health check failed' })
+  }
+})
+
+app.post('/api/v1/settings/webhook-health/repair', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  try {
+    const { registerShopifyWebhooks } = await import('./webhookRegistration')
+    await registerShopifyWebhooks()
+    const { getWebhookHealth } = await import('./webhookRegistration')
+    res.json(await getWebhookHealth())
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Webhook repair failed' })
+  }
+})
+
+// Off-site backup: status + test + manual sync
+app.get('/api/v1/settings/offsite-backup', requireAuth, requirePermission('system', 'view'), (_req, res) => {
+  const { isOffsiteConfigured } = require('./offsiteBackup') as typeof import('./offsiteBackup')
+  res.json({
+    configured: isOffsiteConfigured(),
+    bucket: process.env.BACKUP_OFFSITE_BUCKET?.trim() ?? null,
+    endpoint: process.env.BACKUP_OFFSITE_ENDPOINT?.trim() ?? null,
+  })
+})
+
+app.post('/api/v1/settings/offsite-backup/test', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  const { testOffsiteConnection } = await import('./offsiteBackup')
+  res.json(await testOffsiteConnection())
+})
+
+app.post('/api/v1/settings/offsite-backup/sync', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  const { syncBackupsOffsite } = await import('./offsiteBackup')
+  res.json(await syncBackupsOffsite())
 })
 
 // Read/update the auto-sync interval (hours; 0 = disabled)

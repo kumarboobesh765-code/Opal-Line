@@ -46,6 +46,43 @@ async function shopifyApi<T>(method: string, resource: string, body?: unknown): 
   return { status: res.status, json }
 }
 
+export interface WebhookHealthEntry {
+  topic: string
+  status: 'registered' | 'missing' | 'stale'
+  address?: string
+  id?: number
+}
+
+/**
+ * Compare Shopify's registered webhooks against the topics we handle.
+ * 'stale' = topic registered but pointing at an old URL.
+ */
+export async function getWebhookHealth(): Promise<{
+  publicBaseUrl: string | null
+  expectedAddress: string | null
+  entries: WebhookHealthEntry[]
+  healthy: boolean
+}> {
+  const base = publicBaseUrl()
+  const expectedAddress = base ? `${base}/api/v1/webhooks/shopify` : null
+  const entries: WebhookHealthEntry[] = []
+  let existing: ShopifyWebhook[] = []
+  try {
+    const list = await shopifyApi<{ webhooks: ShopifyWebhook[] }>('GET', 'webhooks.json?limit=250')
+    existing = list.json?.webhooks ?? []
+  } catch (err) {
+    logger.warn({ err }, 'Webhook health: failed to list webhooks')
+  }
+  for (const topic of WEBHOOK_TOPICS) {
+    const match = existing.find((w) => w.topic === topic)
+    if (!match) entries.push({ topic, status: 'missing' })
+    else if (expectedAddress && match.address !== expectedAddress) entries.push({ topic, status: 'stale', address: match.address, id: match.id })
+    else entries.push({ topic, status: 'registered', address: match.address, id: match.id })
+  }
+  const healthy = entries.every((e) => e.status === 'registered')
+  return { publicBaseUrl: base, expectedAddress, entries, healthy }
+}
+
 /**
  * Idempotently ensure every topic we handle points at our webhook endpoint.
  * Called once at server startup; failures only log — never block boot.

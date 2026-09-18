@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Bell, Building2, Check, Database, Eye, EyeOff, Landmark, Loader2, Mail, Plug, Save, Settings as SettingsIcon, SlidersHorizontal, Tag, Users, Wifi, WifiOff } from 'lucide-react'
+import { Bell, Building2, Check, CloudUpload, Database, Eye, EyeOff, Landmark, Loader2, Mail, MessageCircle, Plug, Save, Settings as SettingsIcon, SlidersHorizontal, Tag, Users, Webhook, Wifi, WifiOff } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -322,6 +323,16 @@ function ConnectionsTab() {
   const [testEmailTo, setTestEmailTo] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
   const [emailTest, setEmailTest] = useState<{ ok: boolean; to?: string; error?: string } | null>(null)
+  const [wa, setWa] = useState<{ configured: boolean; phoneNumberId: string | null } | null>(null)
+  const [waTestTo, setWaTestTo] = useState('')
+  const [testingWa, setTestingWa] = useState(false)
+  const [waTest, setWaTest] = useState<{ ok: boolean; error?: string } | null>(null)
+  const [hooks, setHooks] = useState<{ healthy: boolean; expectedAddress: string | null; entries: Array<{ topic: string; status: string; address?: string; id?: number }> } | null>(null)
+  const [repairingHooks, setRepairingHooks] = useState(false)
+  const [offsite, setOffsite] = useState<{ configured: boolean; bucket: string | null; endpoint: string | null } | null>(null)
+  const [testingOffsite, setTestingOffsite] = useState(false)
+  const [syncingOffsite, setSyncingOffsite] = useState(false)
+  const [offsiteMsg, setOffsiteMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -329,7 +340,10 @@ function ConnectionsTab() {
       dbApi.getConnectionSettings(),
       dbApi.getDbStatus(),
       backupApi.emailIngestStatus(),
-    ]).then(([connResult, dbResult, ingestResult]) => {
+      shopifyApi.whatsappStatus(),
+      shopifyApi.webhookHealth(),
+      shopifyApi.offsiteBackupStatus(),
+    ]).then(([connResult, dbResult, ingestResult, waResult, hooksResult, offsiteResult]) => {
       if (cancelled) return
       if (connResult.status === 'fulfilled') {
         setConn((c) => ({ ...c, ...connResult.value }))
@@ -340,6 +354,9 @@ function ConnectionsTab() {
         setDbStatus({ connected: false, error: 'Failed to fetch status' })
       }
       if (ingestResult.status === 'fulfilled') setIngest(ingestResult.value)
+      if (waResult.status === 'fulfilled') setWa(waResult.value)
+      if (hooksResult.status === 'fulfilled') setHooks(hooksResult.value)
+      if (offsiteResult.status === 'fulfilled') setOffsite(offsiteResult.value)
       setLoaded(true)
     })
     return () => { cancelled = true }
@@ -439,6 +456,55 @@ function ConnectionsTab() {
       setEmailTest({ ok: false, error: e instanceof Error ? e.message : 'Test failed' })
     } finally {
       setTestingEmail(false)
+    }
+  }
+
+  const runWhatsAppTest = async () => {
+    setTestingWa(true)
+    setWaTest(null)
+    try {
+      const res = await shopifyApi.testWhatsApp(waTestTo.trim())
+      setWaTest(res)
+    } catch (e) {
+      setWaTest({ ok: false, error: e instanceof Error ? e.message : 'Test failed' })
+    } finally {
+      setTestingWa(false)
+    }
+  }
+
+  const runWebhookRepair = async () => {
+    setRepairingHooks(true)
+    try {
+      const res = await shopifyApi.repairWebhooks()
+      setHooks((h) => ({ expectedAddress: h?.expectedAddress ?? null, healthy: res.healthy, entries: res.entries }))
+    } catch { /* keep previous state */ } finally {
+      setRepairingHooks(false)
+    }
+  }
+
+  const runOffsiteTest = async () => {
+    setTestingOffsite(true)
+    setOffsiteMsg(null)
+    try {
+      const res = await shopifyApi.testOffsiteBackup()
+      setOffsiteMsg(res.ok ? { ok: true, text: `Bucket reachable: ${res.bucket}` } : { ok: false, text: res.error ?? 'Connection failed' })
+    } catch (e) {
+      setOffsiteMsg({ ok: false, text: e instanceof Error ? e.message : 'Test failed' })
+    } finally {
+      setTestingOffsite(false)
+    }
+  }
+
+  const runOffsiteSync = async () => {
+    setSyncingOffsite(true)
+    setOffsiteMsg(null)
+    try {
+      const res = await shopifyApi.syncOffsiteBackup()
+      setOffsiteMsg(res.ok ? { ok: true, text: `Uploaded ${res.uploaded.length} file(s), ${res.skipped} already current.` } : { ok: false, text: res.error ?? 'Sync failed' })
+    } catch (e) {
+      setOffsiteMsg({ ok: false, text: e instanceof Error ? e.message : 'Sync failed' })
+    } finally {
+      setSyncingOffsite(false)
     }
   }
 
@@ -694,6 +760,138 @@ function ConnectionsTab() {
               )}
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-4 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <MessageCircle className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-semibold text-foreground">WhatsApp</h3>
+            </div>
+            {wa ? (
+              wa.configured
+                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> Connected</span>
+                : <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not configured</span>
+            ) : (
+              <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
+            )}
+          </div>
+
+          {wa?.configured && wa.phoneNumberId && (
+            <div className="text-sm">
+              <Label className="text-xs text-muted-foreground">Phone Number ID</Label>
+              <p className="font-mono text-foreground">{wa.phoneNumberId}</p>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            WhatsApp notifications use the Meta Cloud API. Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in backend/.env to enable.
+          </p>
+
+          <div className="space-y-2 pt-1">
+            <Field label="Send test message to">
+              <Input
+                placeholder="10-digit mobile number"
+                value={waTestTo}
+                onChange={(e) => setWaTestTo(e.target.value)}
+              />
+            </Field>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={runWhatsAppTest} disabled={testingWa || waTestTo.trim().length < 10}>
+                {testingWa ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+                {testingWa ? 'Sending...' : 'Send Test WhatsApp'}
+              </Button>
+              {waTest && (
+                waTest.ok
+                  ? <span className="text-xs font-medium text-green-600">Message sent</span>
+                  : <span className="text-xs font-medium text-red-600 max-w-[20rem]">{waTest.error}</span>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-4 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Webhook className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-semibold text-foreground">Shopify Webhooks</h3>
+            </div>
+            {hooks ? (
+              hooks.healthy
+                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Check className="h-3 w-3" /> All registered</span>
+                : <span className="flex items-center gap-1 text-xs font-medium text-amber-600">Issues found</span>
+            ) : (
+              <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
+            )}
+          </div>
+
+          {hooks && (
+            <div className="space-y-1">
+              {hooks.entries.map((e) => (
+                <div key={e.topic} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-mono text-foreground">{e.topic}</span>
+                  <Badge variant={e.status === 'registered' ? 'success' : e.status === 'stale' ? 'warning' : 'danger'}>{e.status}</Badge>
+                </div>
+              ))
+              }
+            </div>
+          )}
+
+          {hooks && !hooks.expectedAddress && (
+            <p className="text-xs text-muted-foreground">Set PUBLIC_BASE_URL in backend/.env (a public https URL) so Shopify can reach the webhook endpoint.</p>
+          )}
+
+          <Button size="sm" variant="outline" onClick={runWebhookRepair} disabled={repairingHooks}>
+            {repairingHooks ? <Loader2 className="h-4 w-4 animate-spin" /> : <Webhook className="h-4 w-4" />}
+            {repairingHooks ? 'Repairing...' : 'Verify & Repair Webhooks'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-4 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CloudUpload className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-semibold text-foreground">Off-Site Backup</h3>
+            </div>
+            {offsite ? (
+              offsite.configured
+                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> {offsite.bucket}</span>
+                : <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not configured</span>
+            ) : (
+              <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
+            )}
+          </div>
+
+          {offsite?.configured && offsite.endpoint && (
+            <div className="text-sm">
+              <Label className="text-xs text-muted-foreground">Endpoint</Label>
+              <p className="truncate font-mono text-xs text-foreground">{offsite.endpoint}</p>
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            Every auto backup is pushed to any S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2). Set BACKUP_OFFSITE_ENDPOINT / BUCKET / KEY_ID / SECRET in backend/.env.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={runOffsiteTest} disabled={testingOffsite}>
+              {testingOffsite ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plug className="h-4 w-4" />}
+              Test Bucket
+            </Button>
+            <Button size="sm" variant="outline" onClick={runOffsiteSync} disabled={syncingOffsite || !offsite?.configured}>
+              {syncingOffsite ? <Loader2 className="h-4 w-4 animate-spin" /> : <CloudUpload className="h-4 w-4" />}
+              {syncingOffsite ? 'Uploading...' : 'Sync Now'}
+            </Button>
+          </div>
+          {offsiteMsg && (
+            <p className={`text-xs font-medium ${offsiteMsg.ok ? 'text-success-700' : 'text-destructive'}`}>{offsiteMsg.text}</p>
+          )}
         </CardContent>
       </Card>
 
