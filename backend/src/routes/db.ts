@@ -96,7 +96,7 @@ async function prepareUserBody(body: Record<string, unknown>, isUpdate = false):
   return cleaned
 }
 
-function num(value: unknown, fallback: number) {
+export function num(value: unknown, fallback: number) {
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
 }
@@ -345,7 +345,7 @@ dbRouter.get('/invoices/:id/items', async (req, res) => {
   }
 })
 
-function round2(value: number): number {
+export function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
@@ -2045,3 +2045,7 @@ dbRouter.get('/credit-notes/:id/pdf', requirePermission('sales', 'view'), async 
 })
 
 
+
+// ─── Quotations (pre-sale estimates → convert to invoice) ──────────────────
+import { registerQuotationRoutes } from './quotations'
+registerQuotationRoutes(dbRouter)

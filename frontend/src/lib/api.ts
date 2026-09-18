@@ -2,6 +2,7 @@ import type {
   Activity,
   ActivityLogEntry,
   AnalyticsStat,
+  Quotation,
   AppSettings,
   AuditLogEntry,
   NotificationSettings,
@@ -608,6 +609,15 @@ export const dbApi = {
       body: JSON.stringify(payload),
     }),
   getPurchaseOrders: () => list<PurchaseOrder>('/db/purchase-orders', PAGED),
+  getQuotations: () => list<Quotation>('/db/quotations', PAGED),
+  getQuotationById: (id: string) => request<Quotation>(`/db/quotations/${id}`),
+  createQuotation: (payload: Record<string, unknown>) =>
+    request<Quotation>('/db/quotations', { method: 'POST', body: JSON.stringify(payload) }),
+  updateQuotation: (id: string, payload: Record<string, unknown>) =>
+    request<Quotation>(`/db/quotations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteQuotation: (id: string) => request<{ ok: boolean }>(`/db/quotations/${id}`, { method: 'DELETE' }),
+  convertQuotation: (id: string) =>
+    request<{ ok: boolean; invoiceNumber: string; invoiceId: string }>(`/db/quotations/${id}/convert`, { method: 'POST' }),
   getPurchaseInvoices: () => list<PurchaseInvoice>('/db/purchase-invoices', PAGED),
   getSalesReturns: () => list<SalesReturn>('/db/sales-returns', PAGED),
   getPurchaseReturns: () => list<PurchaseReturn>('/db/purchase-returns', PAGED),

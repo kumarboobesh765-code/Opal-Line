@@ -267,6 +267,7 @@ export default function SalesInvoicesPage() {
           </div>
 
           <DataTable
+            onRowDoubleClick={(inv) => navigate(`/sales/invoices/${inv.id}`)}
             onRowClick={(inv) => {
               setViewInvoice(inv)
               setInvoiceItems(inv.items ?? [])

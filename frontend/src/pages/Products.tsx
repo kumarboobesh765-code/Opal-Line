@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import {
   Copy,
@@ -91,6 +91,7 @@ const productTints: Record<string, { bg: string; text: string }> = {
 }
 
 export default function ProductsPage() {
+  const navigate = useNavigate()
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -622,6 +623,7 @@ export default function ProductsPage() {
           </div>
 
           <DataTable
+            onRowDoubleClick={(p) => navigate(`/inventory/products/${p.id}`)}
             onRowClick={(p) => setViewProduct(p)}
             onSelectionChange={setSelectedProducts}
             columns={columns}

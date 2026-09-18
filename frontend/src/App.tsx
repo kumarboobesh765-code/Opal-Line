@@ -13,6 +13,7 @@ const DashboardPage = lazy(() => import('@/pages/Dashboard'))
 const OwnerInsightsPage = lazy(() => import('@/pages/OwnerInsights'))
 const SilverRatePage = lazy(() => import('@/pages/SilverRate'))
 const SalesInvoicesPage = lazy(() => import('@/pages/SalesInvoices'))
+const QuotationsPage = lazy(() => import('@/pages/Quotations'))
 const InvoiceDetailPage = lazy(() => import('@/pages/InvoiceDetail'))
 const SalesOrdersPage = lazy(() => import('@/pages/SalesOrders'))
 const OrderBoardPage = lazy(() => import('@/pages/OrderBoard'))
@@ -103,6 +104,7 @@ function App() {
             <Route path="/silver-rate" element={guarded('silver-rate', <SilverRatePage />)} />
 
             <Route path="/sales/invoices" element={guarded('sales', <SalesInvoicesPage />)} />
+            <Route path="/sales/quotations" element={guarded('sales', <QuotationsPage />)} />
             <Route path="/sales/invoices/:id" element={guarded('sales', <InvoiceDetailPage />)} />
             <Route path="/sales/orders" element={guarded('sales', <SalesOrdersPage />)} />
             <Route path="/sales/pipeline" element={guarded('sales', <OrderBoardPage />)} />

@@ -473,6 +473,42 @@ export interface SalesReturn {
   date: string
 }
 
+export interface QuotationItem {
+  id?: string
+  product: string
+  sku: string
+  qty: number
+  weight: number
+  silverRate: number
+  makingCharge: number
+  amount: number
+}
+
+export interface Quotation {
+  id: string
+  number: string
+  customer: string | null
+  customerPhone: string | null
+  customerEmail: string | null
+  customerAddress: string | null
+  customerCity: string | null
+  customerState: string | null
+  customerPincode: string | null
+  subtotal: number
+  gst: number
+  gstAmount: number
+  discount: number
+  grandTotal: number
+  notes: string | null
+  status: 'draft' | 'sent' | 'approved' | 'converted' | 'expired' | 'cancelled'
+  validUntil: string | null
+  convertedInvoice: string | null
+  convertedAt: string | null
+  createdBy: string | null
+  date: string
+  items?: QuotationItem[]
+}
+
 export interface PurchaseReturn {
   id: string
   number: string

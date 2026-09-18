@@ -798,6 +798,7 @@ export default function SalesOrdersPage() {
             </Button>
           </div>
           <DataTable
+            onRowDoubleClick={(o) => startEdit(o)}
             onRowClick={(o) => setViewOrder(o)}
             onSelectionChange={setSelectedOrders}
             columns={columns}

@@ -33,6 +33,8 @@ interface DataTableProps<TData extends RowData> {
   columnVisibility?: ColumnVisibilityState
   onColumnVisibilityChange?: (v: ColumnVisibilityState) => void
   onRowClick?: (row: TData) => void
+  /** Called when a row is double-clicked (falls back to onRowClick when not provided). */
+  onRowDoubleClick?: (row: TData) => void
   /** Called whenever the set of selected rows changes (checkbox column shown when provided). */
   onSelectionChange?: (selectedRows: TData[]) => void
 }
@@ -47,6 +49,7 @@ export function DataTable<TData extends RowData>({
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
   onRowClick,
+  onRowDoubleClick,
   onSelectionChange,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
@@ -182,6 +185,10 @@ export function DataTable<TData extends RowData>({
                   if ((e.target as HTMLElement).closest('button, a, [role=menuitem], input, select, textarea')) return
                   onRowClick(row.original)
                 } : onSelectionChange ? () => row.toggleSelected() : undefined}
+                onDoubleClick={onRowDoubleClick ? (e) => {
+                  if ((e.target as HTMLElement).closest('button, a, [role=menuitem], input, select, textarea')) return
+                  onRowDoubleClick(row.original)
+                } : undefined}
               >
                 {onSelectionChange && (
                   <TableCell>

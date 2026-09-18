@@ -488,4 +488,50 @@ export const loginAttempts = pgTable('login_attempts', {
   lastAttempt: ts('last_attempt'),
 })
 
+export const quotations = pgTable('quotations', {
+  id: text('id').primaryKey(),
+  number: text('number').notNull().unique(),
+  customer: text('customer'),
+  customerPhone: text('customer_phone'),
+  customerEmail: text('customer_email'),
+  customerAddress: text('customer_address'),
+  customerCity: text('customer_city'),
+  customerState: text('customer_state'),
+  customerPincode: text('customer_pincode'),
+  subtotal: numericNumber('subtotal'),
+  gst: numericNumber('gst'),
+  gstAmount: numericNumber('gst_amount'),
+  discount: numericNumber('discount'),
+  grandTotal: numericNumber('grand_total'),
+  notes: text('notes'),
+  status: text('status').notNull().default('draft'),
+  validUntil: ts('valid_until'),
+  convertedInvoice: text('converted_invoice'),
+  convertedAt: ts('converted_at'),
+  createdBy: text('created_by'),
+  date: ts('date').notNull().defaultNow(),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at'),
+}, (table) => ({
+  statusIdx: index('quotations_status_idx').on(table.status),
+  customerIdx: index('quotations_customer_idx').on(table.customer),
+  dateIdx: index('quotations_date_idx').on(table.date),
+}))
+
+export const quotationItems = pgTable('quotation_items', {
+  id: text('id').primaryKey(),
+  quotationId: text('quotation_id').notNull(),
+  product: text('product'),
+  sku: text('sku'),
+  qty: integer('qty'),
+  weight: numericNumber('weight'),
+  silverRate: numericNumber('silver_rate'),
+  makingCharge: numericNumber('making_charge'),
+  amount: numericNumber('amount'),
+}, (table) => ({
+  quotationIdIdx: index('quotation_items_quotation_id_idx').on(table.quotationId),
+  skuIdx: index('quotation_items_sku_idx').on(table.sku),
+  quotationFk: foreignKey({ columns: [table.quotationId], foreignColumns: [quotations.id], name: 'quotation_items_quotation_id_fk' }).onDelete('cascade'),
+}))
+
 import { sql } from 'drizzle-orm'

@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowLeftRight,
+  FileSpreadsheet,
   BarChart3,
   Barcode,
   BookOpen,
@@ -60,6 +61,7 @@ export const navSections: NavSection[] = [
     label: 'Sales',
     items: [
       { title: 'Sales Invoices', path: '/sales/invoices', icon: FileText },
+      { title: 'Quotations', path: '/sales/quotations', icon: FileSpreadsheet },
       { title: 'Sales Orders', path: '/sales/orders', icon: ListOrdered },
       { title: 'Order Pipeline', path: '/sales/pipeline', icon: KanbanSquare },
       { title: 'Dispatch', path: '/sales/dispatch', icon: Truck },
