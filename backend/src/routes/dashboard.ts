@@ -1,5 +1,5 @@
 import { Router, type Response } from 'express'
-import { and, desc, eq, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, ne, sql, type AnyColumn } from 'drizzle-orm'
 import { db, schema } from '../db/client'
 import { CONSTANTS } from '../constants'
 
@@ -874,5 +874,101 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
     })
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ─── Day Book: everything that happened today on one page ────────────────────
+dashboardRouter.get('/reports/day-book', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const q = String(req.query.date ?? '').trim()
+    let start: string
+    let end: string
+    if (/^\d{4}-\d{2}-\d{2}$/.test(q)) {
+      start = `${q}T00:00:00`
+      const d = new Date(`${q}T00:00:00`)
+      d.setDate(d.getDate() + 1)
+      end = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00`
+    } else {
+      start = localDayStart(0)
+      end = localDayStart(1)
+    }
+    const inDay = (col: AnyColumn) => sql`${col} >= ${start} and ${col} < ${end}`
+
+    const [invoices, orders, payments, expenses, shipments, activities] = await Promise.all([
+      db!.select().from(schema.salesInvoices).where(inDay(schema.salesInvoices.date)).orderBy(schema.salesInvoices.date),
+      db!.select().from(schema.salesOrders).where(inDay(schema.salesOrders.date)).orderBy(schema.salesOrders.date),
+      db!.select().from(schema.payments).where(inDay(schema.payments.date)).orderBy(schema.payments.date),
+      db!.select().from(schema.expenses).where(inDay(schema.expenses.date)).orderBy(schema.expenses.date),
+      db!.select().from(schema.shipments).where(inDay(schema.shipments.createdAt)).orderBy(schema.shipments.createdAt),
+      db!.select().from(schema.activityLogs).where(inDay(schema.activityLogs.timestamp)).orderBy(schema.activityLogs.timestamp).limit(100),
+    ])
+
+    const sum = (rows: Array<Record<string, string | number | null | undefined>>) =>
+      round2(rows.reduce((a, r) => a + Number(r.amount ?? r.grandTotal ?? 0), 0))
+    const totals = {
+      invoiced: round2(invoices.reduce((a, r) => a + Number(r.grandTotal ?? 0), 0)),
+      collected: round2(payments.reduce((a, r) => a + Number(r.amount ?? 0), 0)),
+      expenses: round2(expenses.reduce((a, r) => a + Number(r.amount ?? 0), 0)),
+      netCash: round2(payments.reduce((a, r) => a + Number(r.amount ?? 0), 0) - expenses.reduce((a, r) => a + Number(r.amount ?? 0), 0)),
+    }
+
+    res.json({
+      date: start.slice(0, 10),
+      totals,
+      invoices: invoices.map((i) => ({ id: i.id, number: i.number, customer: i.customer, grandTotal: i.grandTotal, paymentStatus: i.paymentStatus, date: i.date })),
+      orders: orders.map((o) => ({ id: o.id, shopifyId: o.shopifyId, customer: o.customer, value: o.value, status: o.status, date: o.date })),
+      payments: payments.map((p) => ({ id: p.id, ref: p.ref, customer: p.customer, amount: p.amount, method: p.method, date: p.date })),
+      expenses: expenses.map((e) => ({ id: e.id, category: e.category, description: e.description, amount: e.amount, by: e.by, date: e.date })),
+      shipments: shipments.map((s) => ({ id: s.id, orderRef: s.orderRef, customer: s.customer, courier: s.courier, trackingNumber: s.trackingNumber, status: s.status, createdAt: s.createdAt })),
+      activities: activities.map((a) => ({ id: a.id, user: a.user, action: a.action, module: a.module, entity: a.entity, details: a.details, timestamp: a.timestamp })),
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load day book' })
+  }
+})
+
+// ─── Order Detail 360: one call = order + items + invoice + payments + shipment + events + customer ──
+dashboardRouter.get('/orders/:id/full', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const id = String(req.params.id)
+    const [order] = await db!.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, id)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+
+    const [invoiceRows, pays, ship, events, customerRows] = await Promise.all([
+      db!.select().from(schema.salesInvoices).where(eq(schema.salesInvoices.shopifyOrder, order.shopifyId ?? '')).limit(1),
+      db!.select().from(schema.payments).where(eq(schema.payments.invoice, order.invoice ?? '')).orderBy(desc(schema.payments.date)),
+      db!.select().from(schema.shipments).where(eq(schema.shipments.orderId, id)).limit(1),
+      db!.select().from(schema.orderEvents).where(eq(schema.orderEvents.orderId, id)).orderBy(desc(schema.orderEvents.createdAt)),
+      order.customer
+        ? db!.select().from(schema.customers).where(eq(schema.customers.name, order.customer)).limit(1)
+        : Promise.resolve([] as Array<typeof schema.customers.$inferSelect>),
+    ])
+
+    const invoice = invoiceRows[0] ?? null
+    const customer = customerRows[0] ?? null
+    const contact = {
+      name: order.customer ?? customer?.name ?? null,
+      email: customer?.email ?? invoice?.customerEmail ?? null,
+      phone: customer?.phone ?? invoice?.customerPhone ?? null,
+      address: (customer as unknown as { address1?: string | null } | null)?.address1 ?? invoice?.customerAddress ?? null,
+      city: customer?.city ?? invoice?.customerCity ?? null,
+      state: (customer as unknown as { province?: string | null } | null)?.province ?? invoice?.customerState ?? null,
+      pincode: (customer as unknown as { zip?: string | null } | null)?.zip ?? invoice?.customerPincode ?? null,
+    }
+
+    res.json({
+      order,
+      items: (order.lineItems as Array<Record<string, unknown>> | null) ?? [],
+      invoice,
+      payments: pays,
+      shipment: ship[0] ?? null,
+      events,
+      customer,
+      contact,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load order detail' })
   }
 })

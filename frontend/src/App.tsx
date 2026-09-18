@@ -48,6 +48,7 @@ const LedgerPage = lazy(() => import('@/pages/Ledger'))
 const BusinessReportsPage = lazy(() => import('@/pages/BusinessReports'))
 const GstReportsPage = lazy(() => import('@/pages/GstReports'))
 const SalesAnalysisPage = lazy(() => import('@/pages/SalesAnalysis'))
+const DayBookPage = lazy(() => import('@/pages/DayBook'))
 const InventoryReportsPage = lazy(() => import('@/pages/InventoryReports'))
 const DuesPage = lazy(() => import('@/pages/Dues'))
 const NotificationSettingsPage = lazy(() => import('@/pages/NotificationSettings'))
@@ -132,6 +133,7 @@ function App() {
             <Route path="/reports/business" element={guarded('reports', <BusinessReportsPage />)} />
             <Route path="/reports/gst" element={guarded('reports', <GstReportsPage />)} />
             <Route path="/reports/sales" element={guarded('reports', <SalesAnalysisPage />)} />
+            <Route path="/reports/day-book" element={guarded('reports', <DayBookPage />)} />
             <Route path="/reports/inventory" element={guarded('reports', <InventoryReportsPage />)} />
             <Route path="/reports/dues" element={guarded('sales', <DuesPage />)} />
             <Route path="/reports/supplier-dues" element={guarded('purchase', <SupplierDuesPage />)} />

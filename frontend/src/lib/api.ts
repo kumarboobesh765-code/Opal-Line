@@ -40,6 +40,7 @@ import type {
   ConnectionSettings,
   DbStatus,
   Customer360,
+  OrderFullDetail,
   ReorderSuggestion,
   Shipment,
   NotificationLogEntry,
@@ -520,6 +521,8 @@ export const dbApi = {
     }),
   getOrderEvents: (orderId: string) =>
     request<{ data: Array<{ id: string; orderId: string; event: string; details: string | null; actor: string | null; createdAt: string }> }>(`/db/orders/${orderId}/events`),
+  getOrderFull: (orderId: string) =>
+    request<OrderFullDetail>(`/db/orders/${orderId}/full`),
   customer360: (name: string) =>
     request<Customer360>(`/db/customers/${encodeURIComponent(name)}/summary`),
   bulkOrderStatus: (ids: string[], status: string) =>

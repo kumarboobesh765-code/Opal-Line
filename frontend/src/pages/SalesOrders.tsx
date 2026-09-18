@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import {
   AlertTriangle,
+  BookmarkPlus,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -18,6 +19,7 @@ import {
   Search,
   ShoppingBag,
   Trash2,
+  X,
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
@@ -48,7 +50,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Customer, Customer360, OrderEvent, OrderStatus, Product, SalesOrder } from '@/types'
+import type { Customer, Customer360, OrderEvent, OrderFullDetail, OrderStatus, Product, SalesOrder } from '@/types'
 import { cn } from '@/lib/utils'
 import { formatCurrency, formatDate, formatDateTime, todayIST } from '@/lib/format'
 
@@ -160,6 +162,48 @@ export default function SalesOrdersPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('')
+  const [colVis, setColVis] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ordervis-cols') ?? '{}')
+    } catch {
+      return {}
+    }
+  })
+  const handleColVis = (v: Record<string, boolean>) => {
+    setColVis(v)
+    try {
+      localStorage.setItem('ordervis-cols', JSON.stringify(v))
+    } catch { /* ignore */ }
+  }
+
+  // Saved views: {name, query, status} persisted in localStorage
+  interface SavedView { name: string; query: string; status: string }
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ordervis-views') ?? '[]')
+    } catch {
+      return []
+    }
+  })
+  const [viewName, setViewName] = useState('')
+  const [viewDialogOpen, setViewDialogOpen] = useState(false)
+  const saveView = () => {
+    const name = viewName.trim() || `View ${savedViews.length + 1}`
+    const next = [...savedViews.filter((v) => v.name !== name), { name, query: query.trim(), status }].slice(-8)
+    setSavedViews(next)
+    try { localStorage.setItem('ordervis-views', JSON.stringify(next)) } catch { /* ignore */ }
+    setViewName('')
+    setViewDialogOpen(false)
+  }
+  const deleteView = (name: string) => {
+    const next = savedViews.filter((v) => v.name !== name)
+    setSavedViews(next)
+    try { localStorage.setItem('ordervis-views', JSON.stringify(next)) } catch { /* ignore */ }
+  }
+  const applyView = (v: SavedView) => {
+    setQuery(v.query)
+    setStatus(v.status)
+  }
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -729,12 +773,38 @@ export default function SalesOrdersPage() {
               <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelectedOrders([])}>Clear</Button>
             </div>
           )}
+          {savedViews.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {savedViews.map((v) => (
+                <span
+                  key={v.name}
+                  className="group inline-flex items-center gap-1 rounded-full border bg-muted/40 py-0.5 pl-2.5 pr-1 text-xs text-muted-foreground hover:border-primary-300 hover:text-foreground"
+                >
+                  <button className="cursor-pointer" onClick={() => applyView(v)}>{v.name}</button>
+                  <button
+                    className="rounded-full p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+                    aria-label={`Delete view ${v.name}`}
+                    onClick={() => deleteView(v.name)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mb-3 flex items-center gap-2">
+            <Button variant="ghost" size="sm" className="gap-1.5 text-xs" onClick={() => setViewDialogOpen(true)}>
+              <BookmarkPlus className="h-3.5 w-3.5" /> Save current view
+            </Button>
+          </div>
           <DataTable
             onRowClick={(o) => setViewOrder(o)}
             onSelectionChange={setSelectedOrders}
             columns={columns}
             data={filtered}
             loading={loading}
+            columnVisibility={colVis}
+            onColumnVisibilityChange={handleColVis}
             emptyMessage="No orders match your filters"
           />
         </CardContent>
@@ -1055,12 +1125,7 @@ export default function SalesOrdersPage() {
           </DialogHeader>
           {viewOrder ? (
             <div className="space-y-2 text-sm">
-              {/* Customer 360 — past orders, dues, payments for this customer */}
-              {(() => {
-                const cust = customers.find((c) => c.name === viewOrder.customer)
-                  ?? customers.find((c) => viewOrder.shippingAddress?.phone && c.phone === viewOrder.shippingAddress.phone)
-                return cust?.email ? <DetailRow label="Email" value={cust.email} /> : null
-              })()}
+              {/* Customer contact from Customer 360 data */}
               {(() => {
                 const cust = customers.find((c) => c.name === viewOrder.customer)
                   ?? customers.find((c) => viewOrder.shippingAddress?.phone && c.phone === viewOrder.shippingAddress.phone)
@@ -1151,6 +1216,7 @@ export default function SalesOrdersPage() {
                 </div>
               ) : null}
               <Customer360Card customer={viewOrder.customer} />
+              <Order360Section orderId={viewOrder.id} />
               <OrderTimeline orderId={viewOrder.id} />
             </div>
           ) : null}
@@ -1185,6 +1251,27 @@ export default function SalesOrdersPage() {
               {invoiceSavingId === viewOrder?.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
               {viewOrder?.invoice ? 'Invoice Raised' : 'Create Invoice'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save current view</DialogTitle>
+            <DialogDescription>
+              Stores the current search and status filter as a one-click chip above the table.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder="View name (e.g. Today's Shopify orders)"
+            value={viewName}
+            onChange={(e) => setViewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveView() }}
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setViewDialogOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={saveView}>Save view</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1322,6 +1409,77 @@ function Customer360Card({ customer }: { customer: string }) {
 }
 
 /** Order timeline: every event from creation to delivery (lazily loaded). */
+/** Invoice + payment + shipment detail pulled from the Order-360 endpoint */
+function Order360Section({ orderId }: { orderId: string }) {
+  const [detail, setDetail] = useState<OrderFullDetail | null>(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open || detail || !orderId) return
+    dbApi.getOrderFull(orderId).then(setDetail).catch(() => setDetail(null))
+  }, [open, detail, orderId])
+
+  if (!open) {
+    return (
+      <button
+        className="flex w-full items-center justify-between border-b border-border/60 py-2 text-left"
+        onClick={() => setOpen(true)}
+      >
+        <span className="text-sm font-medium text-foreground">Invoice · Payments · Shipment</span>
+        <span className="text-xs text-muted-foreground">Show details</span>
+      </button>
+    )
+  }
+
+  const inv = detail?.invoice ?? null
+  const ship = detail?.shipment ?? null
+  const pays = detail?.payments ?? []
+
+  return (
+    <div className="space-y-2 border-b border-border/60 py-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-foreground">Invoice · Payments · Shipment</span>
+        <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setOpen(false)}>Hide</button>
+      </div>
+
+      {inv ? (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice {inv.number}</p>
+          <DetailRow label="Grand Total" value={formatCurrency(Number(inv.grandTotal ?? 0))} />
+          <DetailRow label="Payment Status" value={inv.paymentStatus ?? '—'} />
+          {inv.dueDate ? <DetailRow label="Due Date" value={formatDate(inv.dueDate)} /> : null}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">No invoice raised yet.</p>
+      )}
+
+      {pays.length > 0 ? (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payments ({pays.length})</p>
+          {pays.map((p) => (
+            <DetailRow
+              key={p.id}
+              label={`${p.method ?? 'Payment'}${p.ref ? ` · ${p.ref}` : ''}`}
+              value={`${formatCurrency(Number(p.amount ?? 0))}${p.date ? ` · ${formatDate(p.date)}` : ''}`}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {ship ? (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Shipment</p>
+          <DetailRow label="Courier" value={ship.courier ?? '—'} />
+          {ship.trackingNumber ? <DetailRow label="Tracking" value={ship.trackingNumber} /> : null}
+          <DetailRow label="Status" value={ship.status} />
+          {ship.deliveredAt ? <DetailRow label="Delivered" value={formatDateTime(ship.deliveredAt)} /> : null}
+          {ship.expectedDelivery && !ship.deliveredAt ? <DetailRow label="Expected" value={formatDate(ship.expectedDelivery)} /> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function OrderTimeline({ orderId }: { orderId: string }) {
   const [events, setEvents] = useState<OrderEvent[]>([])
   const [loaded, setLoaded] = useState(false)

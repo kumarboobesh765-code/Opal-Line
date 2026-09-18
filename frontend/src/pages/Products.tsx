@@ -98,6 +98,19 @@ export default function ProductsPage() {
   const [error, setError] = useState('')
   const [pushMessage, setPushMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [query, setQuery] = useState('')
+  const [colVis, setColVis] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('product-cols') ?? '{}')
+    } catch {
+      return {}
+    }
+  })
+  const handleColVis = (v: Record<string, boolean>) => {
+    setColVis(v)
+    try {
+      localStorage.setItem('product-cols', JSON.stringify(v))
+    } catch { /* ignore */ }
+  }
   const [category, setCategory] = useState('')
   const [purity, setPurity] = useState('')
   const [stockStatus, setStockStatus] = useState('')
@@ -614,6 +627,8 @@ export default function ProductsPage() {
             columns={columns}
             data={filtered}
             loading={loading}
+            columnVisibility={colVis}
+            onColumnVisibilityChange={handleColVis}
             emptyMessage="No products match your filters"
           />
         </CardContent>

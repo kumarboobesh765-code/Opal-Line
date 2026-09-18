@@ -102,6 +102,7 @@ export const navSections: NavSection[] = [
     label: 'Reports',
     items: [
       { title: 'Business Reports', path: '/reports/business', icon: BarChart3 },
+      { title: 'Day Book', path: '/reports/day-book', icon: BookOpen },
       { title: 'GST Reports', path: '/reports/gst', icon: Receipt },
       { title: 'Sales Analysis', path: '/reports/sales', icon: TrendingUp },
       { title: 'Inventory Reports', path: '/reports/inventory', icon: PackageSearch },

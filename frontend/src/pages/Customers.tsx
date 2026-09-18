@@ -100,6 +100,24 @@ export default function CustomersPage() {
     }
   }
 
+  // Bulk selection
+  const [selected, setSelected] = useState<Customer[]>([])
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const bulkStatus = async (status: 'active' | 'inactive') => {
+    setBulkBusy(true)
+    try {
+      await Promise.all(selected.map((c) => dbApi.update('customers', c.id, { status })))
+      const ids = new Set(selected.map((c) => c.id))
+      setCustomers((prev) => prev.map((x) => (ids.has(x.id) ? { ...x, status } : x)))
+      setSelected([])
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Bulk update failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+  const bulkExport = () => exportTable('customers-selected.csv', columns, selected)
+
   const importFromShopify = async () => {
     setImporting(true)
     try {
@@ -298,8 +316,20 @@ export default function CustomersPage() {
             </div>
           </div>
 
+          {selected.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-2">
+              <span className="text-xs font-medium">{selected.length} selected</span>
+              <Button size="sm" variant="outline" onClick={() => bulkStatus('active')} disabled={bulkBusy}>Mark Active</Button>
+              <Button size="sm" variant="outline" onClick={() => bulkStatus('inactive')} disabled={bulkBusy}>Mark Inactive</Button>
+              <Button size="sm" variant="outline" onClick={bulkExport}>
+                <Download className="h-3.5 w-3.5" /> Export Selected
+              </Button>
+              <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelected([])}>Clear</Button>
+            </div>
+          )}
           <DataTable
             onRowClick={(c) => setViewCustomer(c)}
+            onSelectionChange={setSelected}
             columns={columns}
             data={filtered}
             loading={loading}

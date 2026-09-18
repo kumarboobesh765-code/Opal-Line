@@ -6,8 +6,17 @@ import {
   type RowData,
   type SortingState,
 } from '@tanstack/react-table'
-import { ArrowDown, ArrowUp, ChevronsUpDown } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsUpDown, Settings2 } from 'lucide-react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './table'
+import { Button } from './button'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+} from './dropdown-menu'
 import { cn } from '@/lib/utils'
 import { appTableFeatures, type ColumnDef } from '@/lib/table'
 
@@ -20,6 +29,9 @@ interface DataTableProps<TData extends RowData> {
   emptyMessage?: string
   className?: string
   initialVisibility?: ColumnVisibilityState
+  /** Controlled visibility (persisted per page). Overrides internal state when provided. */
+  columnVisibility?: ColumnVisibilityState
+  onColumnVisibilityChange?: (v: ColumnVisibilityState) => void
   onRowClick?: (row: TData) => void
   /** Called whenever the set of selected rows changes (checkbox column shown when provided). */
   onSelectionChange?: (selectedRows: TData[]) => void
@@ -32,14 +44,22 @@ export function DataTable<TData extends RowData>({
   emptyMessage = 'No records found',
   className,
   initialVisibility,
+  columnVisibility: controlledVisibility,
+  onColumnVisibilityChange,
   onRowClick,
   onSelectionChange,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([])
   const [rowSelection, setRowSelection] = React.useState({})
-  const [columnVisibility, setColumnVisibility] = React.useState<ColumnVisibilityState>(
+  const [internalVisibility, setInternalVisibility] = React.useState<ColumnVisibilityState>(
     initialVisibility ?? {},
   )
+  const columnVisibility = controlledVisibility ?? internalVisibility
+  const setColumnVisibility: React.Dispatch<React.SetStateAction<ColumnVisibilityState>> = (updater) => {
+    const next = typeof updater === 'function' ? updater(columnVisibility) : updater
+    if (onColumnVisibilityChange) onColumnVisibilityChange(next)
+    else setInternalVisibility(next)
+  }
 
   const table = useTable({
     features: appTableFeatures,
@@ -60,8 +80,39 @@ export function DataTable<TData extends RowData>({
     onColumnVisibilityChange: setColumnVisibility,
   })
 
+  const hasHidableColumns = table.getAllLeafColumns().filter((c) => c.getCanHide()).length > 2
+
   return (
     <div className={cn('w-full', className)}>
+      {hasHidableColumns && (
+        <div className="mb-2 flex justify-end">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Settings2 className="h-3.5 w-3.5" /> Columns
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-72 w-52 overflow-y-auto">
+              <DropdownMenuLabel className="text-xs">Show columns</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {table
+                .getAllLeafColumns()
+                .filter((c) => c.getCanHide())
+                .map((column) => (
+                  <DropdownMenuCheckboxItem
+                    key={column.id}
+                    checked={column.getIsVisible()}
+                    onCheckedChange={(v) => column.toggleVisibility(!!v)}
+                    onSelect={(e) => e.preventDefault()}
+                    className="text-xs"
+                  >
+                    {typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id}
+                  </DropdownMenuCheckboxItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
       <Table>
         <TableHeader>
           {table.getHeaderGroups().map((headerGroup) => (

@@ -360,6 +360,45 @@ export interface Customer360 {
   payments: Array<{ id: string; ref: string | null; invoice: string | null; amount: number | null; method: string | null; date: string | null }>
 }
 
+export interface OrderFullDetail {
+  order: Record<string, unknown>
+  items: Array<Record<string, unknown>>
+  invoice: {
+    id: string
+    number: string
+    grandTotal: string | number | null
+    subtotal: string | number | null
+    gstAmount: string | number | null
+    paymentStatus: string | null
+    paymentMethod: string | null
+    status: string | null
+    date: string | null
+    dueDate: string | null
+  } | null
+  payments: Array<{ id: string; ref: string | null; amount: string | number | null; method: string | null; gateway: string | null; status: string | null; date: string | null }>
+  shipment: {
+    id: string
+    courier: string | null
+    trackingNumber: string | null
+    status: string
+    dispatchedAt: string | null
+    expectedDelivery: string | null
+    deliveredAt: string | null
+    notes: string | null
+  } | null
+  events: Array<{ id: string; event: string; details: string | null; actor: string | null; createdAt: string }>
+  customer: Record<string, unknown> | null
+  contact: {
+    name: string | null
+    email: string | null
+    phone: string | null
+    address: string | null
+    city: string | null
+    state: string | null
+    pincode: string | null
+  }
+}
+
 export interface ReorderSuggestion {
   id: string
   name: string
