@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Download, Eye, FileText, MessageCircle, MoreHorizontal, Plus, Printer, Search, Undo2, X } from 'lucide-react'
+import { Copy, Download, Eye, FileText, Loader2, MessageCircle, MoreHorizontal, Plus, Printer, Search, Undo2, X } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -50,6 +50,7 @@ const statusBadge: Record<Invoice['status'], { label: string; variant: 'success'
 
 export default function SalesInvoicesPage() {
   const navigate = useNavigate()
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null)
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
@@ -92,6 +93,20 @@ export default function SalesInvoicesPage() {
       return matchQ && matchPay && matchStatus
     })
   }, [invoices, query, paymentFilter, statusFilter])
+
+  const duplicateInvoice = async (inv: Invoice) => {
+    if (!confirm(`Create a draft copy of ${inv.number}? The draft gets a new number, today's date, and pending payment.`)) return
+    setDuplicatingId(inv.id)
+    try {
+      const created = await dbApi.duplicateInvoice(inv.id)
+      setInvoices((prev) => [created as unknown as Invoice, ...prev])
+      setViewInvoice(created as unknown as Invoice)
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Duplicate failed')
+    } finally {
+      setDuplicatingId(null)
+    }
+  }
 
   const columns = useMemo<ColumnDef<Invoice>[]>(
     () => [
@@ -182,6 +197,19 @@ export default function SalesInvoicesPage() {
               </Button>
               </TooltipTrigger>
               <TooltipContent>Print</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={duplicatingId === row.original.id}
+                onClick={() => duplicateInvoice(row.original)}
+              >
+                {duplicatingId === row.original.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Copy className="h-3.5 w-3.5" />}
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>Duplicate as draft</TooltipContent>
             </Tooltip>
             <DropdownMenu>
             <DropdownMenuTrigger asChild>

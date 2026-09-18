@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BookmarkPlus,
   CheckCircle2,
+  Copy,
   Download,
   ExternalLink,
   Eye,
@@ -407,6 +408,33 @@ export default function SalesOrdersPage() {
     setDialogOpen(true)
   }
 
+  /** Clone a past order into a fresh draft — same customer/items, today's date, nothing synced. */
+  const duplicateOrder = (o: SalesOrder) => {
+    setEditing(null)
+    setFormError('')
+    setCreated(null)
+    const c = customers.find((x) => x.name === o.customer)
+    setCustomerSel(c ? c.name : '__new__')
+    setCustomerName(o.customer)
+    setCustomerEmail(c?.email ?? '')
+    setCustomerPhone(c?.phone ?? '')
+    setBillingAddr(o.billingAddress && typeof o.billingAddress === 'object' ? { ...emptyAddress(), ...(o.billingAddress as Record<string, string>) } : emptyAddress())
+    setShippingAddr(o.shippingAddress && typeof o.shippingAddress === 'object' ? { ...emptyAddress(), ...(o.shippingAddress as Record<string, string>) } : emptyAddress())
+    setSameAsBilling(!o.shippingAddress)
+    setOrderDate(new Date().toISOString().slice(0, 10))
+    setPayment(o.payment)
+    setFulfillment(o.fulfillment)
+    setOrderStatus(o.status)
+    setNote('')
+    setSyncToShopify(false)
+    setLineItems(
+      o.lineItems && o.lineItems.length > 0
+        ? o.lineItems.map((li) => ({ key: crypto.randomUUID(), productId: '', title: li.title, sku: li.sku ?? '', qty: li.quantity, price: li.price }))
+        : [emptyLine()],
+    )
+    setDialogOpen(true)
+  }
+
   const columns = useMemo<ColumnDef<SalesOrder>[]>(
     () => [
       {
@@ -509,6 +537,14 @@ export default function SalesOrdersPage() {
               </Button>
               </TooltipTrigger>
               <TooltipContent>Edit order</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" onClick={() => duplicateOrder(row.original)}>
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+              </TooltipTrigger>
+              <TooltipContent>Duplicate as new order</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>

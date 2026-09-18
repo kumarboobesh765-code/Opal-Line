@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { AlertTriangle, CheckCircle2, Gem, PackageX, Plus, Search, ShoppingBag } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FilePlus2, Gem, Loader2, PackageX, Plus, Search, ShoppingBag } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -51,6 +51,8 @@ export default function LowStockAlertPage() {
   const [orderQty, setOrderQty] = useState('')
   const [orderTarget, setOrderTarget] = useState<Row | null>(null)
   const [allNotified, setAllNotified] = useState(false)
+  const [autoPoBusy, setAutoPoBusy] = useState(false)
+  const [autoPoMsg, setAutoPoMsg] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([dbApi.getLowStock(), dbApi.getProducts()]).then(([low, products]) => {
@@ -228,6 +230,21 @@ export default function LowStockAlertPage() {
         subtitle="Products running below their reorder level that need restocking."
         actions={
           <>
+            <Button variant="outline" size="sm" disabled={autoPoBusy} onClick={async () => {
+              if (!confirm('Create draft purchase orders for all low-stock products, grouped by supplier?')) return
+              setAutoPoBusy(true)
+              try {
+                const r = await dbApi.createPOsFromReorder()
+                setAutoPoMsg(`Created ${r.created.length} draft PO(s) covering ${r.products} product(s) — review them in Purchase Orders.`)
+              } catch (err) {
+                setAutoPoMsg(err instanceof Error ? err.message : 'Auto-PO failed')
+              } finally {
+                setAutoPoBusy(false)
+              }
+            }}>
+              {autoPoBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FilePlus2 className="h-3.5 w-3.5" />}
+              Auto-Create PO Drafts
+            </Button>
             <Button variant="outline" size="sm" onClick={() => navigate('/purchase/orders')}>
               <ShoppingBag className="h-3.5 w-3.5" /> Create Bulk PO
             </Button>
@@ -237,6 +254,15 @@ export default function LowStockAlertPage() {
           </>
         }
       />
+
+      {autoPoMsg && (
+        <Card>
+          <CardContent className="flex items-center gap-2 p-3 text-sm">
+            <CheckCircle2 className="h-4 w-4 text-success-600" />
+            <span className="text-success-800">{autoPoMsg}</span>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard icon={AlertTriangle} title="Critical" value={String(counts.critical)} accent="red" support="Below reorder level" />

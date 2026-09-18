@@ -596,6 +596,13 @@ export const dbApi = {
     request<{ created: boolean; invoiceNumber: string | null }>(`/db/sales-orders/${encodeURIComponent(orderId)}/create-invoice`, {
       method: 'POST',
     }),
+  duplicateInvoice: (id: string) =>
+    request<Invoice>(`/db/invoices/${encodeURIComponent(id)}/duplicate`, { method: 'POST' }),
+  createPOsFromReorder: (ids?: string[]) =>
+    request<{ ok: boolean; created: Array<{ number: string; supplier: string; items: number; qty: number }>; suppliers: number; products: number }>(
+      '/db/purchase-orders/from-reorder',
+      { method: 'POST', body: JSON.stringify(ids ? { ids } : {}) },
+    ),
   getDues: () =>
     request<{ dues: Array<{ customer: string; invoiceCount: number; total: number; oldestDate: string | null; invoiceNumbers: string[] }>; total: number; customerCount: number }>('/db/dues'),
   emailDuesStatement: (to?: string) =>

@@ -394,6 +394,65 @@ function normalizeInvoiceItems(raw: unknown): Array<Record<string, unknown>> {
     .filter((it) => String(it.sku) !== '' || String(it.product) !== '')
 }
 
+// Duplicate an existing invoice into a fresh draft (same items/customer, new number, no payment)
+dbRouter.post('/invoices/:id/duplicate', requirePermission('sales', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const [source] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+    if (!source) return res.status(404).json({ error: 'Invoice not found' })
+    const sourceItems = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, source.id))
+    if (sourceItems.length === 0) return res.status(400).json({ error: 'Source invoice has no line items to duplicate' })
+
+    // New invoice number using the configured prefix
+    const [settingsRow] = await db!.select().from(s.settings).where(eq(s.settings.id, 'app')).limit(1)
+    const prefix = settingsRow?.invoicePrefix?.trim() || 'INV-'
+    const now = new Date()
+    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    let invoiceNumber = ''
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const candidate = `${prefix}${stamp}${Math.floor(1000 + Math.random() * 9000)}`
+      const [clash] = await db!.select({ id: s.salesInvoices.id }).from(s.salesInvoices).where(eq(s.salesInvoices.number, candidate)).limit(1)
+      if (!clash) { invoiceNumber = candidate; break }
+    }
+    if (!invoiceNumber) return res.status(500).json({ error: 'Could not generate invoice number' })
+
+    const newId = randomUUID()
+    const row = await db!.transaction(async (tx) => {
+      const [created] = await tx.insert(s.salesInvoices).values({
+        id: newId,
+        number: invoiceNumber,
+        customer: source.customer,
+        customerEmail: source.customerEmail,
+        customerPhone: source.customerPhone,
+        customerAddress: source.customerAddress,
+        customerCity: source.customerCity,
+        customerState: source.customerState,
+        customerPincode: source.customerPincode,
+        silverValue: source.silverValue,
+        makingCharge: source.makingCharge,
+        subtotal: source.subtotal,
+        gst: source.gst,
+        gstAmount: source.gstAmount,
+        discount: source.discount,
+        grandTotal: source.grandTotal,
+        paymentMethod: 'Pending',
+        paymentStatus: 'pending',
+        status: 'draft',
+        date: new Date().toISOString(),
+      }).returning()
+      for (const it of sourceItems) {
+        const { id: _oldId, invoiceId: _oldInvoiceId, ...itemData } = it
+        await tx.insert(s.salesInvoiceItems).values({ ...itemData, id: randomUUID(), invoiceId: newId })
+      }
+      return created
+    })
+    recordCrud('invoices', 'Created', req, row)
+    res.status(201).json(stripHash(row))
+  } catch {
+    res.status(400).json({ error: 'Failed to duplicate invoice' })
+  }
+})
+
 dbRouter.post('/invoices', requirePermission('sales', 'create'), async (req, res) => {
   if (!requireDb(res)) return
   try {
@@ -1223,6 +1282,88 @@ dbRouter.get('/inventory/reorder-suggestions', requirePermission('inventory', 'v
   } catch (err) {
     logger.error({ err }, 'reorder suggestions failed')
     res.status(500).json({ error: 'Failed to generate reorder suggestions' })
+  }
+})
+
+// Create draft purchase orders from reorder suggestions, grouped by supplier.
+// Body: { ids: string[] } — subset of suggestion product ids; omitted = all suggestions.
+dbRouter.post('/purchase-orders/from-reorder', requirePermission('purchase', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const ids = Array.isArray((req.body as { ids?: string[] })?.ids) ? (req.body as { ids: string[] }).ids : null
+    // Reuse the suggestion engine
+    const salesRows = await db!.execute(sql`
+      SELECT li->>'sku' AS sku,
+             sum((li->>'quantity')::numeric) AS qty_sold
+      FROM sales_orders, jsonb_array_elements(line_items) AS li
+      WHERE date > now() - interval '90 days'
+        AND li->>'sku' IS NOT NULL AND li->>'sku' <> ''
+      GROUP BY li->>'sku'
+    `)
+    const soldMap = new Map<string, number>()
+    for (const row of salesRows as any[]) soldMap.set(String(row.sku), Number(row.qty_sold ?? 0))
+
+    const prods = (await db!.select().from(s.products)).filter((p) => {
+      if (p.trackInventory === false) return false
+      if (ids && !ids.includes(p.id)) return false
+      const sold90d = soldMap.get(p.sku) ?? 0
+      const weeklyVelocity = Math.round((sold90d / 13) * 100) / 100
+      const stock = p.stock ?? 0
+      const weeksOfCover = weeklyVelocity > 0 ? Math.round((stock / weeklyVelocity) * 10) / 10 : 99
+      return stock <= (p.reorderLevel ?? 5) || weeksOfCover < 4
+    })
+    if (prods.length === 0) return res.status(400).json({ error: 'No products currently need reordering' })
+
+    // Group by supplier (unknown supplier → 'Unassigned')
+    const bySupplier = new Map<string, typeof prods>()
+    for (const p of prods) {
+      const key = p.supplier?.trim() || 'Unassigned'
+      if (!bySupplier.has(key)) bySupplier.set(key, [])
+      bySupplier.get(key)!.push(p)
+    }
+
+    const now = new Date()
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const created: Array<{ number: string; supplier: string; items: number; qty: number }> = []
+    for (const [supplier, list] of bySupplier) {
+      // Find next sequential PO number for this month
+      let poNumber = ''
+      const existing = await db!.select({ number: s.purchaseOrders.number }).from(s.purchaseOrders)
+      const used = new Set(existing.map((e) => e.number))
+      for (let n = 1; n < 10000; n++) {
+        const candidate = `PO-${stamp}-${String(n).padStart(5, '0')}`
+        if (!used.has(candidate)) { poNumber = candidate; break }
+      }
+      if (!poNumber) return res.status(500).json({ error: 'Could not generate PO number' })
+
+      const qty = list.reduce((a, p) => {
+        const sold90d = soldMap.get(p.sku) ?? 0
+        const weeklyVelocity = Math.round((sold90d / 13) * 100) / 100
+        const target = Math.max(p.reorderLevel ?? 5, Math.ceil(weeklyVelocity * 8))
+        return a + Math.max(target - (p.stock ?? 0), 1)
+      }, 0)
+      const weight = list.reduce((a, p) => a + Number(p.grossWeight ?? p.netWeight ?? 0) * Math.max(1, Math.floor(qty / Math.max(list.length, 1))), 0)
+      const value = list.reduce((a, p) => a + Number(p.sellingPrice ?? 0) * Math.max(1, Math.floor(qty / Math.max(list.length, 1))), 0)
+
+      const [row] = await db!.insert(s.purchaseOrders).values({
+        id: randomUUID(),
+        number: poNumber,
+        supplier,
+        items: list.length,
+        qty,
+        weight: Math.round(weight * 100) / 100,
+        value: Math.round(value * 100) / 100,
+        status: 'draft',
+        date: new Date().toISOString(),
+      }).returning()
+      created.push({ number: row.number, supplier, items: list.length, qty })
+      recordCrud('purchase-orders', 'Created', req, row)
+    }
+
+    res.status(201).json({ ok: true, created, suppliers: created.length, products: prods.length })
+  } catch (err) {
+    logger.error({ err }, 'auto-PO from reorder failed')
+    res.status(500).json({ error: 'Failed to create purchase order drafts' })
   }
 })
 
