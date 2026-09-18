@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Database, DatabaseBackup, Download, FileCheck, Loader2, Lock, RefreshCw, RotateCcw, Trash2, Upload } from 'lucide-react'
+import { Database, DatabaseBackup, Download, FileCheck, Loader2, Lock, RefreshCw, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,7 +8,7 @@ import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { RequireModule } from '@/components/RequirePermission'
-import { backupApi, type BackupFileInfo, type BackupResult, type BackupScopeInfo, type BackupValidation, type DryRunResult } from '@/lib/api'
+import { backupApi, type BackupDiffResult, type BackupFileInfo, type BackupResult, type BackupScopeInfo, type BackupValidation, type DryRunResult } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { ActivityLogEntry } from '@/types'
 
@@ -34,6 +34,11 @@ function BackupRestoreContent() {
 
   const [validation, setValidation] = useState<BackupValidation | null>(null)
   const [dryRunResult, setDryRunResult] = useState<DryRunResult | null>(null)
+  const [diffResult, setDiffResult] = useState<BackupDiffResult | null>(null)
+  const [autoEnc, setAutoEnc] = useState<boolean | null>(null)
+  const [autoEncBusy, setAutoEncBusy] = useState(false)
+  const [verifyBusy, setVerifyBusy] = useState(false)
+  const [verifyResult, setVerifyResult] = useState<{ checked: number; ok: number; corrupt: Array<{ fileName: string; error: string }> } | null>(null)
   const [restoreOpts, setRestoreOpts] = useState<{ restoreSilverRate: boolean; skipShopify: boolean; createSafetyBackup: boolean; tables: string[] }>({ restoreSilverRate: false, skipShopify: false, createSafetyBackup: true, tables: [] })
   const [restoreTarget, setRestoreTarget] = useState<{ type: 'file'; fileName: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -54,9 +59,38 @@ function BackupRestoreContent() {
   useEffect(() => {
     backupApi.getScopes().then(setScopes).catch(() => {})
     backupApi.getAutoBackupStatus().then(setAutoStatus).catch(() => setAutoStatus(null))
+    backupApi.autoBackupSettings().then((s) => setAutoEnc(s.encrypted)).catch(() => setAutoEnc(null))
     reloadHistory()
     reloadFiles()
   }, [reloadHistory, reloadFiles])
+
+  const toggleAutoEnc = async (value: boolean) => {
+    setAutoEncBusy(true)
+    try {
+      await backupApi.setAutoBackupEncrypted(value)
+      setAutoEnc(value)
+      showMsg(true, value ? 'Nightly auto backups will now be AES-256 encrypted.' : 'Nightly auto backups reverted to plain JSON.')
+    } catch (e) {
+      showMsg(false, e instanceof Error ? e.message : 'Failed to update setting')
+    } finally {
+      setAutoEncBusy(false)
+    }
+  }
+
+  const runVerifyAll = async () => {
+    setVerifyBusy(true); setVerifyResult(null); setMessage(null)
+    try {
+      const r = await backupApi.verifyAllBackups()
+      setVerifyResult(r)
+      showMsg(r.corrupt.length === 0, r.corrupt.length === 0
+        ? `All ${r.checked} backup file(s) verified OK.`
+        : `${r.corrupt.length} of ${r.checked} backup file(s) are corrupt — see details below.`)
+    } catch (e) {
+      showMsg(false, e instanceof Error ? e.message : 'Verification failed')
+    } finally {
+      setVerifyBusy(false)
+    }
+  }
 
   const showMsg = (ok: boolean, text: string) => setMessage({ ok, text })
 
@@ -118,6 +152,7 @@ function BackupRestoreContent() {
     const info = files.find((f) => f.fileName === fileName)
     setRestoreOpts({ restoreSilverRate: info?.type === 'products', skipShopify: false, createSafetyBackup: true, tables: [] })
     setBusy('validate-' + fileName); setMessage(null)
+    setDiffResult(null)
     try {
       const v = await backupApi.validate(fileName)
       setValidation(v)
@@ -126,6 +161,20 @@ function BackupRestoreContent() {
       const dr = await backupApi.dryRun(fileName, {})
       setDryRunResult(dr)
       setRestoreTarget({ type: 'file', fileName })
+      // Restore-vs-current diff: compare against the most recent full/auto backup
+      // (the dry-run already shows insert/delete counts; this adds row-level detail)
+      try {
+        const candidates = files
+          .filter((f) => f.fileName !== fileName && (f.type === 'full' || f.label?.includes('auto')))
+          .sort((a, b) => (b.exportedAt ?? '').localeCompare(a.exportedAt ?? ''))
+        const newest = candidates[0]?.fileName
+        if (newest) {
+          const d = await backupApi.diff(newest, fileName)
+          if (d.ok && (d.summary.totalAdded + d.summary.totalRemoved + d.summary.totalModified > 0 || d.tables.length > 0)) {
+            setDiffResult(d)
+          }
+        }
+      } catch { /* diff is best-effort */ }
     } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Validation failed') }
     finally { setBusy(null) }
   }
@@ -231,6 +280,30 @@ function BackupRestoreContent() {
           <p className="text-sm text-muted-foreground">
             Export data backups (plain or encrypted) stored on the server, validate and dry-run before restoring, or restore from a previously saved backup. Restoring replaces matching records; records not present in the backup are untouched.
           </p>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <div className="text-sm font-medium">Encrypt nightly auto backups</div>
+              <div className="text-xs text-muted-foreground">Writes the 7 PM auto backup as AES-256-GCM encrypted file</div>
+            </div>
+            <Switch checked={autoEnc === true} disabled={autoEncBusy || autoEnc === null} onCheckedChange={(v) => void toggleAutoEnc(v)} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={runVerifyAll} disabled={verifyBusy}>
+              {verifyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              {verifyBusy ? 'Verifying...' : 'Verify All Backups'}
+            </Button>
+            <span className="text-xs text-muted-foreground">Also runs weekly (Mon 8:30 AM IST) and emails on corruption.</span>
+          </div>
+          {verifyResult && (
+            <div className="rounded-lg border p-3 text-sm">
+              <p className="font-medium">{verifyResult.ok}/{verifyResult.checked} files OK</p>
+              {verifyResult.corrupt.length > 0 && (
+                <ul className="mt-1 list-disc pl-5 text-xs text-red-600">
+                  {verifyResult.corrupt.map((c) => <li key={c.fileName}><span className="font-mono">{c.fileName}</span> — {c.error}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -478,6 +551,29 @@ function BackupRestoreContent() {
                 ))}
               </div>
               <div className="text-xs text-muted-foreground">Total: +{dryRunResult.totalWillInsert} inserts, -{dryRunResult.totalWillDelete} deletes across {dryRunResult.tables.length} tables</div>
+            </div>
+          )}
+          {diffResult && (
+            <div className="space-y-2 text-sm">
+              <div className="font-medium">Row-level changes vs newest backup:</div>
+              <div className="max-h-[180px] overflow-y-auto rounded-lg border divide-y divide-border">
+                {diffResult.tables.filter((t) => t.added.length + t.removed.length + t.modified.length > 0).map((t) => (
+                  <div key={t.name} className="px-3 py-2">
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="w-[140px] truncate font-mono text-xs font-medium">{t.name}</span>
+                      <Badge variant="success" className="text-[10px]">+{t.added.length} new</Badge>
+                      <Badge variant="warning" className="text-[10px]">~{t.modified.length} changed</Badge>
+                      <Badge variant="muted" className="text-[10px]">-{t.removed.length} not in backup</Badge>
+                    </div>
+                    {(t.added.slice(0, 3).length > 0 || t.modified.slice(0, 3).length > 0) && (
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {[...t.added.slice(0, 3), ...t.modified.slice(0, 3)].join(', ')}{t.added.length + t.modified.length > 6 ? ' …' : ''}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="text-xs text-muted-foreground">{diffResult.summary.totalAdded} added · {diffResult.summary.totalModified} modified · {diffResult.summary.totalRemoved} removed (vs {diffResult.file1})</div>
             </div>
           )}
           <div className="space-y-3 pt-2">

@@ -947,6 +947,24 @@ app.get('/api/v1/settings/offsite-backup', requireAuth, requirePermission('syste
   })
 })
 
+// Encrypted auto-backup toggle + integrity verification
+app.get('/api/v1/settings/auto-backup', requireAuth, requirePermission('system', 'view'), async (_req, res) => {
+  const { isAutoBackupEncrypted } = await import('./autoBackup')
+  res.json({ encrypted: await isAutoBackupEncrypted() })
+})
+
+app.post('/api/v1/settings/auto-backup/encrypted', requireAuth, requirePermission('system', 'edit'), async (req, res) => {
+  const { setAutoBackupEncrypted } = await import('./autoBackup')
+  const value = req.body?.encrypted === true
+  await setAutoBackupEncrypted(value)
+  res.json({ ok: true, encrypted: value })
+})
+
+app.post('/api/v1/backup/verify-all', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  const { verifyAllBackups } = await import('./autoBackup')
+  res.json(await verifyAllBackups())
+})
+
 app.post('/api/v1/settings/offsite-backup/test', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
   const { testOffsiteConnection } = await import('./offsiteBackup')
   res.json(await testOffsiteConnection())
@@ -1403,6 +1421,7 @@ const server = app.listen(config.port, async () => {
   await loadSecretsFromDb()
   // Schedule the daily automated backup (7:00 PM local time).
   startAutoBackup()
+  void import('./autoBackup').then((m) => m.startBackupVerification())
   // Periodic Shopify product pull (interval from settings; 0 = disabled).
   void import('./productAutoSync').then((m) => m.startProductAutoSync())
   // Daily business summary email (9:00 AM IST).

@@ -250,7 +250,7 @@ function getBackupEncryptionKey(): Buffer {
   return getMasterKey()
 }
 
-function encryptBackup(data: string): string {
+export function encryptBackupFile(data: string): string {
   const key = getBackupEncryptionKey()
   const iv = randomBytes(ENCRYPTION_IV_LEN)
   const cipher = createCipheriv(ENCRYPTION_ALGO, key, iv)
@@ -259,7 +259,7 @@ function encryptBackup(data: string): string {
   return Buffer.concat([iv, tag, encrypted]).toString('base64')
 }
 
-function decryptBackup(encoded: string): string {
+export function decryptBackupFile(encoded: string): string {
   const key = getBackupEncryptionKey()
   const buf = Buffer.from(encoded, 'base64')
   if (buf.length < ENCRYPTION_IV_LEN + ENCRYPTION_TAG_LEN + 1) {
@@ -314,7 +314,7 @@ async function validateBackupFile(filePath: string): Promise<BackupValidation> {
     // Handle { _encrypted: true, payload: '...' } wrapper from /export-encrypted
     if (testParsed && typeof testParsed === 'object' && '_encrypted' in testParsed && typeof (testParsed as any).payload === 'string') {
       try {
-        const decrypted = decryptBackup((testParsed as any).payload)
+        const decrypted = decryptBackupFile((testParsed as any).payload)
         parsed = JSON.parse(decrypted) as Record<string, unknown>
         result.warnings.push('Backup file is encrypted (decrypted successfully)')
       } catch {
@@ -325,7 +325,7 @@ async function validateBackupFile(filePath: string): Promise<BackupValidation> {
     // Handle raw encrypted string (base64 with GCM tag, no wrapper)
     } else if (typeof testParsed === 'string' && testParsed.length > 100) {
       try {
-        const decrypted = decryptBackup(testParsed)
+        const decrypted = decryptBackupFile(testParsed)
         parsed = JSON.parse(decrypted) as Record<string, unknown>
         result.warnings.push('Backup file is encrypted (decrypted successfully)')
       } catch {
@@ -506,7 +506,7 @@ async function compareBackups(file1: string, file2: string): Promise<BackupDiff>
     const parsed = JSON.parse(raw)
     // Handle encrypted backups
     if (parsed && typeof parsed === 'object' && '_encrypted' in parsed && typeof (parsed as any).payload === 'string') {
-      const decrypted = decryptBackup((parsed as any).payload)
+      const decrypted = decryptBackupFile((parsed as any).payload)
       const decryptedParsed = JSON.parse(decrypted) as Record<string, unknown>
       return (decryptedParsed.data ?? decryptedParsed) as Record<string, unknown[]>
     }
@@ -832,7 +832,7 @@ backupRouter.get('/export-encrypted', requirePermission('system', 'view'), async
       data: result.data,
     }
     const jsonStr = JSON.stringify(payload)
-    const encrypted = encryptBackup(jsonStr)
+    const encrypted = encryptBackupFile(jsonStr)
     await writeFile(path.join(dir, fileName), JSON.stringify({ _encrypted: true, payload: encrypted }), 'utf8')
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : 'Unknown error' }, 'Encrypted backup file write failed')
@@ -899,7 +899,7 @@ backupRouter.post('/dry-run', requirePermission('system', 'view'), async (req, r
     const raw = await readFile(path.join(backupDirectory(), path.basename(fileName)), 'utf8')
     const parsed = JSON.parse(raw)
     if (parsed._encrypted && parsed.payload) {
-      const decrypted = decryptBackup(parsed.payload)
+      const decrypted = decryptBackupFile(parsed.payload)
       const decryptedParsed = JSON.parse(decrypted)
       data = decryptedParsed.data as Record<string, unknown[]>
       scopeType = decryptedParsed._backup?.type
@@ -1003,7 +1003,7 @@ backupRouter.post('/restore', requirePermission('system', 'edit'), async (req, r
       // Check if encrypted
       if (parsed._encrypted && parsed.payload) {
         try {
-          const decrypted = decryptBackup(parsed.payload as string)
+          const decrypted = decryptBackupFile(parsed.payload as string)
           parsed = JSON.parse(decrypted)
         } catch {
           return res.status(400).json({ error: 'Could not decrypt backup file — wrong encryption key or corrupted file' })

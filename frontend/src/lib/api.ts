@@ -779,6 +779,12 @@ export const backupApi = {
       method: 'POST',
       body: JSON.stringify({ fileName, restoreSilverRate: opts?.restoreSilverRate, tables: opts?.tables }),
     }),
+  autoBackupSettings: (): Promise<{ encrypted: boolean }> =>
+    request('/settings/auto-backup'),
+  setAutoBackupEncrypted: (encrypted: boolean): Promise<{ ok: boolean; encrypted: boolean }> =>
+    request('/settings/auto-backup/encrypted', { method: 'POST', body: JSON.stringify({ encrypted }) }),
+  verifyAllBackups: (): Promise<{ checked: number; ok: number; corrupt: Array<{ fileName: string; error: string }>; verifiedAt: string }> =>
+    request('/backup/verify-all', { method: 'POST' }),
   diff: (file1: string, file2: string): Promise<BackupDiffResult> =>
     request<BackupDiffResult>('/backup/diff', {
       method: 'POST',

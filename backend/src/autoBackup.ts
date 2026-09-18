@@ -41,6 +41,24 @@ function msUntilNextRun(now = new Date()): number {
   return next.getTime() - now.getTime()
 }
 
+// ─── Encrypted auto-backup toggle (stored in settings jsonb) ─────────────────
+export async function isAutoBackupEncrypted(): Promise<boolean> {
+  if (!db) return false
+  try {
+    const [row] = await db.select({ notificationSettings: schema.settings.notificationSettings }).from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+    return (row?.notificationSettings as Record<string, unknown> | null)?.autoBackupEncrypted === true
+  } catch {
+    return false
+  }
+}
+
+export async function setAutoBackupEncrypted(value: boolean): Promise<void> {
+  if (!db) return
+  const [row] = await db.select({ notificationSettings: schema.settings.notificationSettings }).from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+  const current = (row?.notificationSettings ?? {}) as Record<string, unknown>
+  await db.update(schema.settings).set({ notificationSettings: { ...current, autoBackupEncrypted: value } }).where(eq(schema.settings.id, 'app'))
+}
+
 async function runAutoBackup(): Promise<void> {
   const result = await exportScopeData('full')
   if (!result.ok) {
@@ -51,13 +69,20 @@ async function runAutoBackup(): Promise<void> {
   try {
     await mkdir(dir, { recursive: true })
     const stamp = istFileStamp()
-    const fileName = `auto-backup-full-${stamp}.json`
+    const encrypted = await isAutoBackupEncrypted()
+    const fileName = encrypted ? `auto-backup-full-${stamp}.enc.json` : `auto-backup-full-${stamp}.json`
     const payload = {
-      _backup: { type: 'full', label: 'Full Backup (auto)', exportedAt: new Date().toISOString() },
+      _backup: { type: 'full', label: 'Full Backup (auto)', exportedAt: new Date().toISOString(), encrypted },
       data: result.data,
     }
-    await writeFile(path.join(dir, fileName), JSON.stringify(payload, null, 2), 'utf8')
-    logger.info({ file: fileName, tables: Object.keys(result.data).length }, 'Auto backup completed')
+    if (encrypted) {
+      // AES-256-GCM encrypt the payload so files at rest (and off-site) are opaque
+      const { encryptBackupFile } = await import('./routes/backup')
+      await writeFile(path.join(dir, fileName), JSON.stringify({ _encrypted: true, payload: encryptBackupFile(JSON.stringify(payload)) }), 'utf8')
+    } else {
+      await writeFile(path.join(dir, fileName), JSON.stringify(payload, null, 2), 'utf8')
+    }
+    logger.info({ file: fileName, tables: Object.keys(result.data).length, encrypted }, 'Auto backup completed')
     await pruneOldBackups()
 
     // Off-site push (no-op when BACKUP_OFFSITE_* env vars are absent)
@@ -294,4 +319,95 @@ export function stopAutoBackup(): void {
     clearTimeout(timer)
     timer = null
   }
+}
+
+// ─── Backup integrity verification (weekly) ──────────────────────────────────
+// Reads every stored backup (decrypting encrypted ones), validates JSON and
+// the _backup marker, and emails a summary if any file is corrupt.
+
+export interface BackupIntegrityResult {
+  checked: number
+  ok: number
+  corrupt: Array<{ fileName: string; error: string }>
+  verifiedAt: string
+}
+
+export async function verifyAllBackups(): Promise<BackupIntegrityResult> {
+  const result: BackupIntegrityResult = { checked: 0, ok: 0, corrupt: [], verifiedAt: new Date().toISOString() }
+  const dir = autoBackupDirectory()
+  let names: string[] = []
+  try {
+    names = (await readdir(dir)).filter((n) => n.endsWith('.json'))
+  } catch {
+    return result
+  }
+  for (const name of names) {
+    result.checked++
+    try {
+      const raw = await readFile(path.join(dir, name), 'utf8')
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      let data: unknown = parsed
+      if (parsed && typeof parsed === 'object' && parsed._encrypted === true && typeof parsed.payload === 'string') {
+        const { decryptBackupFile } = await import('./routes/backup')
+        data = JSON.parse(decryptBackupFile(parsed.payload as string))
+      }
+      const meta = (data as Record<string, unknown>)._backup as { type?: string; exportedAt?: string } | undefined
+      const tables = (data as Record<string, unknown>).data as Record<string, unknown> | undefined
+      if (!meta?.type) throw new Error('missing _backup metadata')
+      if (!tables || typeof tables !== 'object' || Object.keys(tables).length === 0) throw new Error('no table data')
+      result.ok++
+    } catch (err) {
+      result.corrupt.push({ fileName: name, error: err instanceof Error ? err.message : 'Unreadable' })
+    }
+  }
+  if (result.corrupt.length > 0) {
+    logger.warn({ corrupt: result.corrupt.length }, 'Backup integrity check found corrupt files')
+  } else {
+    logger.info({ checked: result.checked }, 'Backup integrity check passed')
+  }
+  return result
+}
+
+let verifyTimer: NodeJS.Timeout | null = null
+
+async function runWeeklyVerification(): Promise<void> {
+  const res = await verifyAllBackups()
+  if (res.corrupt.length === 0) return
+  try {
+    const email = process.env.NOTIFICATION_EMAIL?.trim()
+    if (!email) return
+    const { sendEmail } = await import('./notifications')
+    await sendEmail({
+      to: email,
+      subject: `⚠️ ${res.corrupt.length} corrupt backup file(s) detected`,
+      html: `<p>Weekly backup integrity check found <strong>${res.corrupt.length}</strong> of ${res.checked} backup files unreadable:</p><ul>${res.corrupt.map((c) => `<li><code>${c.fileName}</code> — ${c.error}</li>`).join('')}</ul><p>These files cannot be restored from. Take a fresh backup and review storage health.</p>`,
+    })
+    logger.info('Corrupt-backup alert emailed')
+  } catch (err) {
+    logger.warn({ err }, 'Corrupt-backup alert failed')
+  }
+}
+
+/** Weekly (Monday 8:30 AM IST) integrity verification with email alert on corruption. */
+export function startBackupVerification(): void {
+  if (verifyTimer) return
+  const msUntilMonday = (): number => {
+    const now = new Date()
+    const next = new Date(now)
+    next.setHours(8, 30, 0, 0)
+    const daysAhead = (1 - next.getDay() + 7) % 7 || (next.getTime() <= now.getTime() ? 7 : 0)
+    next.setDate(next.getDate() + daysAhead)
+    return next.getTime() - now.getTime()
+  }
+  verifyTimer = setTimeout(() => {
+    startBackupVerification() // reschedule first
+    void runWeeklyVerification()
+  }, msUntilMonday())
+  verifyTimer.unref()
+  logger.info({ nextCheckMs: msUntilMonday() }, 'Weekly backup verification scheduled (Mon 8:30 AM IST)')
+}
+
+export function stopBackupVerification(): void {
+  if (verifyTimer) clearTimeout(verifyTimer)
+  verifyTimer = null
 }
