@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { Banknote, CheckCircle2, HandCoins, Loader2, MoreHorizontal, Plus, RefreshCcw, Trash2, Wallet } from 'lucide-react'
+import { Banknote, CheckCircle2, HandCoins, Loader2, Plus, RefreshCcw, RotateCcw, Trash2, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,6 +13,7 @@ import { dbApi } from '@/lib/api'
 import type { Payment } from '@/types'
 import { formatCurrency, formatDateTime } from '@/lib/format'
 import { Search } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -21,13 +22,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 
 const statusBadge: Record<Payment['status'], { label: string; variant: 'success' | 'warning' | 'danger' | 'muted' }> = {
   settled: { label: 'Settled', variant: 'success' },
@@ -239,34 +233,47 @@ export default function PaymentsPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusBadge[row.original.status]
+          const s = statusBadge[row.original.status] ?? { label: row.original.status ?? "—", variant: "muted" as const }
           return <Badge variant={s.variant} dot>{s.label}</Badge>
         },
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              {!row.original.reconciled ? (
-                <DropdownMenuItem onClick={() => setReconciled(row.original, true)}><CheckCircle2 className="h-3.5 w-3.5" /> Mark Reconciled</DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onClick={() => setReconciled(row.original, false)}>Unreconcile</DropdownMenuItem>
-              )}
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setReconciled(row.original, !row.original.reconciled)}>
+                    {row.original.reconciled
+                      ? <RotateCcw className="h-3.5 w-3.5 text-muted-foreground" />
+                      : <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{row.original.reconciled ? 'Unreconcile' : 'Mark Reconciled'}</TooltipContent>
+              </Tooltip>
               {row.original.status !== 'refunded' && row.original.amount > 0 && (
-                <DropdownMenuItem onClick={() => handleRefund(row.original)}><RefreshCcw className="h-3.5 w-3.5" /> Create Refund</DropdownMenuItem>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => handleRefund(row.original)}>
+                      <RefreshCcw className="h-3.5 w-3.5 text-warning-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Create Refund</TooltipContent>
+                </Tooltip>
               )}
-              <DropdownMenuItem onClick={() => handleDelete(row.original.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /> Delete</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(row.original.id)}>
+                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete payment</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

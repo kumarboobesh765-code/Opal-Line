@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { CheckCircle2, Loader2, MoreHorizontal, Plus, Receipt, Search, User, Wallet } from 'lucide-react'
+import { CheckCircle2, Loader2, Plus, Receipt, Search, Trash2, User, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -17,14 +18,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { dbApi } from '@/lib/api'
 import type { Expense } from '@/types'
 import { formatCurrency, formatDateTime, todayIST } from '@/lib/format'
@@ -176,32 +169,37 @@ export default function ExpensesPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusBadge[row.original.status]
+          const s = statusBadge[row.original.status] ?? { label: row.original.status ?? '—', variant: 'muted' as const }
           return <Badge variant={s.variant} dot>{s.label}</Badge>
         },
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              {row.original.status !== 'approved' ? (
-                <DropdownMenuItem onClick={() => approve(row.original)}>
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Approve
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => remove(row.original)}>Delete</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              {row.original.status !== 'approved' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => approve(row.original)}>
+                      <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Approve expense</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => remove(row.original)}>
+                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete expense</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

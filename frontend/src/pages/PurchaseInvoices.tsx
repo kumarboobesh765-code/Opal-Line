@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { Download, MoreHorizontal, Receipt, Search, Weight, Wallet } from 'lucide-react'
+import { Download, Eye, Receipt, Search, Weight, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,13 +8,14 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
 import type { PurchaseInvoice } from '@/types'
@@ -32,6 +33,7 @@ export default function PurchaseInvoicesPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [viewInvoice, setViewInvoice] = useState<PurchaseInvoice | null>(null)
 
   useEffect(() => {
     dbApi.getPurchaseInvoices().then((d) => {
@@ -110,28 +112,27 @@ export default function PurchaseInvoicesPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusBadge[row.original.status]
+          const s = statusBadge[row.original.status] ?? { label: row.original.status ?? "—", variant: "muted" as const }
           return <Badge variant={s.variant} dot>{s.label}</Badge>
         },
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
-        cell: () => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem>View Invoice</DropdownMenuItem>
-              <DropdownMenuItem>Record Payment</DropdownMenuItem>
-              <DropdownMenuItem><Download className="h-3.5 w-3.5" /> Download PDF</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        cell: ({ row }) => (
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setViewInvoice(row.original)}>
+                    <Eye className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>View invoice details</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],
@@ -191,9 +192,31 @@ export default function PurchaseInvoicesPage() {
             data={filtered}
             loading={loading}
             emptyMessage="No purchase invoices found"
+            onRowClick={(i) => setViewInvoice(i)}
           />
         </CardContent>
       </Card>
+
+      <Dialog open={viewInvoice !== null} onOpenChange={(open) => { if (!open) setViewInvoice(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Purchase Invoice {viewInvoice?.number}</DialogTitle>
+            <DialogDescription>{viewInvoice ? formatDate(viewInvoice.date) : ''}</DialogDescription>
+          </DialogHeader>
+          {viewInvoice && (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span className="font-medium">{viewInvoice.supplier}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={statusBadge[viewInvoice.status].variant} dot>{statusBadge[viewInvoice.status].label}</Badge></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Items</span><span>{viewInvoice.items} ({viewInvoice.qty} pcs)</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Weight</span><span>{formatWeight(viewInvoice.weight)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Rate / gm</span><span>₹{viewInvoice.rate.toFixed(1)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Cost</span><span>{formatCurrency(viewInvoice.cost)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span>{formatCurrency(viewInvoice.tax)}</span></div>
+              <div className="flex justify-between border-t pt-2 font-semibold"><span>Total</span><span>{formatCurrency(viewInvoice.total)}</span></div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

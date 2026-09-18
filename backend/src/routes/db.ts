@@ -1228,6 +1228,8 @@ dbRouter.get('/inventory/reorder-suggestions', requirePermission('inventory', 'v
 
 dbRouter.get('/purchase-invoices', listOf(s.purchaseInvoices, s.purchaseInvoices.date))
 dbRouter.get('/purchase-invoices/:id', oneOf(s.purchaseInvoices, s.purchaseInvoices.id))
+dbRouter.get('/purchase-orders', listOf(s.purchaseOrders, s.purchaseOrders.date))
+dbRouter.get('/purchase-orders/:id', oneOf(s.purchaseOrders, s.purchaseOrders.id))
 
 dbRouter.get('/sales-returns', listOf(s.salesReturns, s.salesReturns.date))
 dbRouter.get('/sales-returns/:id', oneOf(s.salesReturns, s.salesReturns.id))

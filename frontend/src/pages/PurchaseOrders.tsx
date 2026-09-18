@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Building2, CheckCircle2, Download, Loader2, MoreHorizontal, Plus, Search, ShoppingCart, Weight, XCircle } from 'lucide-react'
+import { Building2, CheckCircle2, Download, Eye, Loader2, Plus, Search, ShoppingCart, Wallet, Weight, XCircle } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -18,14 +19,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
 import type { PurchaseOrder, Supplier } from '@/types'
@@ -50,6 +43,7 @@ export default function PurchaseOrdersPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState({ supplier: '', items: '', qty: '', weight: '', value: '' })
+  const [viewPo, setViewPo] = useState<PurchaseOrder | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -172,38 +166,57 @@ export default function PurchaseOrdersPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusBadge[row.original.status]
+          const s = statusBadge[row.original.status] ?? { label: row.original.status ?? "—", variant: "muted" as const }
           return <Badge variant={s.variant} dot>{s.label}</Badge>
         },
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem>View PO</DropdownMenuItem>
-              {row.original.status === 'open' ? (
-                <DropdownMenuItem onClick={() => setStatus(row.original, 'received')}>
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Mark Received
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem onClick={() => navigate('/purchase/invoices')}>Create Purchase Invoice</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {row.original.status !== 'cancelled' ? (
-                <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => setStatus(row.original, 'cancelled')}>
-                  <XCircle className="h-3.5 w-3.5" /> Cancel PO
-                </DropdownMenuItem>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setViewPo(row.original)}>
+                    <Eye className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>View PO</TooltipContent>
+              </Tooltip>
+              {row.original.status === 'open' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setStatus(row.original, 'received')}>
+                      <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mark Received</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status !== 'cancelled' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => navigate('/purchase/invoices')}>
+                      <Wallet className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Create Purchase Invoice</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status !== 'cancelled' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setStatus(row.original, 'cancelled')}>
+                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Cancel PO</TooltipContent>
+                </Tooltip>
+              )}
+            </TooltipProvider>
+          </div>
         ),
       },
     ],
@@ -269,9 +282,29 @@ export default function PurchaseOrdersPage() {
             data={filtered}
             loading={loading}
             emptyMessage="No purchase orders found"
+            onRowClick={(o) => setViewPo(o)}
           />
         </CardContent>
       </Card>
+
+      <Dialog open={viewPo !== null} onOpenChange={(open) => { if (!open) setViewPo(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Purchase Order {viewPo?.number}</DialogTitle>
+            <DialogDescription>{viewPo ? formatDate(viewPo.date) : ''}</DialogDescription>
+          </DialogHeader>
+          {viewPo && (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span className="font-medium">{viewPo.supplier}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={statusBadge[viewPo.status].variant} dot>{statusBadge[viewPo.status].label}</Badge></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Line items</span><span>{viewPo.items}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Quantity</span><span>{viewPo.qty}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Weight</span><span>{formatWeight(viewPo.weight)}</span></div>
+              <div className="flex justify-between border-t pt-2 font-semibold"><span>Order value</span><span>{formatCurrency(viewPo.value)}</span></div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>

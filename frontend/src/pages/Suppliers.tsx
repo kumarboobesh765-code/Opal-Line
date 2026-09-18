@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Building2, CheckCircle2, Loader2, MapPin, MoreHorizontal, Phone, Plus, Search, User, Wallet } from 'lucide-react'
+import { Building2, CheckCircle2, History, Loader2, MapPin, Phone, Plus, Search, ShoppingCart, User, UserRoundPen, Wallet, XCircle } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -17,14 +18,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
@@ -154,32 +147,66 @@ export default function SuppliersPage() {
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => (window.location.href = `tel:${row.original.phone}`)}><Phone className="h-3.5 w-3.5" /> Call</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate('/purchase/orders')}>View Purchase History</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate('/purchase/orders')}>Create Purchase Order</DropdownMenuItem>
-              <DropdownMenuSeparator />
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" asChild>
+                    <a href={`tel:${row.original.phone}`}>
+                      <Phone className="h-3.5 w-3.5" />
+                    </a>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Call supplier</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setViewSupplier(row.original)}>
+                    <UserRoundPen className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>View supplier</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => navigate('/purchase/orders')}>
+                    <History className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Purchase history</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => navigate('/purchase/orders')}>
+                    <ShoppingCart className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>New purchase order</TooltipContent>
+              </Tooltip>
               {row.original.status === 'active' ? (
-                <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => deactivate(row.original)}>
-                  Deactivate
-                </DropdownMenuItem>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => deactivate(row.original)}>
+                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Deactivate supplier</TooltipContent>
+                </Tooltip>
               ) : (
-                <DropdownMenuItem onClick={() => dbApi.update('suppliers', row.original.id, { status: 'active' }).then(load).catch(() => window.alert('Failed to reactivate supplier'))}>
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Reactivate
-                </DropdownMenuItem>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => dbApi.update('suppliers', row.original.id, { status: 'active' }).then(load).catch(() => window.alert('Failed to reactivate supplier'))}>
+                      <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Reactivate supplier</TooltipContent>
+                </Tooltip>
               )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

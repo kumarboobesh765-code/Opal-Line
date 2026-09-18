@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { ArrowDownRight, ArrowUpRight, Download, Loader2, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, Download, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -12,6 +12,7 @@ import { exportTable } from '@/lib/export'
 import type { LedgerEntry } from '@/types'
 import { formatCurrency, formatDate, todayIST } from '@/lib/format'
 import { Search } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -20,13 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 
 export default function LedgerPage() {
   const [entries, setEntries] = useState<LedgerEntry[]>([])
@@ -154,18 +148,29 @@ export default function LedgerPage() {
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
+        meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm"><MoreHorizontal className="h-4 w-4" /></Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => openDialog(row.original)}><Pencil className="h-3.5 w-3.5" /> Edit</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleDelete(row.original.id)} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /> Delete</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => openDialog(row.original)}>
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit entry</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(row.original.id)}>
+                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete entry</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

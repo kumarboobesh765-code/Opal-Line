@@ -168,7 +168,7 @@ export default function LowStockAlertPage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const s = statusBadge[row.original.status]
+          const s = statusBadge[row.original.status] ?? { label: row.original.status ?? "—", variant: "muted" as const }
           return <Badge variant={s.variant} dot>{s.label}</Badge>
         },
       },

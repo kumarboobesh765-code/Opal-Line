@@ -1,20 +1,13 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { CheckCircle2, FileDown, MoreHorizontal, RefreshCw, Search, Undo2, XCircle } from 'lucide-react'
+import { Ban, CheckCircle2, FileDown, Search, Undo2, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { dbApi, backupApi } from '@/lib/api'
 import { formatCurrency, formatDate } from '@/lib/format'
 
@@ -107,25 +100,51 @@ export default function ReturnsPage() {
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => backupApi.downloadCreditNotePDF(row.original.id)}><FileDown className="h-3.5 w-3.5" /> Download Credit Note PDF</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setReturnStatus(row.original.id, 'approved')}><CheckCircle2 className="h-3.5 w-3.5" /> Approve</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setReturnStatus(row.original.id, 'rejected')}><XCircle className="h-3.5 w-3.5" /> Reject</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setReturnStatus(row.original.id, 'refunded')}><RefreshCw className="h-3.5 w-3.5" /> Process Refund via Razorpay</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => backupApi.downloadCreditNotePDF(row.original.id)}>
+                    <FileDown className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Credit note PDF</TooltipContent>
+              </Tooltip>
+              {row.original.status === 'pending' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setReturnStatus(row.original.id, 'approved')}>
+                      <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Approve return</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status === 'pending' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setReturnStatus(row.original.id, 'rejected')}>
+                      <Ban className="h-3.5 w-3.5 text-red-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Reject return</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status === 'approved' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setReturnStatus(row.original.id, 'refunded')}>
+                      <Wallet className="h-3.5 w-3.5 text-warning-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Process refund via Razorpay</TooltipContent>
+                </Tooltip>
+              )}
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

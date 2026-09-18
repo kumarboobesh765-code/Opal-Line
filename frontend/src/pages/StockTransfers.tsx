@@ -5,8 +5,8 @@ import {
   ArrowLeftRight,
   ArrowUpFromLine,
   CheckCircle2,
+  Eye,
   Loader2,
-  MoreHorizontal,
   Plus,
   Search,
   Truck,
@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { StatCard } from '@/components/ui/stat-card'
 import { DataTable } from '@/components/ui/data-table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -30,14 +31,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { dbApi } from '@/lib/api'
 import type { InventoryLocation, Product, StockTransfer, TransferStatus } from '@/types'
 import { formatDateTime, formatNumber, formatWeight } from '@/lib/format'
@@ -211,29 +204,41 @@ export default function StockTransfersPage() {
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem disabled={row.original.status === 'received'} onClick={() => updateStatus(row.original.id, 'received')}>
-                <CheckCircle2 className="h-3.5 w-3.5" /> Mark as Received
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={row.original.status === 'cancelled' || row.original.status === 'received'} onClick={() => updateStatus(row.original.id, 'cancelled')}>
-                <XCircle className="h-3.5 w-3.5" /> Cancel Transfer
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-red-600 focus:text-red-600">
-                <XCircle className="h-3.5 w-3.5" /> Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              {row.original.status !== 'received' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => updateStatus(row.original.id, 'received')}>
+                      <ArrowDownToLine className="h-3.5 w-3.5 text-success-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mark as received</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status !== 'cancelled' && row.original.status !== 'received' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => updateStatus(row.original.id, 'cancelled')}>
+                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Cancel transfer</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" disabled={row.original.status !== 'received'} onClick={() => updateStatus(row.original.id, 'received')}>
+                    <Eye className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{row.original.status === 'received' ? 'Received' : 'View after receiving'}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],

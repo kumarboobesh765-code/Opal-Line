@@ -109,7 +109,7 @@ export default function ShopifyPricePage() {
         header: 'Status',
         meta: { align: 'center' as const },
         cell: ({ row }) => {
-          const b = statusBadge[row.original.status]
+          const b = statusBadge[row.original.status] ?? { label: row.original.status ?? "—", variant: "muted" as const }
           return <Badge variant={b.variant} dot>{b.label}</Badge>
         },
       },

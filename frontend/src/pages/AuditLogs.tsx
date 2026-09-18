@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { Activity, Download, FileQuestion, MoreHorizontal, Search, ShieldAlert } from 'lucide-react'
+import { Activity, Download, Eye, FileQuestion, Search, ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,13 +8,14 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { DataTable } from '@/components/ui/data-table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
 import type { AuditLogEntry } from '@/types'
@@ -37,6 +38,7 @@ export default function AuditLogsPage() {
   const [query, setQuery] = useState('')
   const [moduleFilter, setModuleFilter] = useState('')
   const [userFilter, setUserFilter] = useState('')
+  const [viewLog, setViewLog] = useState<AuditLogEntry | null>(null)
 
   useEffect(() => {
     dbApi.getAuditLogs().then((d) => {
@@ -117,21 +119,21 @@ export default function AuditLogsPage() {
       },
       {
         id: 'actions',
-        header: '',
+        header: 'Actions',
         meta: { align: 'right' as const, headerClassName: 'w-10' },
-        cell: () => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-              <DropdownMenuItem>View Full Details</DropdownMenuItem>
-              <DropdownMenuItem><FileQuestion className="h-3.5 w-3.5" /> Related Audit Trail</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        cell: ({ row }) => (
+          <div className="flex items-center justify-end gap-0.5">
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setViewLog(row.original)}>
+                    <Eye className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>View full details</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         ),
       },
     ],
@@ -197,9 +199,31 @@ export default function AuditLogsPage() {
             data={filtered}
             loading={loading}
             emptyMessage="No audit events found"
+            onRowClick={(l) => setViewLog(l)}
           />
         </CardContent>
       </Card>
+
+      <Dialog open={viewLog !== null} onOpenChange={(open) => { if (!open) setViewLog(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{viewLog?.action}</DialogTitle>
+            <DialogDescription>{viewLog ? formatDateTime(viewLog.timestamp) : ''}</DialogDescription>
+          </DialogHeader>
+          {viewLog && (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">User</span><span className="font-medium">{viewLog.user}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Module</span><Badge variant="muted">{viewLog.module}</Badge></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Entity</span><span className="font-mono text-[12px]">{viewLog.entity}</span></div>
+              {viewLog.ip && <div className="flex justify-between"><span className="text-muted-foreground">IP address</span><span className="font-mono text-[12px]">{viewLog.ip}</span></div>}
+              <div className="border-t pt-2">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Changes</p>
+                <p className="mt-1 whitespace-pre-wrap break-words font-mono text-[12px]">{viewLog.changes || '—'}</p>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight, Building, Landmark, Loader2, MoreHorizontal, Pencil, Plus } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, Building, Landmark, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -15,13 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { dbApi } from '@/lib/api'
 import type { BankAccount, LedgerEntry } from '@/types'
 import { formatCurrency } from '@/lib/format'
@@ -123,18 +117,26 @@ export default function BankAccountsPage() {
                   <p className="text-[11px] text-muted-foreground">{account.bank}</p>
                 </div>
               </div>
-<DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon-sm">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuLabel className="text-xs text-muted-foreground">Actions</DropdownMenuLabel>
-                    <DropdownMenuItem onClick={() => openDialog(account)}><Pencil className="h-3.5 w-3.5" /> Edit Account</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => dbApi.remove('bank-accounts', account.id).then(load)}>Delete Account</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+<TooltipProvider delayDuration={200}>
+                  <div className="flex items-center gap-0.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" onClick={() => openDialog(account)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Edit account</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" onClick={() => { if (confirm(`Delete bank account "${account.name}"?`)) dbApi.remove('bank-accounts', account.id).then(load) }}>
+                          <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete account</TooltipContent>
+                    </Tooltip>
+                  </div>
+                </TooltipProvider>
             </div>
 
             <div className="mt-5">
