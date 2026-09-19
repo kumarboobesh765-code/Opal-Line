@@ -94,6 +94,7 @@ export async function generateCatalogPDF(): Promise<Buffer | null> {
     doc.end()
     return done
   } catch (err) {
+    console.error('catalogPdf generation failed:', err)
     return null
   }
 }

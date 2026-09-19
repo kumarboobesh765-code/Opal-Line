@@ -20,6 +20,10 @@ asar: false
 extraResources:
   - from: backend/dist
     to: backend/dist
+    filter:
+      - "**/*"
+      - "!**/.env"
+      - "!**/.env.*"
   - from: backend/dist/node_modules
     to: backend/dist/node_modules
   - from: backend/package.json
@@ -40,6 +44,8 @@ win:
       arch:
         - x64
   artifactName: "${productName}-Setup-${version}.${ext}"
+  # Request no admin privileges — prevents UAC prompt on launch
+  requestedExecutionLevel: asInvoker
 
 nsis:
   oneClick: false

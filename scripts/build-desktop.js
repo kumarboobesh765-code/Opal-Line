@@ -118,8 +118,57 @@ async function main() {
   // Step 2: Compile backend
   console.log('\n2️⃣  Compiling backend...')
   const backendDist = path.join(ROOT, 'backend', 'dist')
+
+  // Clean dist/ first to avoid stale artifacts (e.g. leaked .env files)
+  if (fs.existsSync(backendDist)) {
+    console.log('  Cleaning backend/dist/...')
+    fs.rmSync(backendDist, { recursive: true, force: true })
+  }
   mkdirp(backendDist)
   run('cd backend && npx tsc --outDir dist')
+
+  // Bundle the backend entry to a single CJS file (this is what Electron runs).
+  // MUST be rebuilt from current source every time — a stale index.cjs was the
+  // cause of the first installer's missing-bootstrap failure.
+  run('cd backend && npx esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs --external:argon2 --external:better-sqlite3')
+
+  // FIX: esbuild CJS output sets `import_meta = {}` breaking pdfkit's ICC path.
+  // Patch it so import_meta.url resolves to the bundle file URL.
+  const bundlePath = path.join(backendDist, 'index.cjs')
+  let bundle = fs.readFileSync(bundlePath, 'utf8')
+  const urlShim = 'const { pathToFileURL } = require("url"); import_meta = { url: pathToFileURL(__filename).href };'
+  bundle = bundle.replaceAll('import_meta = {};', urlShim)
+  fs.writeFileSync(bundlePath, bundle)
+  console.log('  Patched import_meta.url for pdfkit ICC support')
+
+  // SECURITY: Remove any .env files that tsc may have copied into dist/
+  // The Electron app generates its own .env in %APPDATA% on first run.
+  const envFiles = [
+    path.join(backendDist, '.env'),
+    path.join(backendDist, '.env.local'),
+    path.join(backendDist, '.env.production'),
+  ]
+  for (const f of envFiles) {
+    if (fs.existsSync(f)) {
+      console.log(`  ⚠️  Removing secret file from bundle: ${path.basename(f)}`)
+      fs.unlinkSync(f)
+    }
+  }
+
+  // Copy esbuild-externalized native addons + their transitive deps.
+  // esbuild --external:argon2 means require('argon2') is left as-is at runtime,
+  // so we need the actual node_modules package (with its own deps) available.
+  const nativePkgs = ['argon2', '@phc', 'node-addon-api', 'node-gyp-build']
+  const nmDest = path.join(backendDist, 'node_modules')
+  mkdirp(nmDest)
+  for (const pkg of nativePkgs) {
+    const src = path.join(ROOT, 'node_modules', pkg)
+    const dst = path.join(nmDest, pkg)
+    if (fs.existsSync(src)) {
+      copyDir(src, dst)
+      console.log(`  Copied native dep: ${pkg}`)
+    }
+  }
 
   // Copy drizzle folder (used by migrate tooling)
   const drizzleSrc = path.join(ROOT, 'backend', 'drizzle')

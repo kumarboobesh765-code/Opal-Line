@@ -1424,7 +1424,8 @@ if (!config.port || config.port < 1 || config.port > 65535) {
 
 // First-run database bootstrap: creates schema + seeds roles/admin on a fresh
 // DB so a clean machine install works without any manual SQL. Idempotent.
-void (async () => {
+// Runs BEFORE the server starts listening so no 503s race on first boot.
+async function startServer() {
   try {
     const { bootstrapDatabase } = await import('./db/bootstrap')
     const boot = await bootstrapDatabase()
@@ -1432,64 +1433,66 @@ void (async () => {
   } catch (err) {
     logger.error({ err }, 'Database bootstrap failed — continuing with startup')
   }
-})()
 
-const server = app.listen(config.port, async () => {
-  logger.info({ port: config.port, shopifyConfigured: isConfigured(), frontendOrigin: FRONTEND_ORIGIN }, 'Server started')
-  await loadSecretsFromDb()
-  // Schedule the daily automated backup (7:00 PM local time).
-  startAutoBackup()
-  void import('./autoBackup').then((m) => m.startBackupVerification())
-  // Periodic Shopify product pull (interval from settings; 0 = disabled).
-  void import('./productAutoSync').then((m) => m.startProductAutoSync())
-  // Daily business summary email (9:00 AM IST).
-  startDailySummary()
-  // Monthly customer statements (1st, 08:30) and due-date reminders (daily 09:15).
-  void import('./monthlyStatements').then((m) => m.startMonthlyStatements())
-  void import('./dueReminders').then((d) => d.startDueReminders())
-  // Weekly owner insights (Monday 08:00).
-  void import('./ownerWeekly').then((w) => w.startWeeklyOwnerReport())
-  startSilverRateScheduler()
-  // Poll the order-notification mailbox so redacted Shopify PII still reaches the ERP
-  startOrderEmailIngest()
-  // Register Shopify webhooks when a public base URL is configured (non-fatal)
-  void import('./webhookRegistration').then((m) => m.registerShopifyWebhooks())
+  const server = app.listen(config.port, async () => {
+    logger.info({ port: config.port, shopifyConfigured: isConfigured(), frontendOrigin: FRONTEND_ORIGIN }, 'Server started')
+    await loadSecretsFromDb()
+    // Schedule the daily automated backup (7:00 PM local time).
+    startAutoBackup()
+    void import('./autoBackup').then((m) => m.startBackupVerification())
+    // Periodic Shopify product pull (interval from settings; 0 = disabled).
+    void import('./productAutoSync').then((m) => m.startProductAutoSync())
+    // Daily business summary email (9:00 AM IST).
+    startDailySummary()
+    // Monthly customer statements (1st, 08:30) and due-date reminders (daily 09:15).
+    void import('./monthlyStatements').then((m) => m.startMonthlyStatements())
+    void import('./dueReminders').then((d) => d.startDueReminders())
+    // Weekly owner insights (Monday 08:00).
+    void import('./ownerWeekly').then((w) => w.startWeeklyOwnerReport())
+    startSilverRateScheduler()
+    // Poll the order-notification mailbox so redacted Shopify PII still reaches the ERP
+    startOrderEmailIngest()
+    // Register Shopify webhooks when a public base URL is configured (non-fatal)
+    void import('./webhookRegistration').then((m) => m.registerShopifyWebhooks())
 
-  // Auto-enrich incomplete orders/customers on startup (background, non-blocking)
-  if (isConfigured()) {
-    setTimeout(async () => {
-      try {
-        const { enrichOrdersFromShopify, enrichCustomersFromShopify } = await import('./shopifyDataEnhance')
-        const orderResult = await enrichOrdersFromShopify()
-        const custResult = await enrichCustomersFromShopify()
-        logger.info({
-          ordersEnriched: orderResult.enriched, ordersFailed: orderResult.failed,
-          customersEnriched: custResult.enriched, customersFailed: custResult.failed,
-        }, 'Startup auto-enrich complete')
-      } catch (err) {
-        logger.error({ err }, 'Startup auto-enrich failed')
-      }
-    }, 5000) // 5s delay to let server fully start
-  }
-})
-
-server.on('error', (err) => {
-  logger.error({ err }, 'Server error')
-})
-
-function gracefulShutdown(signal: string) {
-  logger.info({ signal }, 'Shutting down gracefully')
-  stopOrderEmailIngest()
-  server.close(() => {
-    shutdownSessions()
-    logger.info('Server closed')
-    process.exit(0)
+    // Auto-enrich incomplete orders/customers on startup (background, non-blocking)
+    if (isConfigured()) {
+      setTimeout(async () => {
+        try {
+          const { enrichOrdersFromShopify, enrichCustomersFromShopify } = await import('./shopifyDataEnhance')
+          const orderResult = await enrichOrdersFromShopify()
+          const custResult = await enrichCustomersFromShopify()
+          logger.info({
+            ordersEnriched: orderResult.enriched, ordersFailed: orderResult.failed,
+            customersEnriched: custResult.enriched, customersFailed: custResult.failed,
+          }, 'Startup auto-enrich complete')
+        } catch (err) {
+          logger.error({ err }, 'Startup auto-enrich failed')
+        }
+      }, 5000) // 5s delay to let server fully start
+    }
   })
-  setTimeout(() => {
-    logger.error('Shutdown timed out, forcing exit')
-    process.exit(1)
-  }, 10000)
+
+  server.on('error', (err) => {
+    logger.error({ err }, 'Server error')
+  })
+
+  function gracefulShutdown(signal: string) {
+    logger.info({ signal }, 'Shutting down gracefully')
+    stopOrderEmailIngest()
+    server.close(() => {
+      shutdownSessions()
+      logger.info('Server closed')
+      process.exit(0)
+    })
+    setTimeout(() => {
+      logger.error('Shutdown timed out, forcing exit')
+      process.exit(1)
+    }, 10000)
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'))
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
-process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+startServer()

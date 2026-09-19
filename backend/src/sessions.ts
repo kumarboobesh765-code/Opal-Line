@@ -119,7 +119,10 @@ export async function destroyUserSessions(userId: string): Promise<void> {
 export function setSessionCookie(res: Response, token: string): void {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV !== 'development',
+    // Desktop app runs on http://localhost — Secure flag must be false or the
+    // browser will silently drop the cookie (it only sends Secure cookies
+    // over HTTPS).
+    secure: false,
     sameSite: 'strict',
     maxAge: TTL_MS,
     path: '/',
@@ -129,7 +132,7 @@ export function setSessionCookie(res: Response, token: string): void {
 export function clearSessionCookie(res: Response): void {
   res.cookie(COOKIE_NAME, '', {
     httpOnly: true,
-    secure: process.env.NODE_ENV !== 'development',
+    secure: false,
     sameSite: 'strict',
     maxAge: 0,
     path: '/',

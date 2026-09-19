@@ -9,13 +9,12 @@ let backendProcess: ChildProcess | null = null
 let postgresProcess: ChildProcess | null = null
 
 const BACKEND_PORT = 4000
-const PG_PORT = 5433 // avoids clashing with any existing PostgreSQL on 5432
+const PG_PORT = 5433
 const isDev = !app.isPackaged
 
-// ── App data paths (writable regardless of Program Files permissions) ──────
 const APP_DATA = join(app.getPath('appData'), 'Opal Line Billing')
 const PGDATA = join(APP_DATA, 'pgdata')
-const DATA_DIR = join(APP_DATA, 'data') // .env, encryption key, uploads, backups
+const DATA_DIR = join(APP_DATA, 'data')
 const LOG_DIR = join(APP_DATA, 'logs')
 
 function ensureDirs(): void {
@@ -32,7 +31,6 @@ function logLine(stream: string, text: string): void {
   } catch { /* ignore */ }
 }
 
-// ── Bundled PostgreSQL resolution ───────────────────────────────────────────
 function pgRoot(): string | null {
   if (isDev) {
     const dev = resolve(__dirname, '..', 'backend', 'pgsql')
@@ -57,11 +55,16 @@ function haveSystemPostgres(): boolean {
   } catch { return false }
 }
 
-/**
- * Ensure a PostgreSQL server is running.
- * Priority: bundled portable postgres → system postgres (initdb'd into APP_DATA).
- * Returns the DATABASE_URL for the app database.
- */
+function systemPostgresRoot(): string | null {
+  const candidates = [
+    'C:\\Program Files\\PostgreSQL\\17\\bin',
+    'C:\\Program Files\\PostgreSQL\\16\\bin',
+    'C:\\Program Files\\PostgreSQL\\15\\bin',
+  ]
+  for (const c of candidates) if (existsSync(c)) return c
+  return null
+}
+
 async function ensurePostgres(): Promise<string> {
   const pgPassword = 'opal_local'
   const dbName = 'opal_line'
@@ -72,11 +75,16 @@ async function ensurePostgres(): Promise<string> {
   const createdb = pgBin('createdb')
 
   if (initdb && pgCtl) {
-    // ── Bundled portable PostgreSQL ────────────────────────────────────────
     if (!existsSync(join(PGDATA, 'PG_VERSION'))) {
       console.log('[postgres] Initializing data directory…')
       logLine('postgres', 'initdb ' + PGDATA)
-      execFileSync(initdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe' })
+      try {
+        execFileSync(initdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe' })
+      } catch (err: any) {
+        console.error('[postgres] initdb failed:', err.message)
+        logLine('postgres', 'initdb failed: ' + err.message)
+        throw new Error(`PostgreSQL initdb failed: ${err.stderr?.toString() || err.message}`)
+      }
     }
     if (!isPostgresRunning()) {
       console.log('[postgres] Starting bundled PostgreSQL…')
@@ -99,7 +107,6 @@ async function ensurePostgres(): Promise<string> {
   }
 
   if (haveSystemPostgres()) {
-    // ── System PostgreSQL: initdb into app data (no admin service needed) ──
     const sysPgRootW = systemPostgresRoot()
     if (sysPgRootW) {
       const sysInitdb = join(sysPgRootW, 'initdb.exe')
@@ -107,7 +114,11 @@ async function ensurePostgres(): Promise<string> {
       if (existsSync(sysInitdb) && existsSync(sysPgCtl)) {
         if (!existsSync(join(PGDATA, 'PG_VERSION'))) {
           console.log('[postgres] Initializing data directory (system postgres)…')
-          execFileSync(sysInitdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe' })
+          try {
+            execFileSync(sysInitdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe' })
+          } catch (err: any) {
+            throw new Error(`PostgreSQL initdb failed: ${err.stderr?.toString() || err.message}`)
+          }
         }
         if (!isPostgresRunning()) {
           postgresProcess = spawn(sysPgCtl, ['-D', PGDATA, '-o', `"${toPgOptionPort()}"`, '-l', join(LOG_DIR, 'postgres.log'), 'start'], { stdio: 'pipe' })
@@ -124,7 +135,6 @@ async function ensurePostgres(): Promise<string> {
     }
   }
 
-  // ── No local postgres at all: fall back to DATABASE_URL from env ────────
   console.log('[postgres] No bundled/system PostgreSQL found — using DATABASE_URL from .env')
   logLine('postgres', 'no local postgres; using external DATABASE_URL')
   return ''
@@ -149,20 +159,10 @@ function waitForPostgres(port: number, tries = 30): void {
   console.warn('[postgres] Did not become ready in time — continuing')
 }
 
-function systemPostgresRoot(): string | null {
-  const candidates = [
-    'C:\\Program Files\\PostgreSQL\\17\\bin',
-    'C:\\Program Files\\PostgreSQL\\16\\bin',
-    'C:\\Program Files\\PostgreSQL\\15\\bin',
-  ]
-  for (const c of candidates) if (existsSync(c)) return c
-  return null
-}
-
-// ── .env management ─────────────────────────────────────────────────────────
-function ensureEnvFile(databaseUrl: string): string {
+function ensureEnvFile(databaseUrl: string): { path: string; isFirstRun: boolean } {
   const envPath = join(DATA_DIR, '.env')
-  if (!existsSync(envPath)) {
+  const isFirstRun = !existsSync(envPath)
+  if (isFirstRun) {
     const content = [
       '# Generated by Opal Line Billing on first run.',
       'PORT=4000',
@@ -174,17 +174,15 @@ function ensureEnvFile(databaseUrl: string): string {
     writeFileSync(envPath, content, 'utf8')
     console.log('[env] Created first-run .env at', envPath)
   } else if (databaseUrl) {
-    // Refresh DATABASE_URL to the managed instance if it's absent
     let content = readFileSync(envPath, 'utf8')
     if (!/^DATABASE_URL=/m.test(content)) {
       content = `DATABASE_URL=${databaseUrl}\n` + content
       writeFileSync(envPath, content, 'utf8')
     }
   }
-  return envPath
+  return { path: envPath, isFirstRun }
 }
 
-// ── Backend child process ───────────────────────────────────────────────────
 function findNode(): string {
   if (process.platform !== 'win32') return 'node'
   const candidates = [
@@ -199,10 +197,6 @@ function findNode(): string {
   return 'node'
 }
 
-/**
- * Prefer running the backend with Electron's own Node via ELECTRON_RUN_AS_NODE
- * so end users do NOT need Node.js installed. Falls back to system node.
- */
 function backendCommand(): { cmd: string; baseArgs: string[] } {
   const electronNode = process.execPath
   return { cmd: electronNode, baseArgs: ['--js-flags=', '-e', 'process.env.ELECTRON_RUN_AS_NODE="1";require(process.argv[1])'] }
@@ -230,7 +224,6 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
       const backendRoot = join(process.resourcesPath, 'backend')
       cwd = backendRoot
       entry = join(backendRoot, 'dist', 'index.cjs')
-      // Run the backend with Electron-as-Node: no Node.js install required.
       cmd = process.execPath
       args = [entry]
       const backendEnv: Record<string, string | undefined> = {
@@ -335,13 +328,29 @@ async function main() {
     ensureDirs()
     console.log('[electron] Ensuring PostgreSQL…')
     const managedUrl = await ensurePostgres()
-    const envPath = ensureEnvFile(managedUrl)
+    const { path: envPath, isFirstRun } = ensureEnvFile(managedUrl)
     console.log('[electron] Starting backend server…')
     await startBackend(envPath, managedUrl || null)
     console.log('[electron] Backend started, creating window…')
     createWindow()
+    // On first run, show credentials dialog after a short delay
+    if (isFirstRun) {
+      setTimeout(() => {
+        const credsFile = join(DATA_DIR, 'credentials.txt')
+        let creds = 'Username: admin\nPassword: Opal@2026'
+        try { creds = readFileSync(credsFile, 'utf8') } catch { /* use default */ }
+        dialog.showMessageBox({
+          type: 'info',
+          title: 'Opal Line Billing — First Run',
+          message: 'Admin account created!',
+          detail: creds,
+          buttons: ['OK'],
+        })
+      }, 3000)
+    }
   } catch (err) {
     console.error('[electron] Failed to start:', err)
+    logLine('electron', 'startup failed: ' + String((err as Error)?.message ?? err))
     dialog.showErrorBox('Startup failed', String((err as Error)?.message ?? err))
     if (!mainWindow) createWindow()
   }

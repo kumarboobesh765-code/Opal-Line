@@ -5,18 +5,18 @@ import { eq } from 'drizzle-orm'
 import * as schema from './schema'
 import { defaultRolePermissions } from '../rbac'
 import { roleNames } from './seedData'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import argon2 from 'argon2'
 import { logger } from '../logger'
 
 /**
  * First-run database bootstrap.
  *
- * Runs at server startup BEFORE anything else touches the DB and is safe to
- * run on every start (all statements are idempotent). On a fresh machine this
- * creates the full schema, seeds default roles, and provisions the initial
- * admin user so the desktop installer can go from empty PostgreSQL to a
- * working login with zero manual SQL.
+ * Runs at server startup and is safe to run on every start (all statements
+ * are idempotent). On a fresh machine this creates the FULL schema matching
+ * src/db/schema.ts exactly, seeds default roles, and provisions the initial
+ * admin user so the desktop installer goes from empty PostgreSQL to a working
+ * login with zero manual SQL.
  */
 
 let bootstrapped = false
@@ -34,7 +34,7 @@ async function tableExists(sql: postgres.Sql, name: string): Promise<boolean> {
 
 async function createSchema(sql: postgres.Sql): Promise<void> {
   await sql.begin(async (tx) => {
-    // ── Core identity / settings ──────────────────────────────────────────
+    // ── Identity ──────────────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS roles (
         id text PRIMARY KEY,
@@ -53,9 +53,9 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         email text NOT NULL,
         username text,
         password_hash text,
-        role text NOT NULL DEFAULT 'Staff',
+        role text NOT NULL,
         last_login timestamp,
-        status text NOT NULL DEFAULT 'active',
+        status text NOT NULL,
         avatar_color text,
         permissions jsonb,
         email_verified boolean,
@@ -66,7 +66,25 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         email_verification_expiry timestamp
       )`)
     await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (email)`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username)`)
 
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        token text PRIMARY KEY,
+        user_id text NOT NULL,
+        created_at timestamp,
+        expires_at timestamp
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions (expires_at)`)
+
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        identifier text PRIMARY KEY,
+        count integer NOT NULL DEFAULT 0,
+        last_attempt timestamp
+      )`)
+
+    // ── Settings & rates ──────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS settings (
         id text PRIMARY KEY,
@@ -104,11 +122,15 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS silver_rates (
         id text PRIMARY KEY,
-        rate numeric,
         purity numeric,
+        rate numeric,
         previous_rate numeric,
-        updated_at timestamp
+        updated_at timestamp,
+        change numeric,
+        change_percent numeric,
+        currency text
       )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS silver_rates_updated_at_idx ON silver_rates (updated_at)`)
 
     // ── Catalog & inventory ───────────────────────────────────────────────
     await tx.unsafe(`
@@ -135,16 +157,24 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         reorder_level integer,
         shopify_status text,
         shopify_id text,
-        status text NOT NULL DEFAULT 'active',
+        status text,
         image text,
         images jsonb,
         description text,
-        created_at timestamp DEFAULT now(),
+        vendor text,
+        product_type text,
+        tags text,
+        track_inventory boolean NOT NULL DEFAULT true,
+        charge_on_tax boolean NOT NULL DEFAULT true,
+        created_at date,
         updated_at timestamp
       )`)
-    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS products_sku_unique ON products (sku)`)
-    await tx.unsafe(`CREATE INDEX IF NOT EXISTS products_category_idx ON products (category)`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS products_sku_idx ON products (sku)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS products_shopify_id_idx ON products (shopify_id)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS products_category_idx ON products (category)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS products_status_idx ON products (status)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS products_shopify_status_idx ON products (shopify_status)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS products_name_search_idx ON products USING gin (to_tsvector('english', name))`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS customers (
@@ -164,58 +194,73 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
     await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS customers_shopify_id_idx ON customers (shopify_id)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS customers_email_idx ON customers (email)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS customers_phone_idx ON customers (phone)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS customers_name_search_idx ON customers USING gin (to_tsvector('english', name))`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS suppliers (
         id text PRIMARY KEY,
         name text NOT NULL,
         contact text,
-        email text,
         phone text,
-        address text,
         city text,
-        gstin text,
         status text,
-        notes text,
-        created_at timestamp DEFAULT now()
+        outstanding numeric
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS suppliers_name_idx ON suppliers (name)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS inventory_locations (
         id text PRIMARY KEY,
         name text NOT NULL,
         type text,
-        address text,
-        is_default boolean,
-        created_at timestamp DEFAULT now()
+        city text,
+        manager text
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS inventory_locations_name_idx ON inventory_locations (name)`)
 
     // ── Sales ─────────────────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS sales_orders (
         id text PRIMARY KEY,
-        internal_id text,
         shopify_id text,
+        internal_id text,
         customer text,
-        customer_email text,
-        customer_phone text,
         value numeric,
         payment text,
         fulfillment text,
-        status text NOT NULL DEFAULT 'open',
-        line_items jsonb,
-        shipping_address jsonb,
-        billing_address jsonb,
-        note text,
         invoice text,
-        discount numeric,
+        status text,
         date timestamp,
+        items integer,
+        tags text,
+        currency text,
+        discount numeric,
+        line_items jsonb,
+        billing_address jsonb,
+        shipping_address jsonb,
+        is_booking boolean,
+        advance_paid numeric,
+        customer_email text,
+        customer_phone text,
+        note text,
         created_at timestamp DEFAULT now(),
         updated_at timestamp
       )`)
-    await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_shopify_id_idx ON sales_orders (shopify_id)`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS sales_orders_shopify_id_idx ON sales_orders (shopify_id)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_customer_idx ON sales_orders (customer)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_date_idx ON sales_orders (date)`)
+
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS order_events (
+        id text PRIMARY KEY,
+        order_id text,
+        event text,
+        details text,
+        actor text,
+        created_at timestamp
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS order_events_order_id_idx ON order_events (order_id)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS order_events_created_idx ON order_events (created_at)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS sales_invoices (
@@ -238,14 +283,13 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         grand_total numeric,
         payment_method text,
         payment_status text,
-        status text NOT NULL DEFAULT 'issued',
-        notes text,
-        due_date date,
+        payment_id text,
+        status text,
         date timestamp,
-        created_at timestamp DEFAULT now(),
-        updated_at timestamp
+        due_date timestamp
       )`)
-    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS sales_invoices_number_unique ON sales_invoices (number)`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS sales_invoices_number_idx ON sales_invoices (number)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_invoices_shopify_order_idx ON sales_invoices (shopify_order)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS sales_invoice_items (
@@ -258,27 +302,28 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         silver_rate numeric,
         making_charge numeric,
         tax numeric,
-        amount numeric,
-        CONSTRAINT sales_invoice_items_invoice_id_fk FOREIGN KEY (invoice_id) REFERENCES sales_invoices(id) ON DELETE CASCADE
+        amount numeric
       )`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_invoice_items_invoice_id_idx ON sales_invoice_items (invoice_id)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS sales_returns (
         id text PRIMARY KEY,
-        credit_note text NOT NULL,
+        number text NOT NULL,
         invoice_id text,
-        invoice_number text,
+        credit_note_number text,
+        restocked boolean,
+        return_items jsonb,
+         "order" text,
         customer text,
-        items jsonb,
-        total numeric,
-        reason text,
-        restock boolean,
-        status text NOT NULL DEFAULT 'pending',
-        refunded_at timestamp,
-        date timestamp DEFAULT now()
+        items integer,
+        amount numeric,
+        status text,
+        date timestamp
       )`)
-    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS sales_returns_credit_note_unique ON sales_returns (credit_note)`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS sales_returns_number_idx ON sales_returns (number)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_returns_customer_idx ON sales_returns (customer)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS sales_returns_date_idx ON sales_returns (date)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS quotations (
@@ -321,23 +366,25 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         weight numeric,
         silver_rate numeric,
         making_charge numeric,
-        amount numeric,
-        CONSTRAINT quotation_items_quotation_id_fk FOREIGN KEY (quotation_id) REFERENCES quotations(id) ON DELETE CASCADE
+        amount numeric
       )`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS quotation_items_quotation_id_idx ON quotation_items (quotation_id)`)
 
-    // ── Purchases ─────────────────────────────────────────────────────────
+    // ── Purchases & stock ─────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS purchase_orders (
         id text PRIMARY KEY,
-        number text,
+        number text NOT NULL,
         supplier text,
         items integer,
+        qty integer,
+        weight numeric,
         value numeric,
-        status text NOT NULL DEFAULT 'draft',
-        expected_date date,
-        date timestamp DEFAULT now()
+        status text,
+        date timestamp
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_number_idx ON purchase_orders (number)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_orders_supplier_idx ON purchase_orders (supplier)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS purchase_invoices (
@@ -345,77 +392,89 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         number text NOT NULL,
         supplier text,
         items integer,
+        qty integer,
+        weight numeric,
+        rate numeric,
+        cost numeric,
+        tax numeric,
         total numeric,
         status text,
         date timestamp
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS purchase_invoices_number_idx ON purchase_invoices (number)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS purchase_returns (
         id text PRIMARY KEY,
-        number text,
+        number text NOT NULL,
         supplier text,
         items integer,
-        value numeric,
-        reason text,
-        status text NOT NULL DEFAULT 'pending',
-        date timestamp DEFAULT now()
+        weight numeric,
+        amount numeric,
+        status text,
+        date timestamp
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS purchase_returns_number_idx ON purchase_returns (number)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_returns_supplier_idx ON purchase_returns (supplier)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_returns_date_idx ON purchase_returns (date)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS stock_transfers (
         id text PRIMARY KEY,
-        reference text,
+        number text NOT NULL,
+        "from" text,
+        "to" text,
         product text,
         sku text,
         qty integer,
-        from_location text,
-        to_location text,
-        status text NOT NULL DEFAULT 'pending',
-        notes text,
-        date timestamp DEFAULT now()
+        weight numeric,
+        initiated_by text,
+        status text,
+        date timestamp
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS stock_transfers_number_idx ON stock_transfers (number)`)
 
     // ── Finance ───────────────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS payments (
         id text PRIMARY KEY,
-        reference text,
-        customer text,
+        ref text,
         invoice text,
+        customer text,
         amount numeric,
         method text,
-        type text,
+        gateway text,
         status text,
-        notes text,
-        date timestamp DEFAULT now()
+        date timestamp,
+        reconciled boolean
       )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS payments_ref_idx ON payments (ref)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS payments_invoice_idx ON payments (invoice)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS ledger_entries (
         id text PRIMARY KEY,
         date date,
-        account text,
         description text,
+        ref text,
         debit numeric,
-        credit numeric,
-        balance numeric,
-        category text,
-        created_at timestamp DEFAULT now()
+        credit numeric
       )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS ledger_entries_date_idx ON ledger_entries (date)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS ledger_entries_ref_idx ON ledger_entries (ref)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS expenses (
         id text PRIMARY KEY,
-        date date,
         category text,
         description text,
         amount numeric,
         payment_method text,
-        status text NOT NULL DEFAULT 'pending',
-        receipt text,
-        created_at timestamp DEFAULT now()
+        date timestamp,
+        status text,
+        by text
       )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS expenses_date_idx ON expenses (date)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS bank_accounts (
@@ -423,15 +482,13 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         name text NOT NULL,
         bank text,
         account_number text,
-        ifsc text,
-        branch text,
-        opening_balance numeric,
-        current_balance numeric,
-        status text,
-        created_at timestamp DEFAULT now()
+        account_number_encrypted text,
+        balance numeric,
+        ifsc text
       )`)
+    await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS bank_accounts_name_idx ON bank_accounts (name)`)
 
-    // ── Operations / audit ────────────────────────────────────────────────
+    // ── Operations / audit / notifications ────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS shipments (
         id text PRIMARY KEY,
@@ -445,59 +502,63 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         expected_delivery date,
         delivered_at timestamp,
         notes text,
-        created_at timestamp DEFAULT now()
+        created_at timestamp
       )`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS shipments_order_id_idx ON shipments (order_id)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS activity_logs (
         id text PRIMARY KEY,
-        action text NOT NULL,
+        timestamp timestamp,
+        "user" text,
+        user_id text,
+        role text,
+        action text,
         module text,
         entity text,
-        details jsonb,
-        user_id text,
-        user_name text,
-        ip text,
-        timestamp timestamp DEFAULT now()
+        details text,
+        ip text
       )`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS activity_logs_timestamp_idx ON activity_logs (timestamp)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id text PRIMARY KEY,
+        timestamp timestamp,
+        "user" text,
         action text,
+        module text,
         entity text,
-        entity_id text,
-        actor text,
-        changes jsonb,
-        timestamp timestamp DEFAULT now()
+        changes text,
+        ip text
       )`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS audit_logs_timestamp_idx ON audit_logs (timestamp)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS sync_logs (
         id text PRIMARY KEY,
-        resource text,
+        entity text,
+        shopify_id text,
         direction text,
+        action text,
         status text,
-        records integer,
-        message text,
-        created_at timestamp DEFAULT now()
+        time timestamp,
+        error text,
+        retry boolean
       )`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS notification_log (
         id text PRIMARY KEY,
-        type text NOT NULL,
+        kind text NOT NULL,
+        channel text NOT NULL,
         recipient text,
-        subject text,
-        body text,
-        channel text,
-        status text,
+        ref text,
+        status text NOT NULL,
         error text,
-        created_at timestamp DEFAULT now()
+        created_at timestamp
       )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS notification_log_created_idx ON notification_log (created_at)`)
 
     // ── Loyalty ───────────────────────────────────────────────────────────
     await tx.unsafe(`
@@ -516,22 +577,10 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS loyalty_transactions_customer_id_idx ON loyalty_transactions (customer_id)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS loyalty_transactions_invoice_id_idx ON loyalty_transactions (invoice_id)`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS loyalty_transactions_date_idx ON loyalty_transactions (date)`)
-
-    // ── Extra columns added in later iterations (idempotent) ──────────────
-    await tx.unsafe(`ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions jsonb`)
-    await tx.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_phone text`)
-    await tx.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_address text`)
-    await tx.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_city text`)
-    await tx.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_state text`)
-    await tx.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_pincode text`)
-    await tx.unsafe(`ALTER TABLE products ADD COLUMN IF NOT EXISTS huid text`)
-    await tx.unsafe(`ALTER TABLE products ADD COLUMN IF NOT EXISTS images jsonb`)
-    await tx.unsafe(`ALTER TABLE products ADD COLUMN IF NOT EXISTS reorder_level integer`)
-    await tx.unsafe(`ALTER TABLE expenses ALTER COLUMN status SET DEFAULT 'pending'`)
   })
 }
 
-async function seedDefaults(sql: postgres.Sql, db: ReturnType<typeof drizzle>): Promise<void> {
+async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<void> {
   // Default roles
   for (const [i, name] of roleNames.entries()) {
     const existing = await db.select().from(schema.roles).where(eq(schema.roles.name, name)).limit(1)
@@ -550,7 +599,7 @@ async function seedDefaults(sql: postgres.Sql, db: ReturnType<typeof drizzle>): 
   // Initial admin user (only when no users exist at all)
   const users = await db.select({ id: schema.users.id }).from(schema.users).limit(1)
   if (users.length === 0) {
-    const tempPassword = `Opal${randomBytes(3).toString('hex').toUpperCase()}!`
+    const tempPassword = 'Opal@2026'
     const passwordHash = await argon2.hash(tempPassword)
     await db.insert(schema.users).values({
       id: randomBytes(8).toString('hex'),
@@ -565,10 +614,31 @@ async function seedDefaults(sql: postgres.Sql, db: ReturnType<typeof drizzle>): 
     logger.info('Bootstrap: created initial admin user')
     console.log('\n══════════════════════════════════════════════════════')
     console.log('  Initial admin account created:')
-    console.log('    Email:    admin@opalline.local')
+    console.log('    Username: admin')
     console.log(`    Password: ${tempPassword}`)
     console.log('  Change this password after first login.')
     console.log('══════════════════════════════════════════════════════\n')
+    // Also save credentials to a file so the user can always find them
+    try {
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const dataDir = process.env.APP_DATA_DIR || ''
+      if (dataDir) {
+        const credsPath = path.default.join(dataDir, 'credentials.txt')
+        fs.default.writeFileSync(credsPath, [
+          'Opal Line Billing — Initial Admin Credentials',
+          '================================================',
+          '',
+          `Username: admin`,
+          `Password: ${tempPassword}`,
+          '',
+          'Change this password after first login.',
+          '',
+          `Created: ${new Date().toISOString()}`,
+        ].join('\n'), 'utf8')
+        logger.info({ path: credsPath }, 'Bootstrap: saved credentials file')
+      }
+    } catch { /* best effort */ }
   }
 
   // Settings row
@@ -580,8 +650,8 @@ async function seedDefaults(sql: postgres.Sql, db: ReturnType<typeof drizzle>): 
 }
 
 /**
- * Run bootstrap if the database hasn't been set up yet. Returns the number of
- * bootstrap actions performed (0 = already up to date).
+ * Run bootstrap when the database is fresh (no users table). Idempotent and
+ * safe on every start; upgrades add missing columns/tables for existing DBs.
  */
 export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated: boolean }> {
   if (bootstrapped) return { ran: false, tablesCreated: false }
@@ -590,71 +660,93 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
 
   const sql = await createClient()
   try {
-    const hadUsers = await tableExists(sql, 'users')
-    if (!hadUsers) {
+    const hasUsers = await tableExists(sql, 'users')
+    if (!hasUsers) {
       logger.info('Bootstrap: fresh database detected — creating schema')
       await createSchema(sql)
       const drizzleDb = drizzle(sql, { schema })
-      await seedDefaults(sql, drizzleDb)
+      await seedDefaults(drizzleDb)
       return { ran: true, tablesCreated: true }
     }
 
-    // Existing DB: still apply idempotent column additions for upgrades
-    await sql.unsafe(`ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions jsonb`).catch(() => undefined)
-    await sql.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_phone text`).catch(() => undefined)
-    await sql.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_address text`).catch(() => undefined)
-    await sql.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_city text`).catch(() => undefined)
-    await sql.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_state text`).catch(() => undefined)
-    await sql.unsafe(`ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_pincode text`).catch(() => undefined)
-    await sql.unsafe(`CREATE TABLE IF NOT EXISTS loyalty_transactions (
-      id text PRIMARY KEY,
-      customer_id text NOT NULL,
-      invoice_id text,
-      invoice_number text,
-      type text NOT NULL,
-      points numeric NOT NULL,
-      balance_after numeric,
-      note text,
-      created_by text,
-      date timestamp NOT NULL DEFAULT now()
-    )`).catch(() => undefined)
-    await sql.unsafe(`CREATE TABLE IF NOT EXISTS quotations (
-      id text PRIMARY KEY,
-      number text NOT NULL,
-      customer text,
-      customer_phone text,
-      customer_email text,
-      customer_address text,
-      customer_city text,
-      customer_state text,
-      customer_pincode text,
-      subtotal numeric,
-      gst numeric,
-      gst_amount numeric,
-      discount numeric,
-      grand_total numeric,
-      notes text,
-      status text NOT NULL DEFAULT 'draft',
-      valid_until timestamp,
-      converted_invoice text,
-      converted_at timestamp,
-      created_by text,
-      date timestamp NOT NULL DEFAULT now(),
-      created_at timestamp NOT NULL DEFAULT now(),
-      updated_at timestamp
-    )`).catch(() => undefined)
-    await sql.unsafe(`CREATE TABLE IF NOT EXISTS quotation_items (
-      id text PRIMARY KEY,
-      quotation_id text NOT NULL,
-      product text,
-      sku text,
-      qty integer,
-      weight numeric,
-      silver_rate numeric,
-      making_charge numeric,
-      amount numeric,
-      CONSTRAINT quotation_items_quotation_id_fk FOREIGN KEY (quotation_id) REFERENCES quotations(id) ON DELETE CASCADE
-    )`).catch(() => undefined)
+    // Existing DB: apply idempotent additions for upgrades
+    const upgrades: string[] = [
+      `CREATE TABLE IF NOT EXISTS loyalty_transactions (
+        id text PRIMARY KEY,
+        customer_id text NOT NULL,
+        invoice_id text,
+        invoice_number text,
+        type text NOT NULL,
+        points numeric NOT NULL,
+        balance_after numeric,
+        note text,
+        created_by text,
+        date timestamp NOT NULL DEFAULT now()
+      )`,
+      `CREATE TABLE IF NOT EXISTS quotations (
+        id text PRIMARY KEY,
+        number text NOT NULL,
+        customer text,
+        customer_phone text,
+        customer_email text,
+        customer_address text,
+        customer_city text,
+        customer_state text,
+        customer_pincode text,
+        subtotal numeric,
+        gst numeric,
+        gst_amount numeric,
+        discount numeric,
+        grand_total numeric,
+        notes text,
+        status text NOT NULL DEFAULT 'draft',
+        valid_until timestamp,
+        converted_invoice text,
+        converted_at timestamp,
+        created_by text,
+        date timestamp NOT NULL DEFAULT now(),
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp
+      )`,
+      `CREATE TABLE IF NOT EXISTS quotation_items (
+        id text PRIMARY KEY,
+        quotation_id text NOT NULL,
+        product text,
+        sku text,
+        qty integer,
+        weight numeric,
+        silver_rate numeric,
+        making_charge numeric,
+        amount numeric
+      )`,
+      `CREATE TABLE IF NOT EXISTS order_events (
+        id text PRIMARY KEY,
+        order_id text,
+        event text,
+        details text,
+        actor text,
+        created_at timestamp
+      )`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_phone text`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_address text`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_city text`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_state text`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS customer_pincode text`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS payment_id text`,
+      `ALTER TABLE sales_invoices ADD COLUMN IF NOT EXISTS due_date timestamp`,
+      `ALTER TABLE products ADD COLUMN IF NOT EXISTS huid text`,
+      `ALTER TABLE products ADD COLUMN IF NOT EXISTS images jsonb`,
+      `ALTER TABLE products ADD COLUMN IF NOT EXISTS reorder_level integer`,
+      `ALTER TABLE products ADD COLUMN IF NOT EXISTS description text`,
+      `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS customer_email text`,
+      `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS customer_phone text`,
+      `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS note text`,
+      `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS is_booking boolean`,
+      `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS advance_paid numeric`,
+    ]
+    for (const stmt of upgrades) {
+      await sql.unsafe(stmt).catch(() => undefined)
+    }
     return { ran: true, tablesCreated: false }
   } finally {
     await sql.end({ timeout: 5 })

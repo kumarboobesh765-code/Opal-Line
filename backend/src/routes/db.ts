@@ -124,11 +124,12 @@ async function paginate(table: any, query: any, orderCol: any, req: Request) {
   const page = Math.max(1, num(req.query.page, 1))
   const pageSize = Math.min(200, Math.max(1, num(req.query.limit, 50)))
   const offset = (page - 1) * pageSize
-  const [rows, [{ count }]] = await Promise.all([
+  const [rows, countResult] = await Promise.all([
     db!.select().from(table).orderBy(orderedColumn(orderCol)).limit(pageSize).offset(offset),
     db!.select({ count: sql<number>`count(*) over ()` }).from(table).limit(1),
   ])
-  return { page, pageSize, total: Number(count ?? 0), data: rows }
+  const count = countResult[0]?.count ?? 0
+  return { page, pageSize, total: Number(count), data: rows }
 }
 
 const listOf = (table: any, orderCol?: any) =>
@@ -139,6 +140,7 @@ const listOf = (table: any, orderCol?: any) =>
       result.data = result.data.map(stripHash)
       res.json(result)
     } catch (err) {
+      logger.error({ err }, 'listOf query failed')
       res.status(500).json({ error: 'Internal server error' })
     }
   }
@@ -151,6 +153,7 @@ const oneOf = (table: any, idCol: any) =>
       if (!rows[0]) return res.status(404).json({ error: 'Not found' })
       res.json(stripHash(rows[0]))
     } catch (err) {
+      logger.error({ err }, 'oneOf query failed')
       res.status(500).json({ error: 'Internal server error' })
     }
   }
@@ -1394,7 +1397,7 @@ dbRouter.get('/bank-accounts', async (req, res) => {
     const result = await paginate(s.bankAccounts, req.query, s.bankAccounts.name, req)
     result.data = result.data.map(stripHash).map(maskBankAccount)
     res.json(result)
-  } catch { res.status(500).json({ error: 'Internal server error' }) }
+  } catch (err) { logger.error({ err }, 'bank-accounts list failed'); res.status(500).json({ error: 'Internal server error' }) }
 })
 dbRouter.get('/bank-accounts/:id', async (req, res) => {
   if (!requireDb(res)) return
@@ -1402,7 +1405,7 @@ dbRouter.get('/bank-accounts/:id', async (req, res) => {
     const rows = await db!.select().from(s.bankAccounts).where(eq(s.bankAccounts.id, req.params.id)).limit(1)
     if (!rows[0]) return res.status(404).json({ error: 'Not found' })
     res.json(maskBankAccount(stripHash(rows[0])))
-  } catch { res.status(500).json({ error: 'Internal server error' }) }
+  } catch (err) { logger.error({ err }, 'bank-accounts get failed'); res.status(500).json({ error: 'Internal server error' }) }
 })
 
 dbRouter.get('/ledger', listOf(s.ledgerEntries, s.ledgerEntries.date))
