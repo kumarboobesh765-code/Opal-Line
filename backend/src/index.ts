@@ -1422,6 +1422,18 @@ if (!config.port || config.port < 1 || config.port > 65535) {
   config.port = 4000
 }
 
+// First-run database bootstrap: creates schema + seeds roles/admin on a fresh
+// DB so a clean machine install works without any manual SQL. Idempotent.
+void (async () => {
+  try {
+    const { bootstrapDatabase } = await import('./db/bootstrap')
+    const boot = await bootstrapDatabase()
+    if (boot.ran) logger.info({ tablesCreated: boot.tablesCreated }, 'Database bootstrap complete')
+  } catch (err) {
+    logger.error({ err }, 'Database bootstrap failed — continuing with startup')
+  }
+})()
+
 const server = app.listen(config.port, async () => {
   logger.info({ port: config.port, shopifyConfigured: isConfigured(), frontendOrigin: FRONTEND_ORIGIN }, 'Server started')
   await loadSecretsFromDb()

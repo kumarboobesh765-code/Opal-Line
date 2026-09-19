@@ -24,10 +24,15 @@ extraResources:
     to: backend/dist/node_modules
   - from: backend/package.json
     to: backend/package.json
-  - from: backend/.env
-    to: backend/.env
   - from: backend/drizzle
     to: backend/drizzle
+  # Portable PostgreSQL — optional; present only when scripts/build-desktop.js
+  # downloaded it. electron-builder errors on missing sources without
+  # filter support, so the build script writes this marker file.
+  - from: backend/pgsql-present.flag
+    to: pgsql-present.flag
+  - from: backend/pgsql
+    to: pgsql
 
 win:
   target:

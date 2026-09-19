@@ -2124,6 +2124,50 @@ dbRouter.get('/supplier-dues', requirePermission('purchase', 'view'), async (_re
   }
 })
 
+// Record a supplier payment — settles open purchase invoices FIFO (oldest
+// first) until the amount is exhausted, mirroring the customer dues flow.
+dbRouter.post('/supplier-dues/pay', requirePermission('purchase', 'edit'), async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: 'Database not configured' })
+    const supplier = String(req.body?.supplier ?? '').trim()
+    const amount = Number(req.body?.amount ?? 0)
+    const method = String(req.body?.method ?? 'cash').trim().toLowerCase()
+    if (!supplier) return res.status(400).json({ error: 'supplier required' })
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be > 0' })
+
+    const open = await db
+      .select()
+      .from(schema.purchaseInvoices)
+      .where(sql`${schema.purchaseInvoices.supplier} = ${supplier} and ${schema.purchaseInvoices.status} is distinct from 'paid' and ${schema.purchaseInvoices.status} is distinct from 'cancelled'`)
+      .orderBy(sql`${schema.purchaseInvoices.date} asc`)
+    if (open.length === 0) return res.status(400).json({ error: 'No outstanding invoices for this supplier' })
+    const outstanding = open.reduce((a, inv) => a + Number(inv.total ?? 0), 0)
+    if (amount > outstanding + 0.01) return res.status(400).json({ error: `Amount exceeds outstanding (${outstanding.toFixed(2)})` })
+
+    let remaining = amount
+    const settled: string[] = []
+    for (const inv of open) {
+      if (remaining <= 0) break
+      const due = Number(inv.total ?? 0)
+      const applied = Math.min(due, remaining)
+      if (applied <= 0) continue
+      remaining = Math.round((remaining - applied) * 100) / 100
+      if (applied >= due - 0.01) {
+        await db.update(schema.purchaseInvoices).set({ status: 'paid' }).where(eq(schema.purchaseInvoices.id, inv.id))
+        settled.push(inv.number)
+      } else {
+        await db.update(schema.purchaseInvoices).set({ status: 'partial' }).where(eq(schema.purchaseInvoices.id, inv.id))
+      }
+    }
+    const ref = `SP-${Date.now().toString(36).toUpperCase()}`
+    logger.info({ supplier, amount, method, settled, ref }, 'Supplier payment recorded')
+    res.json({ ok: true, ref, settled, outstanding: Math.round((outstanding - amount) * 100) / 100 })
+  } catch (err) {
+    logger.error({ err }, 'Supplier payment failed')
+    res.status(500).json({ error: 'Failed to record supplier payment' })
+  }
+})
+
 // ─── Notification settings ─────────────────────────────────────────────────
 
 dbRouter.get('/settings/notifications', requirePermission('system', 'view'), async (_req, res) => {
