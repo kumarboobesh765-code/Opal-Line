@@ -535,3 +535,21 @@ export const quotationItems = pgTable('quotation_items', {
 }))
 
 import { sql } from 'drizzle-orm'
+// ─── Loyalty points ─────────────────────────────────────────────────────────
+
+export const loyaltyTransactions = pgTable('loyalty_transactions', {
+  id: text('id').primaryKey(),
+  customerId: text('customer_id').notNull(),
+  invoiceId: text('invoice_id'),
+  invoiceNumber: text('invoice_number'),
+  type: text('type').notNull(), // 'earn' | 'redeem' | 'adjust'
+  points: numericNumber('points').notNull(), // positive earn, negative redeem
+  balanceAfter: numericNumber('balance_after'),
+  note: text('note'),
+  createdBy: text('created_by'),
+  date: ts('date').notNull().defaultNow(),
+}, (table) => ({
+  customerIdx: index('loyalty_transactions_customer_id_idx').on(table.customerId),
+  invoiceIdx: index('loyalty_transactions_invoice_id_idx').on(table.invoiceId),
+  dateIdx: index('loyalty_transactions_date_idx').on(table.date),
+}))

@@ -37,7 +37,7 @@ export default function NotificationSettingsPage() {
 
   useEffect(() => {
     dbApi.getNotificationSettings()
-      .then(setSettings)
+      .then((s) => setSettings({ ...s, recipientEmail: s.recipientEmail ?? '' }))
       .catch(() => undefined)
       .finally(() => setLoading(false))
   }, [])

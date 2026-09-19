@@ -47,15 +47,26 @@ export default function CustomersPage() {
   const [viewCustomer, setViewCustomer] = useState<Customer | null>(null)
   const [customerOrders, setCustomerOrders] = useState<SalesOrder[]>([])
   const [customerInvoices, setCustomerInvoices] = useState<Invoice[]>([])
+  const [loyaltyBalance, setLoyaltyBalance] = useState<number | null>(null)
+  const [loyaltyEntries, setLoyaltyEntries] = useState<Array<{ id: string; type: string; points: string; balanceAfter: string | null; note: string | null; invoiceNumber: string | null; date: string }>>([])
+  const [adjustingPoints, setAdjustingPoints] = useState(false)
 
   // Load the customer's recent orders + invoice statement whenever the detail dialog opens
   useEffect(() => {
     if (!viewCustomer) {
       setCustomerOrders([])
       setCustomerInvoices([])
+      setLoyaltyBalance(null)
+      setLoyaltyEntries([])
       return
     }
     let cancelled = false
+    dbApi.loyaltyBalance(viewCustomer.name)
+      .then((r) => { if (!cancelled) setLoyaltyBalance(r.found ? (r.balance ?? 0) : null) })
+      .catch(() => undefined)
+    dbApi.loyaltyHistory(viewCustomer.name)
+      .then((r) => { if (!cancelled) setLoyaltyEntries(r.entries ?? []) })
+      .catch(() => undefined)
     dbApi.getSalesOrders()
       .then((orders) => {
         if (cancelled) return
@@ -390,6 +401,59 @@ export default function CustomersPage() {
                   ))}
                 </div>
               )}
+            </div>
+            <div className="mt-3 border-t border-border/60 pt-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Loyalty Points</p>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[11px]"
+                    disabled={adjustingPoints}
+                    onClick={async () => {
+                      const raw = window.prompt(`Adjust points for ${viewCustomer.name} (use negative to deduct):`, '50')
+                      if (raw === null) return
+                      const pts = Number(raw)
+                      if (!Number.isFinite(pts) || pts === 0) { window.alert('Enter a non-zero number'); return }
+                      setAdjustingPoints(true)
+                      try {
+                        await dbApi.loyaltyAdjust(viewCustomer.name, Math.round(pts), 'Manual adjustment')
+                        const [b, h] = await Promise.all([dbApi.loyaltyBalance(viewCustomer.name), dbApi.loyaltyHistory(viewCustomer.name)])
+                        setLoyaltyBalance(b.found ? (b.balance ?? 0) : null)
+                        setLoyaltyEntries(h.entries ?? [])
+                      } catch (err) {
+                        window.alert(err instanceof Error ? err.message : 'Adjust failed')
+                      } finally {
+                        setAdjustingPoints(false)
+                      }
+                    }}
+                  >
+                    Adjust
+                  </Button>
+                </div>
+              </div>
+              <div className={`rounded-md border px-2 py-1.5 text-center ${loyaltyBalance && loyaltyBalance > 0 ? 'border-violet-500/40 bg-violet-500/10' : 'border-border/60 bg-muted/30'}`}>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Available Balance</p>
+                <p className="text-lg font-semibold tabular-nums text-foreground">
+                  {loyaltyBalance === null ? '—' : `${loyaltyBalance.toLocaleString('en-IN')} pts`}
+                </p>
+                <p className="text-[10px] text-muted-foreground">1 point = ₹1 · earned ₹1 per ₹100 spent</p>
+              </div>
+              {loyaltyEntries.length > 0 ? (
+                <div className="mt-2 space-y-1">
+                  {loyaltyEntries.slice(0, 4).map((e) => (
+                    <div key={e.id} className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-2.5 py-1.5 text-sm">
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {e.invoiceNumber ? `${e.invoiceNumber} — ` : ''}{e.note || e.type}
+                      </span>
+                      <span className={`shrink-0 text-xs font-semibold tabular-nums ${Number(e.points) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {Number(e.points) >= 0 ? '+' : ''}{Number(e.points)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <div className="mt-3 border-t border-border/60 pt-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Statement</p>

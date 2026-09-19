@@ -273,7 +273,7 @@ export default function ProductsPage() {
               )}
               <div className="min-w-0">
                 <p className="truncate font-medium text-foreground group-hover:text-primary-700">{row.original.name}</p>
-                <p className="text-[11px] text-muted-foreground">{row.original.sku}</p>
+                <p className="text-[11px] text-muted-foreground">{row.original.sku}{row.original.huid ? ` · HUID ${row.original.huid}` : ''}</p>
               </div>
             </Link>
           )

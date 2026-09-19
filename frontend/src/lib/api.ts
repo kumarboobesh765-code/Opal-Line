@@ -506,6 +506,22 @@ export const dbApi = {
       method: 'POST',
       body: JSON.stringify({ phone, message }),
     }),
+  sendInvoiceWhatsApp: (invoiceId: string) =>
+    request<{ ok: boolean; to?: string; messageId?: string; error?: string }>(`/whatsapp/invoice/${invoiceId}`, { method: 'POST' }),
+  loyaltyBalance: (customer: string) =>
+    request<{ found: boolean; customer?: { id: string; name: string; phone: string | null }; balance?: number; pointValue?: number; enabled?: boolean }>(`/loyalty/balance?customer=${encodeURIComponent(customer)}`),
+  loyaltyHistory: (customer: string) =>
+    request<{ found: boolean; entries: Array<{ id: string; type: string; points: string; balanceAfter: string | null; note: string | null; invoiceNumber: string | null; date: string }> }>(`/loyalty/history?customer=${encodeURIComponent(customer)}`),
+  loyaltyRedeem: (customer: string, points: number, opts?: { invoiceId?: string; invoiceNumber?: string }) =>
+    request<{ ok: boolean; balanceAfter?: number; error?: string }>('/loyalty/redeem', {
+      method: 'POST',
+      body: JSON.stringify({ customer, points, ...opts }),
+    }),
+  loyaltyAdjust: (customer: string, points: number, note: string) =>
+    request<{ ok: boolean; points: number; balanceAfter: number }>('/loyalty/adjust', {
+      method: 'POST',
+      body: JSON.stringify({ customer, points, note }),
+    }),
 
   getProducts: () => list<Product>('/db/products', PAGED),
   getProductById: (id: string) => maybe<Product>(`/db/products/${id}`),

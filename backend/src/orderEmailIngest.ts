@@ -672,6 +672,10 @@ export async function createInvoiceForOrderRow(order: typeof schema.salesOrders.
     }
     await tx.update(schema.salesOrders).set({ invoice: number }).where(eq(schema.salesOrders.id, order.id))
   })
+  // Loyalty: award points for this invoice (fire-and-forget, never blocks sync)
+  void import('./loyalty').then(({ earnForInvoice }) =>
+    earnForInvoice({ id: invoiceId, number, customer: order.customer ?? '', grandTotal, status: order.payment === 'paid' ? 'paid' : 'issued' }),
+  )
   return number
 }
 

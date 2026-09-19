@@ -496,6 +496,10 @@ dbRouter.post('/invoices', requirePermission('sales', 'create'), async (req, res
     })
 
     recordCrud('invoices', 'Created', req, row)
+    // Loyalty: award points on new invoices (fire-and-forget, never blocks billing)
+    void import('../loyalty').then(({ earnForInvoice }) =>
+      earnForInvoice({ id: row.id, number: row.number ?? '', customer: row.customer ?? '', grandTotal: row.grandTotal, status: row.status }),
+    )
     res.status(201).json(stripHash(row))
   } catch (err) {
     res.status(400).json({ error: 'Failed to create invoice' })

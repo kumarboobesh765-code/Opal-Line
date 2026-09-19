@@ -396,6 +396,10 @@ import { feedRouter } from './notificationFeed'
 app.use('/api/v1/db', feedRouter)
 import { registerEnvConfigRoutes } from './routes/envConfig'
 registerEnvConfigRoutes(app)
+import { registerWhatsappInvoiceRoutes } from './routes/whatsappInvoice'
+registerWhatsappInvoiceRoutes(app)
+import { registerLoyaltyRoutes } from './routes/loyalty'
+registerLoyaltyRoutes(app)
 app.use('/api/v1/db', dbRouter)
 app.use('/api/v1/db', requireAuth, dashboardRouter)
 app.use('/api/v1/rbac', requireAuth, rbacRouter)

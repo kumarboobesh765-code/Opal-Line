@@ -34,6 +34,7 @@ export default function InvoiceDetailPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [refunding, setRefunding] = useState(false)
+  const [waSending, setWaSending] = useState(false)
   // Return-dialog state must live above the early returns (Rules of Hooks)
   const [returnOpen, setReturnOpen] = useState(false)
   const [returnQty, setReturnQty] = useState<Record<string, number>>({})
@@ -213,13 +214,20 @@ export default function InvoiceDetailPage() {
     window.location.href = `mailto:${invoice.customerEmail}?subject=${subject}&body=${body}`
   }
 
-  const shareWhatsApp = () => {
-    const digits = (invoice.customerPhone || '').replace(/\D/g, '')
-    const withCc = digits.length === 10 ? '91' + digits : digits
-    const text = encodeURIComponent(
-      `Invoice ${invoice.number}\nCustomer: ${invoice.customer}\nOrder: ${invoice.shopifyOrder || '—'}\nAmount: ₹${invoice.grandTotal.toLocaleString('en-IN')}\nStatus: ${invoice.paymentStatus}\n\nThank you for shopping with Opal Line ✨`,
-    )
-    window.open(`https://wa.me/${withCc}?text=${text}`, '_blank', 'noopener')
+  const sendWhatsAppInvoice = async () => {
+    setWaSending(true)
+    try {
+      const result = await dbApi.sendInvoiceWhatsApp(invoice.id)
+      if (result.ok) {
+        window.alert(`Invoice ${invoice.number} sent to ${result.to} on WhatsApp ✅`)
+      } else {
+        window.alert(result.error || 'WhatsApp send failed')
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'WhatsApp send failed')
+    } finally {
+      setWaSending(false)
+    }
   }
 
   const refundInvoice = async () => {
@@ -298,7 +306,7 @@ export default function InvoiceDetailPage() {
             <Button variant="outline" size="sm" onClick={printInvoice}><Download className="h-3.5 w-3.5" /> Save as PDF</Button>
             <Button variant="outline" size="sm" onClick={emailInvoice}><Mail className="h-3.5 w-3.5" /> Email</Button>
             {invoice.customerPhone ? (
-              <Button variant="outline" size="sm" onClick={shareWhatsApp}><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</Button>
+              <Button variant="outline" size="sm" onClick={sendWhatsAppInvoice} disabled={waSending}><MessageCircle className="h-3.5 w-3.5" /> {waSending ? 'Sending…' : 'Send WhatsApp'}</Button>
             ) : null}
             <Button variant="outline" size="sm" onClick={openReturnDialog} disabled={invoice.status === 'refunded' || invoice.status === 'cancelled'}><Undo2 className="h-3.5 w-3.5" /> Return Items</Button>
             <Button variant="soft-danger" size="sm" onClick={refundInvoice} disabled={refunding || invoice.status === 'refunded'}><Undo2 className="h-3.5 w-3.5" /> Refund</Button>

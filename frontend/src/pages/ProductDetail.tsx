@@ -187,6 +187,7 @@ export default function ProductDetailPage() {
                 <InfoRow label="Product Name" value={product.name} />
                 <InfoRow label="SKU" value={product.sku} />
                 <InfoRow label="Barcode" value={product.barcode} mono />
+                <InfoRow label="HUID / Batch" value={product.huid ?? '—'} mono />
                 <InfoRow label="Category" value={product.category} />
                 <InfoRow label="Collection" value={product.collection} />
                 <InfoRow label="Purity" value={product.purity != null ? `${product.purity}% Sterling Silver` : '—'} />

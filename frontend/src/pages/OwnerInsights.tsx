@@ -176,10 +176,10 @@ export default function OwnerInsightsPage() {
         </Card>
       </div>
 
-      <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <Badge variant="muted">Note</Badge>
-        Cost is approximated as silver value + making charges on each invoice. Set cost prices on products to enable exact margin tracking.
-      </p>
+        <span>Cost is approximated as silver value + making charges on each invoice. Set cost prices on products to enable exact margin tracking.</span>
+      </div>
     </div>
   )
 }

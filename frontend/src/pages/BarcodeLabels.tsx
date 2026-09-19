@@ -191,7 +191,7 @@ export default function BarcodeLabelsPage() {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-semibold text-primary-700">₹{product.sellingPrice.toLocaleString('en-IN')}</p>
+                      <p className="text-sm font-semibold text-primary-700">₹{(product.sellingPrice ?? 0).toLocaleString('en-IN')}</p>
                       {product.netWeight && <p className="text-xs text-muted-foreground">{product.netWeight}g</p>}
                     </div>
                     <Badge variant="muted" className="text-[10px]">{product.category}</Badge>
