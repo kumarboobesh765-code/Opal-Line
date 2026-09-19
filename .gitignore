@@ -71,3 +71,5 @@ release
 *.AppImage
 *.deb
 *.rpm
+backend/pgsql/
+*.flag
