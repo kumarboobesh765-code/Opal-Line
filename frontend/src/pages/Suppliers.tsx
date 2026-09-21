@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
@@ -91,7 +92,7 @@ export default function SuppliersPage() {
       await dbApi.update('suppliers', supplier.id, { status: 'inactive' })
       load()
     } catch {
-      window.alert('Failed to deactivate supplier')
+      toast.error('Failed to deactivate supplier')
     }
   }
 
@@ -190,7 +191,7 @@ export default function SuppliersPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => deactivate(row.original)}>
-                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                      <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Deactivate supplier</TooltipContent>
@@ -198,7 +199,7 @@ export default function SuppliersPage() {
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" onClick={() => dbApi.update('suppliers', row.original.id, { status: 'active' }).then(load).catch(() => window.alert('Failed to reactivate supplier'))}>
+                    <Button variant="ghost" size="icon-sm" onClick={() => dbApi.update('suppliers', row.original.id, { status: 'active' }).then(load).catch(() => toast.error('Failed to reactivate supplier'))}>
                       <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
                     </Button>
                   </TooltipTrigger>
@@ -231,7 +232,7 @@ export default function SuppliersPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={Building2} label="Total Suppliers" value={String(suppliers.length)} sub="All suppliers" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={Building2} label="Total Suppliers" value={String(suppliers.length)} sub="All suppliers" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={Building2} label="Active" value={String(suppliers.filter((s) => s.status === 'active').length)} sub="Currently active" tint="bg-success-50 text-success-700" />
         <MiniCard icon={Wallet} label="Total Outstanding" value={formatCurrency(totalOutstanding)} sub="Payable to suppliers" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={Building2} label="Cities" value={String(new Set(suppliers.map((s) => s.city)).size)} sub="Supply locations" tint="bg-info-50 text-info-700" />
@@ -327,7 +328,7 @@ export default function SuppliersPage() {
                 onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
               />
             </Field>
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>

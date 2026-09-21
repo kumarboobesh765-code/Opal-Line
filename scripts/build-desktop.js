@@ -134,26 +134,16 @@ async function main() {
 
   // FIX: esbuild CJS output sets `import_meta = {}` breaking pdfkit's ICC path.
   // Patch it so import_meta.url resolves to the bundle file URL.
+  // Also patch createRequire to resolve #standard-fonts/* from pdfkit's package.json.
   const bundlePath = path.join(backendDist, 'index.cjs')
   let bundle = fs.readFileSync(bundlePath, 'utf8')
-  const urlShim = 'const { pathToFileURL } = require("url"); import_meta = { url: pathToFileURL(__filename).href };'
+  const urlShim = 'const { pathToFileURL: _ptf } = require("url"); import_meta = { url: _ptf(__filename).href };'
   bundle = bundle.replaceAll('import_meta = {};', urlShim)
+  const oldCR = 'require$1 = (0, import_module.createRequire)(import_meta.url);'
+  const newCR = 'var { join: _pj } = require("path"); require$1 = (0, import_module.createRequire)(_pj(__dirname, "node_modules", "pdfkit", "package.json"));'
+  bundle = bundle.replace(oldCR, newCR)
   fs.writeFileSync(bundlePath, bundle)
-  console.log('  Patched import_meta.url for pdfkit ICC support')
-
-  // SECURITY: Remove any .env files that tsc may have copied into dist/
-  // The Electron app generates its own .env in %APPDATA% on first run.
-  const envFiles = [
-    path.join(backendDist, '.env'),
-    path.join(backendDist, '.env.local'),
-    path.join(backendDist, '.env.production'),
-  ]
-  for (const f of envFiles) {
-    if (fs.existsSync(f)) {
-      console.log(`  ⚠️  Removing secret file from bundle: ${path.basename(f)}`)
-      fs.unlinkSync(f)
-    }
-  }
+  console.log('  Patched import_meta.url + createRequire for pdfkit')
 
   // Copy esbuild-externalized native addons + their transitive deps.
   // esbuild --external:argon2 means require('argon2') is left as-is at runtime,
@@ -167,6 +157,37 @@ async function main() {
     if (fs.existsSync(src)) {
       copyDir(src, dst)
       console.log(`  Copied native dep: ${pkg}`)
+    }
+  }
+
+  // Copy pdfkit runtime files (standard-fonts, data, package.json) so
+  // createRequire can resolve #standard-fonts/* subpath imports at runtime.
+  const pdfkitSrc = path.join(ROOT, 'node_modules', 'pdfkit')
+  const pdfkitDest = path.join(nmDest, 'pdfkit')
+  mkdirp(path.join(pdfkitDest, 'js', 'standard-fonts'))
+  mkdirp(path.join(pdfkitDest, 'js', 'data'))
+  fs.copyFileSync(path.join(pdfkitSrc, 'package.json'), path.join(pdfkitDest, 'package.json'))
+  const stdFontsSrc = path.join(pdfkitSrc, 'js', 'standard-fonts')
+  if (fs.existsSync(stdFontsSrc)) {
+    copyDir(stdFontsSrc, path.join(pdfkitDest, 'js', 'standard-fonts'))
+  }
+  const iccSrc = path.join(backendDist, 'data', 'sRGB_IEC61966_2_1.icc')
+  if (fs.existsSync(iccSrc)) {
+    fs.copyFileSync(iccSrc, path.join(pdfkitDest, 'js', 'data', 'sRGB_IEC61966_2_1.icc'))
+  }
+  console.log('  Copied pdfkit runtime (standard-fonts + data)')
+
+  // SECURITY: Remove any .env files that tsc may have copied into dist/
+  // The Electron app generates its own .env in %APPDATA% on first run.
+  const envFiles = [
+    path.join(backendDist, '.env'),
+    path.join(backendDist, '.env.local'),
+    path.join(backendDist, '.env.production'),
+  ]
+  for (const f of envFiles) {
+    if (fs.existsSync(f)) {
+      console.log(`  ⚠️  Removing secret file from bundle: ${path.basename(f)}`)
+      fs.unlinkSync(f)
     }
   }
 

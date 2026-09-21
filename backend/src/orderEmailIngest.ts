@@ -73,6 +73,51 @@ export function isEmailIngestConfigured(): boolean {
   return Boolean(user && pass)
 }
 
+export interface MailboxTestResult {
+  ok: boolean
+  provider: 'imap' | 'mailtm'
+  mailbox: string | null
+  host?: string
+  folder?: string
+  messageCount?: number
+  error?: string
+}
+
+/** Verify the order-ingest mailbox credentials work — logs in without scanning. */
+export async function testEmailIngestConnection(): Promise<MailboxTestResult> {
+  const cfg = emailConfig()
+  const provider = emailProvider()
+  if (!cfg.user || !cfg.pass) {
+    return { ok: false, provider, mailbox: null, error: 'Not configured — set ORDER_EMAIL_ADDRESS and ORDER_EMAIL_PASSWORD' }
+  }
+  if (provider === 'mailtm') {
+    try {
+      await mailtmToken(cfg.user, cfg.pass)
+      return { ok: true, provider, mailbox: cfg.user }
+    } catch (err) {
+      return { ok: false, provider, mailbox: cfg.user, error: err instanceof Error ? err.message : 'mail.tm login failed' }
+    }
+  }
+  const client = new ImapFlow({
+    host: cfg.host,
+    port: cfg.port,
+    secure: true,
+    auth: { user: cfg.user, pass: cfg.pass },
+    logger: false,
+    emitLogs: false,
+  })
+  try {
+    await client.connect()
+    const box = await client.mailboxOpen(cfg.folder)
+    const messageCount = typeof box.exists === 'number' ? box.exists : undefined
+    await client.logout()
+    return { ok: true, provider, mailbox: cfg.user, host: cfg.host, folder: cfg.folder, messageCount }
+  } catch (err) {
+    try { client.close() } catch { /* already closed */ }
+    return { ok: false, provider, mailbox: cfg.user, host: cfg.host, folder: cfg.folder, error: err instanceof Error ? err.message : 'IMAP login failed' }
+  }
+}
+
 /** Which mailbox protocol to use: IMAP (Gmail etc.) or mail.tm REST API. */
 function emailProvider(): 'imap' | 'mailtm' {
   const p = process.env.ORDER_EMAIL_PROVIDER?.trim().toLowerCase()

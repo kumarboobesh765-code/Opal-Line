@@ -6,11 +6,11 @@ import cookieParser from 'cookie-parser'
 import { randomBytes, randomUUID, createHmac, timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { and, eq, ne, or, sql } from 'drizzle-orm'
+import { and, desc, eq, ne, or, sql } from 'drizzle-orm'
 import { config, isConfigured, loadSecretsFromDb } from './config'
 import { applyPriceSync, applySilverRate, createShopifyDraftOrder, ensureSynced, getLatestSilverRate, importShopifyOrders, purgeProducts, pushInventoryToShopify, pushProductPriceToShopify, pushProductsToShopify, runSync, store, syncProductsToDb, testShopifyConnection, updateShopifyOrder } from './shopify'
 import type { SyncResource } from './types'
-import { db, schema, checkDbHealth, getDbStats } from './db/client'
+import { db, schema, checkDbHealth, getDbStats, getRawClient } from './db/client'
 import { authRouter } from './routes/auth'
 import { dbRouter } from './routes/db'
 import { dashboardRouter } from './routes/dashboard'
@@ -400,6 +400,8 @@ import { registerWhatsappInvoiceRoutes } from './routes/whatsappInvoice'
 registerWhatsappInvoiceRoutes(app)
 import { registerLoyaltyRoutes } from './routes/loyalty'
 registerLoyaltyRoutes(app)
+import accountingRouter from './routes/accounting.js'
+app.use('/api/v1/accounts', accountingRouter)
 app.use('/api/v1/db', dbRouter)
 app.use('/api/v1/db', requireAuth, dashboardRouter)
 app.use('/api/v1/rbac', requireAuth, rbacRouter)
@@ -410,9 +412,43 @@ app.use('/api/v1/silver', requireAuth, enforceRbac)
 // Shopify Flow webhook — must be BEFORE requireAuth since it's called from Shopify servers (no browser session)
 app.post('/api/v1/shopify/flow-webhook', express.json({ limit: '1mb' }), async (req, res) => {
   try {
+    // ── HMAC signature verification ────────────────────────────────────────
+    const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET?.trim()
+    if (SHOPIFY_WEBHOOK_SECRET) {
+      const hmacHeader = req.headers['x-shopify-hmac-sha256'] as string | undefined
+      if (!hmacHeader) {
+        logger.warn('Flow webhook missing X-Shopify-Hmac-SHA256 header')
+        return res.status(401).json({ ok: false, error: 'Unauthorized' })
+      }
+      const rawBody = JSON.stringify(req.body)
+      const expected = createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(rawBody).digest('base64')
+      const sigBuf = Buffer.from(hmacHeader, 'base64')
+      const expBuf = Buffer.from(expected, 'base64')
+      if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+        logger.warn('Flow webhook HMAC mismatch')
+        return res.status(401).json({ ok: false, error: 'Unauthorized' })
+      }
+    } else {
+      logger.warn('SHOPIFY_WEBHOOK_SECRET not set — flow-webhook HMAC verification skipped')
+    }
+
     const body = req.body
+
+    // ── Input validation ───────────────────────────────────────────────────
     if (!body || !body.order_name) {
       res.status(400).json({ ok: false, error: 'order_name is required' })
+      return
+    }
+
+    const customerEmail = body.customer_email || body.email || null
+    if (customerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(customerEmail))) {
+      res.status(400).json({ ok: false, error: 'Invalid email format' })
+      return
+    }
+
+    const customerPhone = body.customer_phone || body.phone || null
+    if (customerPhone && String(customerPhone).replace(/\D/g, '').length > 15) {
+      res.status(400).json({ ok: false, error: 'Phone number too long' })
       return
     }
 
@@ -426,8 +462,6 @@ app.post('/api/v1/shopify/flow-webhook', express.json({ limit: '1mb' }), async (
 
     const orderName = String(body.order_name).trim()
     const customerName = [body.customer_first_name, body.customer_last_name].filter(Boolean).join(' ').trim()
-    const customerEmail = body.customer_email || body.email || null
-    const customerPhone = body.customer_phone || body.phone || null
 
     const billingAddress = (body.billing_address1 || body.billing_city) ? {
       name: customerName,
@@ -501,9 +535,8 @@ app.post('/api/v1/shopify/flow-webhook', express.json({ limit: '1mb' }), async (
     logger.info({ orderName, customerName }, 'Flow webhook processed')
     res.json({ ok: true, order: orderName, customer: customerName })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
     logger.error({ err }, 'Flow webhook failed')
-    res.status(500).json({ ok: false, error: message })
+    res.status(500).json({ ok: false, error: 'Internal server error' })
   }
 })
 
@@ -544,7 +577,7 @@ app.post('/api/v1/shopify/test', requirePermission('shopify', 'view'), async (re
 app.get('/api/v1/shopify/email-ingest/status', requireAuth, (_req, res) => {
   res.json({
     configured: isEmailIngestConfigured(),
-    mailbox: process.env.ORDER_EMAIL_ADDRESS ? process.env.ORDER_EMAIL_ADDRESS.replace(/^[^@]+/, '••••') : null,
+    mailbox: process.env.ORDER_EMAIL_ADDRESS?.trim() || null,
     host: process.env.ORDER_EMAIL_HOST || 'imap.gmail.com',
   })
 })
@@ -818,6 +851,18 @@ app.get('/api/v1/silver/rate', requirePermission('silver-rate', 'view'), async (
   }
 })
 
+app.get('/api/v1/gold/rate', requirePermission('gold-rate', 'view'), async (_req, res) => {
+  try {
+    if (!db) return res.json({ rate: 0, purity: 99.9, updatedAt: null, currency: 'INR', source: null })
+    const rows = await db.select().from(schema.goldRates).orderBy(desc(schema.goldRates.updatedAt)).limit(1)
+    const latest = rows[0] ?? null
+    res.json({ rate: latest?.rate ?? 0, purity: latest?.purity ?? 99.9, updatedAt: latest?.updatedAt ?? null, currency: latest?.currency ?? 'INR', source: latest?.source ?? null })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
 app.post('/api/v1/silver/update', requirePermission('silver-rate', 'edit'), validate(silverRateSchema), async (req, res) => {
   try {
     const { rate, syncFirst } = req.body
@@ -905,7 +950,7 @@ app.get('/api/v1/settings/whatsapp-status', requireAuth, requirePermission('syst
   const { isWhatsAppConfigured } = require('./whatsapp') as typeof import('./whatsapp')
   res.json({
     configured: isWhatsAppConfigured(),
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() ? '••••' + process.env.WHATSAPP_PHONE_NUMBER_ID!.trim().slice(-4) : null,
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() || null,
   })
 })
 
@@ -919,6 +964,68 @@ app.post('/api/v1/settings/test-whatsapp', requireAuth, requirePermission('syste
     res.json({ ok: result !== null, error: result ? undefined : 'Send failed (check token/phone number id / server logs)' })
   } catch (err) {
     res.json({ ok: false, error: err instanceof Error ? err.message : 'WhatsApp test failed' })
+  }
+})
+
+// Verify the order-ingest mailbox credentials (IMAP or mail.tm) without scanning
+app.post('/api/v1/settings/test-mailbox', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  try {
+    const { testEmailIngestConnection } = await import('./orderEmailIngest')
+    res.json(await testEmailIngestConnection())
+  } catch (err) {
+    res.json({ ok: false, provider: 'imap', mailbox: null, error: err instanceof Error ? err.message : 'Mailbox test failed' })
+  }
+})
+
+// Verify Razorpay credentials by fetching the payment pages count (read-only)
+app.post('/api/v1/settings/test-razorpay', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  try {
+    const keyId = process.env.RAZORPAY_KEY_ID?.trim()
+    const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim()
+    if (!keyId || !keySecret) {
+      return res.json({ ok: false, error: 'Not configured — set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET' })
+    }
+    const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64')
+    const r = await fetch('https://api.razorpay.com/v1/payments?count=1', {
+      headers: { Authorization: `Basic ${auth}` },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (r.ok) {
+      const data = await r.json() as { count?: number; items?: unknown[] }
+      const total = typeof data.count === 'number' ? data.count : (data.items?.length ?? 0)
+      return res.json({ ok: true, mode: keyId.startsWith('rzp_test') ? 'test' : 'live', message: `Credentials valid — account reachable (${total} payment(s) on record)` })
+    }
+    if (r.status === 401) return res.json({ ok: false, error: 'Authentication failed — key ID or secret is wrong' })
+    const body = await r.json().catch(() => ({})) as { error?: { description?: string } }
+    return res.json({ ok: false, error: body.error?.description ?? `Razorpay API error (${r.status})` })
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : 'Razorpay test failed' })
+  }
+})
+
+// Validate the WhatsApp Cloud API token (GET /me) — no message sent
+app.post('/api/v1/settings/test-whatsapp-config', requireAuth, requirePermission('system', 'edit'), async (_req, res) => {
+  try {
+    const token = process.env.WHATSAPP_ACCESS_TOKEN?.trim()
+    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim()
+    if (!token || !phoneId) {
+      return res.json({ ok: false, error: 'Not configured — set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID' })
+    }
+    const r = await fetch(`https://graph.facebook.com/v21.0/${phoneId}?access_token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (r.ok) {
+      const data = await r.json() as { display_phone_number?: string; verified_name?: string; name?: string }
+      const label = data.display_phone_number ?? data.verified_name ?? data.name ?? 'number'
+      return res.json({ ok: true, message: `Token valid — WhatsApp business number: ${label}` })
+    }
+    if (r.status === 401 || r.status === 400) {
+      const body = await r.json().catch(() => ({})) as { error?: { message?: string } }
+      return res.json({ ok: false, error: body.error?.message ?? 'Token invalid or expired — generate a new access token in Meta Business' })
+    }
+    return res.json({ ok: false, error: `Meta API error (${r.status})` })
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : 'WhatsApp config test failed' })
   }
 })
 
@@ -1346,6 +1453,283 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
     res.json({ order: updated, shopifySync })
   } catch (err) {
     res.status(400).json({ error: 'Failed to update order' })
+  }
+})
+
+// ─── Reports ────────────────────────────────────────────────────────────────
+
+function requireDbReports(res: express.Response): boolean {
+  const client = getRawClient()
+  if (!client) {
+    res.status(503).json({ error: 'Database is temporarily unavailable' })
+    return false
+  }
+  return true
+}
+
+function parseReportDates(req: express.Request): { from: string; to: string } | null {
+  const from = String(req.query.from ?? '').trim()
+  const to = String(req.query.to ?? '').trim()
+  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return null
+  }
+  return { from, to }
+}
+
+// GET /api/v1/reports/hsn-summary
+app.get('/api/v1/reports/hsn-summary', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
+  if (!requireDbReports(res)) return
+  const dates = parseReportDates(req)
+  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
+
+  try {
+    const client = getRawClient()!
+    const rows = await client.unsafe(`
+      SELECT
+        p.hsn AS hsn_code,
+        p.name AS product_name,
+        SUM(ii.qty) AS total_quantity,
+        SUM(ii.amount) AS taxable_value,
+        SUM(ii.tax) AS gst_amount,
+        p.gst AS gst_rate
+      FROM sales_invoice_items ii
+      JOIN products p ON ii.sku = p.sku
+      WHERE ii.invoice_id IN (
+        SELECT id FROM sales_invoices
+        WHERE date BETWEEN $1 AND $2
+      )
+      GROUP BY p.hsn, p.name, p.gst
+      ORDER BY taxable_value DESC
+    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
+
+    const summary = rows.map((r: any) => ({
+      hsnCode: r.hsn_code ?? null,
+      productName: r.product_name ?? null,
+      totalQuantity: Number(r.total_quantity ?? 0),
+      taxableValue: Number(r.taxable_value ?? 0),
+      gstAmount: Number(r.gst_amount ?? 0),
+      gstRate: Number(r.gst_rate ?? 0),
+    }))
+
+    const totals = summary.reduce(
+      (acc, row) => ({
+        taxableValue: acc.taxableValue + row.taxableValue,
+        gstAmount: acc.gstAmount + row.gstAmount,
+        totalQuantity: acc.totalQuantity + row.totalQuantity,
+      }),
+      { taxableValue: 0, gstAmount: 0, totalQuantity: 0 },
+    )
+
+    res.json({ items: summary, totals })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err: message }, 'HSN summary report failed')
+    res.status(500).json({ error: message })
+  }
+})
+
+// GET /api/v1/reports/gst-reconciliation
+app.get('/api/v1/reports/gst-reconciliation', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
+  if (!requireDbReports(res)) return
+  const dates = parseReportDates(req)
+  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
+
+  try {
+    const client = getRawClient()!
+    const range = [dates.from + 'T00:00:00', dates.to + 'T23:59:59']
+
+    // Sales totals
+    const [salesTotals] = await client.unsafe(`
+      SELECT
+        COALESCE(SUM(subtotal), 0) AS taxable_value,
+        COALESCE(SUM(gst_amount), 0) AS gst_amount,
+        COALESCE(SUM(grand_total), 0) AS grand_total,
+        COUNT(*) AS invoice_count
+      FROM sales_invoices
+      WHERE date BETWEEN $1 AND $2
+    `, range) as any[]
+
+    // Sales breakup by GST rate
+    const salesByRate = await client.unsafe(`
+      SELECT
+        p.gst AS gst_rate,
+        SUM(ii.amount) AS taxable_value,
+        SUM(ii.tax) AS gst_amount
+      FROM sales_invoice_items ii
+      JOIN products p ON ii.sku = p.sku
+      WHERE ii.invoice_id IN (
+        SELECT id FROM sales_invoices
+        WHERE date BETWEEN $1 AND $2
+      )
+      GROUP BY p.gst
+      ORDER BY p.gst
+    `, range) as any[]
+
+    // Purchase totals
+    const [purchaseTotals] = await client.unsafe(`
+      SELECT
+        COALESCE(SUM(cost), 0) AS total_cost,
+        COALESCE(SUM(tax), 0) AS total_tax,
+        COALESCE(SUM(total), 0) AS grand_total,
+        COUNT(*) AS invoice_count
+      FROM purchase_invoices
+      WHERE date BETWEEN $1 AND $2
+    `, range) as any[]
+
+    const totalSalesGST = Number(salesTotals?.gst_amount ?? 0)
+    const totalPurchaseITC = Number(purchaseTotals?.total_tax ?? 0)
+    const netGstPayable = totalSalesGST - totalPurchaseITC
+
+    res.json({
+      period: { from: dates.from, to: dates.to },
+      sales: {
+        invoiceCount: Number(salesTotals?.invoice_count ?? 0),
+        taxableValue: Number(salesTotals?.taxable_value ?? 0),
+        gstAmount: totalSalesGST,
+        grandTotal: Number(salesTotals?.grand_total ?? 0),
+        cgst: Math.round(totalSalesGST / 2 * 100) / 100,
+        sgst: Math.round(totalSalesGST / 2 * 100) / 100,
+        igst: 0,
+      },
+      purchases: {
+        invoiceCount: Number(purchaseTotals?.invoice_count ?? 0),
+        totalCost: Number(purchaseTotals?.total_cost ?? 0),
+        itc: totalPurchaseITC,
+        grandTotal: Number(purchaseTotals?.grand_total ?? 0),
+      },
+      netGstPayable,
+      rateBreakup: salesByRate.map((r: any) => ({
+        gstRate: Number(r.gst_rate ?? 0),
+        taxableValue: Number(r.taxable_value ?? 0),
+        gstAmount: Number(r.gst_amount ?? 0),
+        cgst: Math.round(Number(r.gst_amount ?? 0) / 2 * 100) / 100,
+        sgst: Math.round(Number(r.gst_amount ?? 0) / 2 * 100) / 100,
+        igst: 0,
+      })),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err: message }, 'GST reconciliation report failed')
+    res.status(500).json({ error: message })
+  }
+})
+
+// GET /api/v1/reports/sales-register
+app.get('/api/v1/reports/sales-register', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
+  if (!requireDbReports(res)) return
+  const dates = parseReportDates(req)
+  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
+
+  try {
+    const client = getRawClient()!
+    const rows = await client.unsafe(`
+      SELECT
+        number AS invoice_number,
+        date AS invoice_date,
+        customer AS customer_name,
+        subtotal AS taxable_amount,
+        gst_amount,
+        grand_total AS total_amount,
+        tds_amount,
+        payment_status
+      FROM sales_invoices
+      WHERE date BETWEEN $1 AND $2
+      ORDER BY date DESC
+    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
+
+    res.json({
+      items: rows.map((r: any) => ({
+        invoiceNumber: r.invoice_number,
+        invoiceDate: r.invoice_date,
+        customerName: r.customer_name,
+        taxableAmount: Number(r.taxable_amount ?? 0),
+        gstAmount: Number(r.gst_amount ?? 0),
+        totalAmount: Number(r.total_amount ?? 0),
+        tdsAmount: Number(r.tds_amount ?? 0),
+        paymentStatus: r.payment_status,
+      })),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err: message }, 'Sales register report failed')
+    res.status(500).json({ error: message })
+  }
+})
+
+// GET /api/v1/reports/purchase-register
+app.get('/api/v1/reports/purchase-register', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
+  if (!requireDbReports(res)) return
+  const dates = parseReportDates(req)
+  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
+
+  try {
+    const client = getRawClient()!
+    const rows = await client.unsafe(`
+      SELECT
+        number AS invoice_number,
+        date AS invoice_date,
+        supplier AS supplier_name,
+        cost AS taxable_amount,
+        tax AS gst_amount,
+        total AS total_amount
+      FROM purchase_invoices
+      WHERE date BETWEEN $1 AND $2
+      ORDER BY date DESC
+    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
+
+    res.json({
+      items: rows.map((r: any) => ({
+        invoiceNumber: r.invoice_number,
+        invoiceDate: r.invoice_date,
+        supplierName: r.supplier_name,
+        taxableAmount: Number(r.taxable_amount ?? 0),
+        gstAmount: Number(r.gst_amount ?? 0),
+        totalAmount: Number(r.total_amount ?? 0),
+      })),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err: message }, 'Purchase register report failed')
+    res.status(500).json({ error: message })
+  }
+})
+
+// GET /api/v1/reports/tds-report
+app.get('/api/v1/reports/tds-report', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
+  if (!requireDbReports(res)) return
+  const dates = parseReportDates(req)
+  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
+
+  try {
+    const client = getRawClient()!
+    const rows = await client.unsafe(`
+      SELECT
+        customer AS customer_name,
+        buyer_gstin AS pan,
+        tds_section AS section,
+        subtotal AS amount,
+        tds_amount
+      FROM sales_invoices
+      WHERE date BETWEEN $1 AND $2
+        AND tds_type IS NOT NULL
+        AND tds_type != 'none'
+        AND COALESCE(tds_amount, 0) > 0
+      ORDER BY date DESC
+    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
+
+    res.json({
+      items: rows.map((r: any) => ({
+        customerName: r.customer_name,
+        pan: r.pan,
+        section: r.section,
+        amount: Number(r.amount ?? 0),
+        tdsAmount: Number(r.tds_amount ?? 0),
+      })),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err: message }, 'TDS report failed')
+    res.status(500).json({ error: message })
   }
 })
 

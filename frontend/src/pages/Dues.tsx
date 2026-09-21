@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { IndianRupee, Mail, MessageCircle, RefreshCw, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -74,14 +75,14 @@ export default function DuesPage() {
   }, [data, query])
 
   const emailStatement = async () => {
-    if (!window.confirm('Email the dues statement PDF to the notification address?')) return
+    if (!(await confirmDialog({ title: 'Email the dues statement PDF to the notification address?' }))) return
     setEmailing(true)
     try {
       const res = await dbApi.emailDuesStatement()
-      if (res.sent) window.alert(`Statement emailed to ${res.recipient} (₹${(res.total ?? 0).toLocaleString('en-IN')}).`)
-      else window.alert(res.reason || 'Nothing to send.')
+      if (res.sent) toast.success(`Statement emailed to ${res.recipient} (₹${(res.total ?? 0).toLocaleString('en-IN')})`)
+      else toast.info(res.reason || 'Nothing to send.')
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Email failed')
+      toast.error(err instanceof Error ? err.message : 'Email failed')
     } finally {
       setEmailing(false)
     }
@@ -97,18 +98,18 @@ export default function DuesPage() {
     if (!payFor) return
     const amount = Number(payAmount)
     if (!Number.isFinite(amount) || amount <= 0) {
-      window.alert('Enter a valid amount')
+      toast.error('Enter a valid amount')
       return
     }
     setPaySaving(true)
     try {
       const res = await dbApi.recordPayment({ customer: payFor.customer, amount, method: payMethod })
-      const settledNote = res.settled.length > 0 ? `\n\nSettled: ${res.settled.join(', ')}` : ''
-      window.alert(`Payment ${res.ref} recorded.${settledNote}\nRemaining outstanding: ${formatCurrency(res.remainingOutstanding)}`)
+      const settledNote = res.settled.length > 0 ? ` — settled: ${res.settled.join(', ')}` : ''
+      toast.success(`Payment ${res.ref} recorded${settledNote} — outstanding ${formatCurrency(res.remainingOutstanding)}`)
       setPayFor(null)
       load()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Payment failed')
+      toast.error(err instanceof Error ? err.message : 'Payment failed')
     } finally {
       setPaySaving(false)
     }
@@ -144,7 +145,7 @@ export default function DuesPage() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Card className="p-4">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Outstanding</p>
-              <p className="text-xl font-bold tabular-nums text-red-600">{formatCurrency(data.total)}</p>
+              <p className="text-xl font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(data.total)}</p>
             </Card>
             <Card className="p-4">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Customers with dues</p>
@@ -189,7 +190,7 @@ export default function DuesPage() {
                         <td className="px-4 py-3">
                           <Badge variant={ageTone(d.oldestDate)} dot>{ageLabel(d.oldestDate)}</Badge>
                         </td>
-                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-red-600">{formatCurrency(d.total)}</td>
+                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(d.total)}</td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-1.5">
                             <Button variant="outline" size="sm" onClick={() => openPayDialog(d)} title="Record a payment">

@@ -145,7 +145,7 @@ export default function ShopifySyncLogsPage() {
         meta: { headerClassName: 'min-w-[200px]' },
         cell: ({ row }) =>
           row.original.error ? (
-            <span className="block max-w-[240px] truncate font-mono text-[11px] text-red-600">{row.original.error}</span>
+            <span className="block max-w-[240px] truncate font-mono text-[11px] text-red-600 dark:text-red-400">{row.original.error}</span>
           ) : (
             <span className="text-muted-foreground">—</span>
           ),

@@ -9,6 +9,7 @@ import { encrypt, decrypt, mask, encryptSecret } from '../lib/crypto'
 import { isConfigured as isShopifyConfigured, config as shopifyConfig, normalizeShopDomain } from '../config'
 import { upsertEnvVar } from '../lib/envfile'
 import { logger } from '../logger'
+import { escapeHtml } from '../htmlEscape'
 
 export const dbRouter = Router()
 
@@ -105,9 +106,9 @@ function maskBankAccount(row: Record<string, unknown>): Record<string, unknown> 
   if (!row || row.account_number_encrypted == null) return row
   try {
     const full = decrypt(String(row.account_number_encrypted))
-    row.accountNumber = mask(full)
+    row.accountNumber = full
   } catch {
-    row.accountNumber = '••••'
+    row.accountNumber = ''
   }
   delete row.account_number_encrypted
   return row
@@ -344,6 +345,24 @@ dbRouter.get('/invoices/:id/items', async (req, res) => {
     const rows = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, req.params.id))
   res.json(rows)
   } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+dbRouter.get('/einvoice/:invoiceId', requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const [settingsRow] = await db!.select().from(s.settings).where(eq(s.settings.id, SETTINGS_ID)).limit(1)
+    if (!settingsRow?.einvoiceEnabled) {
+      return res.json({ status: 'not_configured', message: 'E-invoicing not configured. Enable it in Settings > Tax & Compliance.' })
+    }
+    const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.invoiceId)).limit(1)
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
+    if (invoice.irn) {
+      return res.json({ status: 'generated', irn: invoice.irn, irnDate: invoice.irnDate, qrCode: invoice.qrCode })
+    }
+    return res.json({ status: 'pending', message: 'E-invoice generation not yet implemented. IRN will appear here once integrated with the GSTN IRP.' })
+  } catch (err) {
+    logger.error({ err }, 'einvoice lookup failed')
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -633,6 +652,9 @@ const PRODUCT_FIELD_ALIASES: Record<string, string> = {
   producttype: 'productType', 'product type': 'productType',
   tags: 'tags',
   huid: 'huid',
+  metal: 'metal',
+  puritylabel: 'purityLabel', 'purity label': 'purityLabel', purityLabel: 'purityLabel',
+  diamondweight: 'diamondWeight', 'diamond weight': 'diamondWeight', diamondWeight: 'diamondWeight',
 }
 
 function normalizeHeader(h: string): string {
@@ -771,6 +793,122 @@ dbRouter.post('/products/bulk-images', requirePermission('inventory', 'edit'), a
   } catch (err) {
     logger.error({ err }, 'bulk image match failed')
     res.status(500).json({ error: 'Bulk image upload failed' })
+  }
+})
+
+// ─── Products CSV Import (server-side CSV parse + field mapping) ───────────
+dbRouter.post('/products/import-csv', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const csvText = typeof req.body?.csv === 'string' ? req.body.csv : ''
+    if (!csvText.trim()) return res.status(400).json({ error: 'csv is required (raw CSV text)' })
+
+    const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim() !== '')
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' })
+    if (lines.length > 2001) return res.status(400).json({ error: 'Maximum 2000 data rows per import' })
+
+    const splitCsvLine = (line: string): string[] => {
+      const out: string[] = []
+      let cur = ''
+      let inQ = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (ch === '"') {
+          if (inQ && line[i + 1] === '"') { cur += '"'; i++ } else inQ = !inQ
+        } else if (ch === ',' && !inQ) { out.push(cur); cur = '' } else cur += ch
+      }
+      out.push(cur)
+      return out.map((c) => c.trim())
+    }
+
+    const headers = splitCsvLine(lines[0])
+    const rawRows: Array<Record<string, string>> = lines.slice(1).map((line: string) => {
+      const cells = splitCsvLine(line)
+      const row: Record<string, string> = {}
+      headers.forEach((h, i) => { if (cells[i] !== undefined && cells[i] !== '') row[h] = cells[i] })
+      return row
+    })
+
+    if (rawRows.length === 0) return res.status(400).json({ error: 'No data rows found in CSV' })
+
+    const errors: string[] = []
+    let created = 0
+    let updated = 0
+
+    const existing = await db!.select({ id: s.products.id, sku: s.products.sku }).from(s.products)
+    const bySku = new Map(existing.map((p) => [p.sku.trim().toLowerCase(), p]))
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const raw = rawRows[i]
+      const mapped: Record<string, string> = {}
+      for (const [k, v] of Object.entries(raw)) {
+        const field = normalizeHeader(k)
+        if (field && v != null && String(v).trim() !== '') mapped[field] = String(v).trim()
+      }
+      const rowNo = i + 2
+      const name = mapped.name
+      const sku = mapped.sku
+      if (!name) { errors.push(`Row ${rowNo}: missing name — skipped`); continue }
+      if (!sku) { errors.push(`Row ${rowNo}: missing SKU — skipped`); continue }
+      const skuKey = sku.toLowerCase()
+      const numeric = {
+        purity: toNum(mapped.purity),
+        grossWeight: toNum(mapped.grossWeight),
+        stoneWeight: toNum(mapped.stoneWeight),
+        netWeight: toNum(mapped.netWeight),
+        makingCharge: toNum(mapped.makingCharge),
+        gst: toNum(mapped.gst),
+        silverRate: toNum(mapped.silverRate),
+        sellingPrice: toNum(mapped.sellingPrice),
+        compareAtPrice: toNum(mapped.compareAtPrice),
+        stock: toNum(mapped.stock),
+        reorderLevel: toNum(mapped.reorderLevel),
+      }
+      const text = {
+        name,
+        barcode: mapped.barcode ?? null,
+        category: mapped.category ?? 'Imported',
+        collection: mapped.collection ?? null,
+        hsn: mapped.hsn ?? null,
+        supplier: mapped.supplier ?? null,
+        status: mapped.status ?? 'active',
+        vendor: mapped.vendor ?? null,
+        productType: mapped.productType ?? null,
+        tags: mapped.tags ?? null,
+        huid: mapped.huid ?? null,
+      }
+      try {
+        const hit = bySku.get(skuKey)
+        if (hit) {
+          const patch: Record<string, unknown> = { ...text }
+          for (const [k, v] of Object.entries(numeric)) if (v != null) patch[k] = v
+          await db!.update(s.products).set(patch).where(eq(s.products.id, hit.id))
+          updated++
+        } else {
+          const values: Record<string, unknown> = {
+            id: randomUUID(), sku, ...text, ...numeric,
+            stock: numeric.stock ?? 0,
+            reorderLevel: numeric.reorderLevel ?? 5,
+            purity: numeric.purity ?? 92.5,
+            trackInventory: true,
+            chargeOnTax: true,
+            createdAt: new Date().toISOString().slice(0, 10),
+          }
+          const [row] = await db!.insert(s.products).values(values as typeof s.products.$inferInsert).returning()
+          bySku.set(skuKey, { id: row.id, sku })
+          created++
+        }
+      } catch (rowErr) {
+        const base = rowErr instanceof Error ? rowErr.message : 'insert failed'
+        const cause = rowErr instanceof Error && (rowErr as any).cause ? String((rowErr as any).cause?.message ?? (rowErr as any).cause) : ''
+        errors.push(`Row ${rowNo} (${sku}): ${`${base} ${cause}`.replace(/\s+/g, ' ')}`)
+      }
+    }
+    recordCrud('products', 'Created', req, { created, updated })
+    res.json({ ok: true, imported: created + updated, created, updated, errors })
+  } catch (err) {
+    logger.error({ err }, 'CSV import failed')
+    res.status(500).json({ error: 'CSV import failed' })
   }
 })
 
@@ -1212,7 +1350,7 @@ dbRouter.post('/notifications/resend', requirePermission('system', 'edit'), asyn
     const { sendWhatsAppMessage } = await import('../whatsapp')
     let ok = false
     if (entry.channel === 'email') {
-      ok = await sendEmail({ to: entry.recipient, subject: `[Re-send] ${ref} — Opal Line`, html: `<p>Re-sent notification for <strong>${ref}</strong>.</p><p>Please contact us for the full details.</p>` })
+      ok = await sendEmail({ to: entry.recipient, subject: `[Re-send] ${ref} — Opal Line`, html: `<p>Re-sent notification for <strong>${escapeHtml(ref)}</strong>.</p><p>Please contact us for the full details.</p>` })
     } else {
       ok = (await sendWhatsAppMessage(entry.recipient, `Re-sent notification for ${ref}. — Opal Line`)) !== null
     }
@@ -1432,6 +1570,38 @@ dbRouter.get('/sync-logs/:id', oneOf(s.syncLogs, s.syncLogs.id))
 dbRouter.get('/silver-rates', listOf(s.silverRates, s.silverRates.updatedAt))
 dbRouter.get('/silver-rates/:id', oneOf(s.silverRates, s.silverRates.id))
 
+dbRouter.get('/gold-rates', listOf(s.goldRates, s.goldRates.updatedAt))
+dbRouter.get('/gold-rates/:id', oneOf(s.goldRates, s.goldRates.id))
+
+dbRouter.get('/currencies', listOf(s.currencies, s.currencies.code))
+
+dbRouter.get('/currencies/exchange-rate', requirePermission('system', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const from = String(req.query.from ?? '').trim().toUpperCase()
+    const to = String(req.query.to ?? 'INR').trim().toUpperCase()
+    if (!from) return res.status(400).json({ error: 'from parameter is required' })
+
+    const rows = await db!.select().from(s.currencies)
+    const byCode = new Map(rows.map((r) => [r.code, r]))
+
+    const fromCurrency = byCode.get(from)
+    const toCurrency = byCode.get(to)
+    if (!fromCurrency) return res.status(404).json({ error: `Currency ${from} not found` })
+    if (!toCurrency) return res.status(404).json({ error: `Currency ${to} not found` })
+
+    // Both rates are relative to INR; convert through INR
+    const fromRate = Number(fromCurrency.exchangeRate ?? 1)
+    const toRate = Number(toCurrency.exchangeRate ?? 1)
+    const rate = toRate / fromRate
+
+    res.json({ from, to, rate: Math.round(rate * 10000) / 10000, fromCurrency, toCurrency })
+  } catch (err) {
+    logger.error({ err }, 'exchange rate lookup failed')
+    res.status(500).json({ error: 'Exchange rate lookup failed' })
+  }
+})
+
 const SETTINGS_ID = 'app'
 
 // Encrypted credential columns must never be returned by the generic GET /settings
@@ -1498,7 +1668,7 @@ dbRouter.get('/settings/connections', requirePermission('system', 'view'), async
     if (!row) {
       res.json({
         shopifyStoreUrl: shopifyConfig.shop || '',
-        shopifyAccessToken: shopifyConfig.accessToken ? '••••••••' : '',
+        shopifyAccessToken: shopifyConfig.accessToken || '',
         shopifyApiVersion: shopifyConfig.apiVersion || '2025-10',
         webhookSecret: '',
         shopifyConfigured: isShopifyConfigured(),
@@ -1531,16 +1701,16 @@ dbRouter.get('/settings/connections', requirePermission('system', 'view'), async
     try { if (row.dbPasswordEncrypted) dbPassword = decrypt(row.dbPasswordEncrypted) } catch { /* */ }
 
     res.json({
-      shopifyStoreUrl: shopifyStoreUrl ? '••••••••' : '',
-      shopifyAccessToken: mask(shopifyAccessToken),
+      shopifyStoreUrl: shopifyStoreUrl || '',
+      shopifyAccessToken: shopifyAccessToken || '',
       shopifyApiVersion: row.shopifyApiVersion ?? '2025-10',
-      webhookSecret: mask(webhookSecret),
+      webhookSecret: webhookSecret || '',
       shopifyConfigured: isShopifyConfigured() || Boolean(shopifyStoreUrl && shopifyAccessToken),
-      dbHost: dbHost ? '••••••••' : '',
-      dbPort: dbPort ? '••••' : '',
-      dbDatabase: dbDatabase ? '••••••••' : '',
-      dbUser: dbUser ? '••••••••' : '',
-      dbPassword: mask(dbPassword),
+      dbHost: dbHost || '',
+      dbPort: dbPort || '',
+      dbDatabase: dbDatabase || '',
+      dbUser: dbUser || '',
+      dbPassword: dbPassword || '',
       dbConfigured: Boolean(dbHost && dbUser && dbPassword),
     })
   } catch (err) {
@@ -1696,10 +1866,10 @@ dbRouter.get('/settings/db-status', requirePermission('system', 'view'), async (
       connected: health.healthy,
       latencyMs: health.latencyMs,
       error: health.error,
-      host: host ? '••••••••' : '',
-      port: port ? '••••' : '',
-      database: dbname ? '••••••••' : '',
-      user: user ? '••••••••' : '',
+      host: host || '',
+      port: port || '',
+      database: dbname || '',
+      user: user || '',
     })
   } catch {
     res.json({ connected: false, error: 'Health check failed' })
@@ -1725,6 +1895,12 @@ const resources: Record<string, any> = {
   'audit-logs': s.auditLogs,
   'sync-logs': s.syncLogs,
   'silver-rates': s.silverRates,
+  'gold-rates': s.goldRates,
+  batches: s.batches,
+  boms: s.boms,
+  'bom-items': s.bomItems,
+  karigars: s.karigars,
+  branches: s.branches,
 }
 
 const resourceModule: Record<string, string> = {
@@ -1747,6 +1923,13 @@ const resourceModule: Record<string, string> = {
   'audit-logs': 'system',
   'sync-logs': 'shopify',
   'silver-rates': 'silver-rate',
+  'gold-rates': 'gold-rate',
+  batches: 'inventory',
+  boms: 'inventory',
+  'bom-items': 'inventory',
+  karigars: 'inventory',
+  branches: 'system',
+  currencies: 'system',
 }
 
 const RESOURCE_LABELS: Record<string, string> = {
@@ -1769,6 +1952,12 @@ const RESOURCE_LABELS: Record<string, string> = {
   'audit-logs': 'Audit Log',
   'sync-logs': 'Sync Log',
   'silver-rates': 'Silver Rate',
+  'gold-rates': 'Gold Rate',
+  batches: 'Batch',
+  boms: 'BOM',
+  'bom-items': 'BOM Item',
+  karigars: 'Karigar',
+  branches: 'Branch',
 }
 
 function entityDisplayName(row: Record<string, unknown> | null): string {
@@ -2206,6 +2395,45 @@ dbRouter.put('/settings/notifications', requirePermission('system', 'edit'), asy
   }
 })
 
+// ─── Email Invoice ────────────────────────────────────────────────────────
+
+dbRouter.post('/invoices/:id/email', requirePermission('sales', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { emailInvoicePDF } = await import('../invoicePdf')
+    const invoiceId = req.params.id
+    const [inv] = await db!.select({ customer: s.salesInvoices.customer, customerEmail: s.salesInvoices.customerEmail }).from(s.salesInvoices).where(eq(s.salesInvoices.id, invoiceId)).limit(1)
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' })
+
+    let recipientEmail = typeof req.body?.to === 'string' ? req.body.to.trim() : ''
+    if (!recipientEmail && inv.customerEmail) recipientEmail = inv.customerEmail.trim()
+    if (!recipientEmail) {
+      const [cust] = await db!.select({ email: s.customers.email }).from(s.customers).where(eq(s.customers.name, inv.customer ?? '')).limit(1)
+      if (cust?.email) recipientEmail = cust.email.trim()
+    }
+    if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      return res.status(400).json({ error: 'No valid email address found. Provide "to" in request body or ensure the customer has an email.' })
+    }
+
+    const sent = await emailInvoicePDF(invoiceId, recipientEmail)
+    if (!sent) return res.status(500).json({ error: 'Failed to send email. Check server logs.' })
+
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Emailed Invoice',
+      module: 'sales',
+      entity: inv.customer ?? invoiceId,
+      details: `Invoice emailed to ${recipientEmail}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, message: 'Invoice emailed successfully', to: recipientEmail })
+  } catch (err) {
+    logger.error({ err }, 'Email invoice failed')
+    res.status(500).json({ error: 'Email invoice failed' })
+  }
+})
+
 // ─── Invoice PDF Download ──────────────────────────────────────────────────
 
 dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
@@ -2237,6 +2465,21 @@ dbRouter.get('/credit-notes/:id/pdf', requirePermission('sales', 'view'), async 
 })
 
 
+
+// ─── Quotation PDF Download ──────────────────────────────────────────────────
+
+dbRouter.get('/quotations/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const { generateQuotationPDF } = await import('../quotationPdf')
+    const pdf = await generateQuotationPDF(req.params.id)
+    if (!pdf) return res.status(404).json({ error: 'Quotation not found or PDF generation failed' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="quotation-${req.params.id}.pdf"`)
+    res.send(pdf)
+  } catch (err) {
+    res.status(500).json({ error: 'Quotation PDF generation failed' })
+  }
+})
 
 // ─── Quotations (pre-sale estimates → convert to invoice) ──────────────────
 import { registerQuotationRoutes } from './quotations'

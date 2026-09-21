@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight, Building, Landmark, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -98,7 +99,7 @@ export default function BankAccountsPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={Landmark} label="Total Balance" value={formatCurrency(totalBalance)} sub="Across all accounts" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={Landmark} label="Total Balance" value={formatCurrency(totalBalance)} sub="Across all accounts" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={Building} label="Accounts" value={String(accounts.length)} sub="Active accounts" tint="bg-info-50 text-info-700" />
         <MiniCard icon={ArrowUpRight} label="Ledger In (Month)" value={formatCurrency(monthInflows)} sub="Credits this month" tint="bg-success-50 text-success-700" />
         <MiniCard icon={ArrowDownRight} label="Ledger Out (Month)" value={formatCurrency(monthOutflows)} sub="Debits this month" tint="bg-warning-50 text-warning-700" />
@@ -109,7 +110,7 @@ export default function BankAccountsPage() {
           <Card key={account.id} className="p-5">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50 text-primary-700">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
                   <Landmark className="h-5 w-5" />
                 </div>
                 <div>
@@ -129,8 +130,26 @@ export default function BankAccountsPage() {
                     </Tooltip>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" onClick={() => { if (confirm(`Delete bank account "${account.name}"?`)) dbApi.remove('bank-accounts', account.id).then(load) }}>
-                          <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                        <Button variant="ghost" size="icon-sm" onClick={async () => {
+                          if (!(await confirmDialog({ title: `Delete bank account "${account.name}"?`, danger: true, confirmLabel: 'Delete' }))) return
+                          try {
+                            await dbApi.remove('bank-accounts', account.id)
+                            load()
+                            toast.undoable('Bank account deleted', async () => {
+                              try {
+                                const { id: _omit, ...rest } = account
+                                await dbApi.create('bank-accounts', rest)
+                                load()
+                                toast.success('Delete undone — account restored')
+                              } catch {
+                                toast.error('Could not restore account')
+                              }
+                            })
+                          } catch {
+                            toast.error('Failed to delete account')
+                          }
+                        }}>
+                          <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>Delete account</TooltipContent>
@@ -206,7 +225,7 @@ export default function BankAccountsPage() {
                 onChange={(e) => setForm((f) => ({ ...f, ifsc: e.target.value }))}
               />
             </Field>
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>

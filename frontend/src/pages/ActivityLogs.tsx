@@ -17,10 +17,10 @@ const moduleTint: Record<string, string> = {
   'Silver Rate': 'bg-warning-50 text-warning-700',
   Shopify: 'bg-info-50 text-info-700',
   Sales: 'bg-success-50 text-success-700',
-  Accounts: 'bg-primary-50 text-primary-700',
+  Accounts: 'bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300',
   Inventory: 'bg-info-50 text-info-700',
   Purchase: 'bg-warning-50 text-warning-700',
-  System: 'bg-purple-50 text-purple-700',
+  System: 'bg-purple-50 dark:bg-purple-950/40 text-purple-700',
 }
 
 export default function ActivityLogsPage() {
@@ -92,7 +92,7 @@ export default function ActivityLogsPage() {
         header: 'User',
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-700">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <UserRound className="h-3.5 w-3.5" />
             </div>
             <div>
@@ -130,7 +130,7 @@ export default function ActivityLogsPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={ScrollText} label="Total Operations" value={String(logs.length)} sub="Recorded events" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={ScrollText} label="Total Operations" value={String(logs.length)} sub="Recorded events" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={Users} label="Users" value={String(users.length)} sub="Who performed actions" tint="bg-info-50 text-info-700" />
         <MiniCard icon={ShieldAlert} label="System Actions" value={String(logs.filter((l) => l.user === 'System').length)} sub="Automated events" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={Activity} label="Today" value={String(logs.filter((l) => istDateKey(l.timestamp) === todayIST()).length)} sub="Operations today" tint="bg-success-50 text-success-700" />

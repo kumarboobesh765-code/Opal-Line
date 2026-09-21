@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, RefreshCw, Receipt, Plus, Trash2, Link2 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -58,9 +59,9 @@ export default function Bookings() {
   }, [bookings])
 
   const createBooking = async () => {
-    if (!customer.trim()) { window.alert('Customer name is required.'); return }
+    if (!customer.trim()) { toast.error('Customer name is required.'); return }
     const valid = items.filter((it) => it.product.trim() && it.qty > 0)
-    if (valid.length === 0) { window.alert('Add at least one item with a product name and quantity.'); return }
+    if (valid.length === 0) { toast.error('Add at least one item with a product name and quantity.'); return }
     setSaving(true)
     try {
       await dbApi.createBooking({
@@ -74,7 +75,7 @@ export default function Bookings() {
       setAdvance('')
       void load()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Booking failed')
+      toast.error(err instanceof Error ? err.message : 'Booking failed')
     } finally {
       setSaving(false)
     }
@@ -85,19 +86,19 @@ export default function Bookings() {
       const r = await dbApi.bookingPaymentLink(b.id)
       window.open(r.url, '_blank', 'noopener')
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Payment link failed')
+      toast.error(err instanceof Error ? err.message : 'Payment link failed')
     }
   }
 
   const convert = async (b: SalesOrder) => {
-    if (!window.confirm(`Convert booking ${b.internalId || b.id} to invoice? Advance of ${formatCurrency(Number(b.advancePaid ?? 0))} will be applied.`)) return
+    if (!(await confirmDialog({ title: `Convert booking ${b.internalId || b.id} to invoice? Advance of ${formatCurrency(Number(b.advancePaid ?? 0))} will be applied.` }))) return
     setConverting(b.id)
     try {
       const r = await dbApi.convertBooking(b.id)
-      window.alert(`Invoice ${r.invoiceNumber} created. Advance applied: ${formatCurrency(r.advanceApplied)}. Balance: ${formatCurrency(r.balance)}.`)
+      toast.success(`Invoice ${r.invoiceNumber} created — advance ${formatCurrency(r.advanceApplied)}, balance ${formatCurrency(r.balance)}`)
       void load()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Conversion failed')
+      toast.error(err instanceof Error ? err.message : 'Conversion failed')
     } finally {
       setConverting(null)
     }
@@ -175,7 +176,7 @@ export default function Bookings() {
         }
       />
 
-      {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500">{error}</p>}
+      {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500 dark:text-red-400">{error}</p>}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Card><CardContent className="p-4">

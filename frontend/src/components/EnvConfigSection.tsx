@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Loader2, Plug, Save, SlidersHorizontal } from 'lucide-react'
+import { Check, ListChecks, Loader2, Plug, Save, SlidersHorizontal, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { envConfigApi } from '@/lib/api'
+import { envConfigApi, shopifyApi } from '@/lib/api'
 import type { EnvConfigDef, EnvConfigData } from '@/types'
 
 const GROUP_LABELS: Record<string, string> = {
@@ -20,6 +20,48 @@ const GROUP_LABELS: Record<string, string> = {
 
 const GROUP_ORDER = ['shopify', 'email', 'notifications', 'payments', 'whatsapp', 'backup', 'server'] as const
 
+type GroupTestResult = { ok: boolean; text: string }
+
+/** One live test per configuration group — uses the saved (server) values. */
+const GROUP_TESTS: Partial<Record<string, () => Promise<GroupTestResult>>> = {
+  shopify: async () => {
+    const r = await shopifyApi.testConnection()
+    return r.ok
+      ? { ok: true, text: r.shop ? `Connected to ${r.shop}` : 'Shopify credentials valid' }
+      : { ok: false, text: r.error ?? 'Connection failed' }
+  },
+  email: async () => {
+    const r = await shopifyApi.testMailbox()
+    if (!r.ok) return { ok: false, text: r.error ?? 'Mailbox login failed' }
+    const bits = [r.provider === 'mailtm' ? 'mail.tm' : `IMAP ${r.host ?? ''}`, r.folder, r.messageCount != null ? `${r.messageCount} message(s)` : null].filter(Boolean)
+    return { ok: true, text: `Mailbox login OK — ${bits.join(' · ')}` }
+  },
+  notifications: async () => {
+    const r = await shopifyApi.testEmail()
+    return r.ok
+      ? { ok: true, text: `Test email sent to ${r.to}` }
+      : { ok: false, text: r.error ?? 'Send failed' }
+  },
+  payments: async () => {
+    const r = await shopifyApi.testRazorpay()
+    return r.ok
+      ? { ok: true, text: r.message ?? 'Credentials valid' }
+      : { ok: false, text: r.error ?? 'Test failed' }
+  },
+  whatsapp: async () => {
+    const r = await shopifyApi.testWhatsAppConfig()
+    return r.ok
+      ? { ok: true, text: r.message ?? 'Token valid' }
+      : { ok: false, text: r.error ?? 'Test failed' }
+  },
+  backup: async () => {
+    const r = await shopifyApi.testOffsiteBackup()
+    return r.ok
+      ? { ok: true, text: r.bucket ? `Bucket reachable: ${r.bucket}` : 'Bucket reachable' }
+      : { ok: false, text: r.error ?? 'Connection failed' }
+  },
+}
+
 /**
  * "Configuration" panel — every env-backed setting editable from the UI.
  * Secrets show masked and are re-encrypted server-side on save; submitting
@@ -32,6 +74,63 @@ export function EnvConfigSection() {
   const [saving, setSaving] = useState(false)
   const [savedMsg, setSavedMsg] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [testingGroup, setTestingGroup] = useState<string | null>(null)
+  const [groupResults, setGroupResults] = useState<Record<string, GroupTestResult>>({})
+  const [testingAll, setTestingAll] = useState(false)
+  const [allSummary, setAllSummary] = useState<{ passed: number; failed: number } | null>(null)
+  const [lastTestedAt, setLastTestedAt] = useState<Record<string, string>>({})
+
+  const stamp = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  /** Run every group test in order, showing each result as it lands. */
+  const runAllTests = async () => {
+    if (testingAll || testingGroup) return
+    setTestingAll(true)
+    setAllSummary(null)
+    setGroupResults({})
+    let passed = 0
+    let failed = 0
+    for (const group of GROUP_ORDER) {
+      const fn = GROUP_TESTS[group]
+      if (!fn) continue
+      setTestingGroup(group)
+      try {
+        const result = await fn()
+        setGroupResults((prev) => ({ ...prev, [group]: result }))
+        setLastTestedAt((prev) => ({ ...prev, [group]: stamp() }))
+        if (result.ok) passed++
+        else failed++
+      } catch (e) {
+        setGroupResults((prev) => ({ ...prev, [group]: { ok: false, text: e instanceof Error ? e.message : 'Test failed' } }))
+        setLastTestedAt((prev) => ({ ...prev, [group]: stamp() }))
+        failed++
+      }
+    }
+    setTestingGroup(null)
+    setTestingAll(false)
+    setAllSummary({ passed, failed })
+  }
+
+  const runGroupTest = async (group: string) => {
+    const fn = GROUP_TESTS[group]
+    if (!fn || testingGroup) return
+    setTestingGroup(group)
+    setGroupResults((prev) => {
+      const next = { ...prev }
+      delete next[group]
+      return next
+    })
+    try {
+      const result = await fn()
+      setGroupResults((prev) => ({ ...prev, [group]: result }))
+      setLastTestedAt((prev) => ({ ...prev, [group]: stamp() }))
+    } catch (e) {
+      setGroupResults((prev) => ({ ...prev, [group]: { ok: false, text: e instanceof Error ? e.message : 'Test failed' } }))
+      setLastTestedAt((prev) => ({ ...prev, [group]: stamp() }))
+    } finally {
+      setTestingGroup(null)
+    }
+  }
 
   const load = useCallback(() => {
     setLoading(true)
@@ -95,13 +194,23 @@ export function EnvConfigSection() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {savedMsg && (
               <span className="flex items-center gap-1.5 text-sm font-medium text-success-600">
                 <Check className="h-4 w-4" /> {savedMsg}
               </span>
             )}
-            {error && <span className="text-sm font-medium text-red-600">{error}</span>}
+            {error && <span className="text-sm font-medium text-red-600 dark:text-red-400">{error}</span>}
+            {allSummary && (
+              <span className={`flex items-center gap-1.5 text-sm font-medium ${allSummary.failed === 0 ? 'text-success-600' : 'text-amber-600 dark:text-amber-400'}`}>
+                {allSummary.failed === 0 ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+                {allSummary.passed} passed{allSummary.failed > 0 ? ` · ${allSummary.failed} failed / not configured` : ' · all good'}
+              </span>
+            )}
+            <Button size="sm" variant="outline" onClick={runAllTests} disabled={saving || loading || testingAll || testingGroup !== null}>
+              {testingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+              {testingAll ? 'Testing all...' : 'Test All'}
+            </Button>
             <Button size="sm" onClick={save} disabled={saving || loading}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {saving ? 'Saving...' : 'Save Configuration'}
@@ -110,16 +219,30 @@ export function EnvConfigSection() {
         </div>
 
         {dirty && !saving && (
-          <p className="text-xs font-medium text-amber-600">You have unsaved changes.</p>
+          <p className="text-xs font-medium text-amber-600 dark:text-amber-400">You have unsaved changes — tests use the last saved values, so save first.</p>
         )}
 
         <div className="grid gap-4 lg:grid-cols-2">
           {GROUP_ORDER.filter((g) => groups.has(g)).map((group) => (
             <div key={group} className="rounded-lg border p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <Plug className="h-3.5 w-3.5 text-muted-foreground" />
-                <h4 className="text-sm font-semibold text-foreground">{GROUP_LABELS[group] ?? group}</h4>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Plug className="h-3.5 w-3.5 text-muted-foreground" />
+                  <h4 className="text-sm font-semibold text-foreground">{GROUP_LABELS[group] ?? group}</h4>
+                </div>
+                {GROUP_TESTS[group] ? (
+                  <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => runGroupTest(group)} disabled={testingGroup !== null || testingAll}>
+                    {testingGroup === group ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+                    {testingGroup === group ? 'Testing...' : 'Test'}
+                  </Button>
+                ) : null}
               </div>
+              {groupResults[group] && (
+                <p className={`mb-3 text-xs font-medium ${groupResults[group].ok ? 'text-success-600' : 'text-red-600 dark:text-red-400'}`}>
+                  {groupResults[group].text}
+                  <span className="ml-1.5 font-normal text-muted-foreground">· tested {lastTestedAt[group]}</span>
+                </p>
+              )}
               <div className="space-y-3">
                 {groups.get(group)!.map((def) => (
                   <EnvField

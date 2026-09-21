@@ -118,7 +118,7 @@ export default function PurchaseOrdersPage() {
         meta: { headerClassName: 'min-w-[170px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <ShoppingCart className="h-4 w-4" />
             </div>
             <div>
@@ -209,7 +209,7 @@ export default function PurchaseOrdersPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => setStatus(row.original, 'cancelled')}>
-                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                      <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Cancel PO</TooltipContent>
@@ -241,7 +241,7 @@ export default function PurchaseOrdersPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={ShoppingCart} label="Total POs" value={String(orders.length)} sub="All purchase orders" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={ShoppingCart} label="Total POs" value={String(orders.length)} sub="All purchase orders" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={ShoppingCart} label="Open" value={String(orders.filter((o) => o.status === 'open').length)} sub="Awaiting receipt" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={Weight} label="Total Weight" value={formatWeight(totalWeight)} sub="Gross across POs" tint="bg-info-50 text-info-700" />
         <MiniCard icon={Building2} label="Open Value" value={formatCurrency(totalValue)} sub="Committed to suppliers" tint="bg-success-50 text-success-700" />
@@ -354,7 +354,7 @@ export default function PurchaseOrdersPage() {
                 />
               </Field>
             </div>
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>

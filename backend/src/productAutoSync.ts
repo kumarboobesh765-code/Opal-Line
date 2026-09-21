@@ -3,6 +3,7 @@ import * as schema from './db/schema'
 import { eq } from 'drizzle-orm'
 import { syncProductsToDb } from './shopify'
 import { logger } from './logger'
+import { escapeHtml } from './htmlEscape'
 
 /**
  * Product auto-sync scheduler — periodically pulls the live Shopify catalog
@@ -83,7 +84,7 @@ async function maybeAlertSyncFailures(): Promise<void> {
     const sent = await sendEmail({
       to: email,
       subject: `⚠️ Product auto-sync failed ${consecutiveFailures}× in a row`,
-      html: `<p>The Shopify product auto-sync has failed <strong>${consecutiveFailures}</strong> times in a row.</p><p>Last error: <code>${lastResult?.message ?? 'unknown'}</code></p><p>Check the Sync page in the ERP for details, or run a manual sync.</p>`,
+      html: `<p>The Shopify product auto-sync has failed <strong>${consecutiveFailures}</strong> times in a row.</p><p>Last error: <code>${escapeHtml(lastResult?.message ?? 'unknown')}</code></p><p>Check the Sync page in the ERP for details, or run a manual sync.</p>`,
     })
     if (sent) logger.warn({ failures: consecutiveFailures }, 'Sync-failure alert emailed')
   } catch (err) {

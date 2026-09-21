@@ -136,7 +136,7 @@ export default function DispatchPage() {
         }
       />
 
-      {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500">{error}</p>}
+      {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500 dark:text-red-400">{error}</p>}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">Awaiting dispatch</p><p className="text-2xl font-semibold">{dispatchable.length}</p></CardContent></Card>

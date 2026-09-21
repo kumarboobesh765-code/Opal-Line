@@ -33,7 +33,7 @@ export default function ShopifyInventoryPage() {
         meta: { headerClassName: 'min-w-[240px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <Boxes className="h-4 w-4" />
             </div>
             <div className="min-w-0">

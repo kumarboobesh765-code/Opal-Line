@@ -61,7 +61,7 @@ export default function ShopifyPricePage() {
         meta: { headerClassName: 'min-w-[240px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <Tags className="h-4 w-4" />
             </div>
             <div className="min-w-0">
@@ -97,7 +97,7 @@ export default function ShopifyPricePage() {
           const abs = Math.abs(diff)
           if (abs <= 0.005) return <Minus className="mx-auto h-4 w-4 text-muted-foreground" />
           return (
-            <span className={cn('inline-flex items-center gap-0.5 text-xs font-semibold', diff > 0 ? 'text-success-700' : 'text-red-600')}>
+            <span className={cn('inline-flex items-center gap-0.5 text-xs font-semibold', diff > 0 ? 'text-success-700' : 'text-red-600 dark:text-red-400')}>
               {diff > 0 ? '+' : '−'}
               {formatCurrency(abs)}
             </span>
@@ -145,7 +145,7 @@ export default function ShopifyPricePage() {
       {pushResult ? (
         <Card className={cn(pushResult.ok ? 'border-success-100 bg-success-50/50' : 'border-red-200 bg-red-50/50')}>
           <CardContent className="flex items-start gap-3 p-4 text-sm">
-            {pushResult.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-700" /> : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />}
+            {pushResult.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-700" /> : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />}
             <div>
               <p className={cn('font-semibold', pushResult.ok ? 'text-success-700' : 'text-red-700')}>
                 {pushResult.ok ? 'Prices pushed to Shopify' : 'Price push failed'}
@@ -153,7 +153,7 @@ export default function ShopifyPricePage() {
               <p className="text-[13px] text-muted-foreground">
                 {pushResult.updated} updated · {pushResult.skipped} skipped
                 {pushResult.errors.length > 0 ? (
-                  <span className="mt-1 block max-w-2xl truncate font-mono text-xs text-red-600">{pushResult.errors[0]}</span>
+                  <span className="mt-1 block max-w-2xl truncate font-mono text-xs text-red-600 dark:text-red-400">{pushResult.errors[0]}</span>
                 ) : null}
               </p>
             </div>

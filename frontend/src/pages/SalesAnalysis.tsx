@@ -101,7 +101,7 @@ export default function SalesAnalysisPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={IndianRupee} label="Revenue" value={formatCurrency(totalRevenue)} sub="Selected period" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={IndianRupee} label="Revenue" value={formatCurrency(totalRevenue)} sub="Selected period" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={ShoppingBag} label="Orders" value={String(totalOrders)} sub="Total orders" tint="bg-info-50 text-info-700" />
         <MiniCard icon={TrendingUp} label="Avg Order Value" value={formatCurrency(totalOrders ? totalRevenue / totalOrders : 0)} sub="Per order" tint="bg-success-50 text-success-700" />
         <MiniCard
@@ -194,7 +194,7 @@ export default function SalesAnalysisPage() {
                       <TableCell className="text-right text-sm">{r.qty}</TableCell>
                       <TableCell className="text-right text-sm">{formatCurrency(r.revenue)}</TableCell>
                       <TableCell className="text-right text-sm text-muted-foreground">{formatCurrency(r.cost)}</TableCell>
-                      <TableCell className={`text-right text-sm font-medium ${r.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      <TableCell className={`text-right text-sm font-medium ${r.profit >= 0 ? 'text-emerald-600' : 'text-red-600 dark:text-red-400'}`}>
                         {formatCurrency(r.profit)}
                       </TableCell>
                       <TableCell className="text-right">

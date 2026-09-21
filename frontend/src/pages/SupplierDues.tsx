@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { IndianRupee, RefreshCw, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -73,17 +74,17 @@ export default function SupplierDuesPage() {
     if (!payFor) return
     const amount = Number(payAmount)
     if (!Number.isFinite(amount) || amount <= 0) {
-      window.alert('Enter a valid amount')
+      toast.error('Enter a valid amount')
       return
     }
     setPaySaving(true)
     try {
       const res = await dbApi.recordSupplierPayment({ supplier: payFor.supplier, amount, method: payMethod })
-      window.alert(`Payment ${res.ref} recorded to ${payFor.supplier}.`)
+      toast.success(`Payment ${res.ref} recorded to ${payFor.supplier}`)
       setPayFor(null)
       load()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Payment failed')
+      toast.error(err instanceof Error ? err.message : 'Payment failed')
     } finally {
       setPaySaving(false)
     }
@@ -114,7 +115,7 @@ export default function SupplierDuesPage() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Card className="p-4">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Outstanding</p>
-              <p className="text-xl font-bold tabular-nums text-red-600">{formatCurrency(data.total)}</p>
+              <p className="text-xl font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(data.total)}</p>
             </Card>
             <Card className="p-4">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Suppliers with dues</p>
@@ -152,7 +153,7 @@ export default function SupplierDuesPage() {
                         <td className="px-4 py-3">
                           <Badge variant={ageTone(d.oldestDate)} dot>{ageLabel(d.oldestDate)}</Badge>
                         </td>
-                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-red-600">{formatCurrency(d.total)}</td>
+                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(d.total)}</td>
                         <td className="px-4 py-3 text-right">
                           <Button variant="outline" size="sm" onClick={() => openPayDialog(d)}>
                             <IndianRupee className="h-3.5 w-3.5" /> Pay

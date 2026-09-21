@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { CheckCircle2, Eye, RefreshCw, Search, Undo2, Weight, XCircle } from 'lucide-react'
@@ -46,7 +47,7 @@ export default function PurchaseReturnsPage() {
       await dbApi.update('purchase-returns', id, { status })
       setReturns((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)))
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Update failed')
+      toast.error(err instanceof Error ? err.message : 'Update failed')
     }
   }
 
@@ -150,7 +151,7 @@ export default function PurchaseReturnsPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => setReturnStatus(row.original.id, 'rejected')}>
-                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                      <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Reject</TooltipContent>
@@ -172,7 +173,7 @@ export default function PurchaseReturnsPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={Undo2} label="Total Returns" value={String(returns.length)} sub="All time" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={Undo2} label="Total Returns" value={String(returns.length)} sub="All time" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={Weight} label="Returned Weight" value={formatWeight(totalWeight)} sub="Gross weight" tint="bg-info-50 text-info-700" />
         <MiniCard icon={Undo2} label="Pending" value={String(returns.filter((r) => r.status === 'pending').length)} sub="Awaiting decision" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={CheckCircle2} label="Received Back" value={String(returns.filter((r) => r.status === 'received').length)} sub="Accepted by supplier" tint="bg-success-50 text-success-700" />

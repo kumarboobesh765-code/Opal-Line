@@ -7,6 +7,7 @@ import { logger } from './logger'
 import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from './notifications'
 import { db } from './db/client'
 import * as schema from './db/schema'
+import { escapeHtml } from './htmlEscape'
 
 export const AUTO_BACKUP_HOUR = 19
 export const AUTO_BACKUP_MINUTE = 0
@@ -380,7 +381,7 @@ async function runWeeklyVerification(): Promise<void> {
     await sendEmail({
       to: email,
       subject: `⚠️ ${res.corrupt.length} corrupt backup file(s) detected`,
-      html: `<p>Weekly backup integrity check found <strong>${res.corrupt.length}</strong> of ${res.checked} backup files unreadable:</p><ul>${res.corrupt.map((c) => `<li><code>${c.fileName}</code> — ${c.error}</li>`).join('')}</ul><p>These files cannot be restored from. Take a fresh backup and review storage health.</p>`,
+      html: `<p>Weekly backup integrity check found <strong>${res.corrupt.length}</strong> of ${res.checked} backup files unreadable:</p><ul>${res.corrupt.map((c) => `<li><code>${escapeHtml(c.fileName)}</code> — ${escapeHtml(c.error)}</li>`).join('')}</ul><p>These files cannot be restored from. Take a fresh backup and review storage health.</p>`,
     })
     logger.info('Corrupt-backup alert emailed')
   } catch (err) {

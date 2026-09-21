@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { requireAuth } from '../sessions'
 import { requirePermission } from '../rbac'
 import { upsertEnvVar } from '../lib/envfile'
-import { encryptSecret } from '../lib/crypto'
+import { encryptSecret, decryptSecret } from '../lib/crypto'
 import { logger } from '../logger'
 
 /**
@@ -82,10 +82,11 @@ function readRawEnv(): Map<string, string> {
   return map
 }
 
+// Masking temporarily disabled — reveal raw (decrypted) values so admins can
+// see exactly what is stored. Re-introduce before production use.
 function maskValue(v: string): string {
   if (!v) return ''
-  if (v.startsWith('encV1:')) return '••••••••'
-  return v.length <= 4 ? '••••' : '••••' + v.slice(-4)
+  return v
 }
 
 export function registerEnvConfigRoutes(app: Express) {
@@ -97,8 +98,9 @@ export function registerEnvConfigRoutes(app: Express) {
     const configured: Record<string, boolean> = {}
     for (const def of ENV_CONFIG_DEFS) {
       const rawVal = raw.get(def.key) ?? process.env[def.key] ?? ''
-      // Secrets that are already encrypted in .env → show mask; plaintext env → mask too
-      values[def.key] = def.secret ? (rawVal ? maskValue(rawVal) : '') : rawVal
+      // Secrets are decrypted for display while masking is disabled
+      const plain = def.secret && rawVal ? decryptSecret(rawVal) : rawVal
+      values[def.key] = def.secret ? (plain ? maskValue(plain) : '') : plain
       configured[def.key] = rawVal.trim().length > 0
     }
     res.json({ defs: ENV_CONFIG_DEFS, values, configured })

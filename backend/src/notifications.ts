@@ -1,5 +1,6 @@
 import { Resend } from 'resend'
 import { logger } from './logger'
+import { escapeHtml } from './htmlEscape'
 
 let resendClient: Resend | null = null
 
@@ -153,8 +154,8 @@ export async function notifyLowStock(
     .map(
       (p) => `
       <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${p.name}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; font-family: monospace;">${p.sku}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(p.name)}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; font-family: monospace;">${escapeHtml(p.sku)}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: #dc2626; font-weight: bold;">${p.stock}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorderLevel}</td>
       </tr>`
@@ -220,11 +221,11 @@ export async function notifyCustomerStatement(
   return sendEmail({
     to: recipientEmail,
     subject: `Your Opal Line Account Statement — ${statement.invoiceCount} invoice${statement.invoiceCount === 1 ? '' : 's'}`,
-    attachments: [{ filename: `statement-${customer.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.pdf`, content: statement.buffer }],
+    attachments: [{ filename: `statement-${customer.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.pdf`, content: statement.buffer }] as { filename: string; content: Buffer }[],
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color:#2563eb;">Account Statement — ${customer}</h2>
-        <p style="color:#666;">Hi ${customer}, please find your account statement attached.</p>
+        <h2 style="color:#2563eb;">Account Statement — ${escapeHtml(customer)}</h2>
+        <p style="color:#666;">Hi ${escapeHtml(customer)}, please find your account statement attached.</p>
         <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
           <tr><td style="padding: 8px 12px; color: #666;">Invoices</td><td style="padding: 8px 12px; font-weight: bold;">${statement.invoiceCount}</td></tr>
           <tr><td style="padding: 8px 12px; color: #666;">Total billed</td><td style="padding: 8px 12px; font-weight: bold;">${money(statement.totalBilled)}</td></tr>

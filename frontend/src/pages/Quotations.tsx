@@ -1,7 +1,9 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import {
   CheckCircle2,
+  Download,
   FileText,
   Loader2,
   Plus,
@@ -27,7 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { dbApi } from '@/lib/api'
+import { dbApi, backupApi } from '@/lib/api'
 import type { AppSettings, Quotation } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { escapeHtml, numberToIndianWords } from '@/lib/utils'
@@ -273,7 +275,7 @@ export default function QuotationsPage() {
   }
 
   const convert = async (q: Quotation) => {
-    if (!confirm(`Convert ${q.number} into a tax invoice? Stock will be deducted and an invoice number generated.`)) return
+    if (!(await confirmDialog({ title: `Convert ${q.number} into a tax invoice?`, description: 'Stock will be deducted and an invoice number generated.', confirmLabel: 'Convert' }))) return
     setConvertingId(q.id)
     setMessage(null)
     try {
@@ -288,12 +290,24 @@ export default function QuotationsPage() {
   }
 
   const removeQuote = async (id: string) => {
-    if (!confirm('Delete this quotation?')) return
+    if (!(await confirmDialog({ title: 'Delete this quotation?', danger: true, confirmLabel: 'Delete' }))) return
+    const snapshot = quotes.find((r) => r.id === id)
     try {
       await dbApi.deleteQuotation(id)
       setQuotes((prev) => prev.filter((r) => r.id !== id))
+      if (snapshot) {
+        toast.undoable('Quotation deleted', async () => {
+          try {
+            await dbApi.create('quotations', snapshot as unknown as Record<string, unknown>)
+            setQuotes((prev) => [snapshot, ...prev])
+            toast.success('Delete undone — quotation restored')
+          } catch {
+            toast.error('Could not restore quotation')
+          }
+        })
+      }
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Delete failed')
+      toast.error(err instanceof Error ? err.message : 'Delete failed')
     }
   }
 
@@ -305,7 +319,7 @@ export default function QuotationsPage() {
         meta: { headerClassName: 'min-w-[150px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <FileText className="h-4 w-4" />
             </div>
             <div>
@@ -360,6 +374,14 @@ export default function QuotationsPage() {
                 </TooltipTrigger>
                 <TooltipContent>Print / PDF</TooltipContent>
               </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" onClick={() => backupApi.downloadQuotationPDF(row.original.id)}>
+                    <Download className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Download PDF</TooltipContent>
+              </Tooltip>
               {row.original.status !== 'converted' && row.original.status !== 'cancelled' && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -390,7 +412,7 @@ export default function QuotationsPage() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon-sm" onClick={() => removeQuote(row.original.id)}>
-                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                    <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Delete quotation</TooltipContent>
@@ -419,7 +441,7 @@ export default function QuotationsPage() {
       {message && (
         <Card className={`border ${message.ok ? 'border-success-200 bg-success-50' : 'border-red-200 bg-red-50'}`}>
           <CardContent className="flex items-center gap-2 p-3 text-sm">
-            {message.ok ? <CheckCircle2 className="h-4 w-4 text-success-600" /> : <span className="text-red-600">⚠</span>}
+            {message.ok ? <CheckCircle2 className="h-4 w-4 text-success-600" /> : <span className="text-red-600 dark:text-red-400">⚠</span>}
             <span className={message.ok ? 'text-success-800' : 'text-red-800'}>{message.text}</span>
           </CardContent>
         </Card>
@@ -533,7 +555,7 @@ export default function QuotationsPage() {
                     </div>
                     {items.length > 1 && (
                       <Button variant="ghost" size="icon-sm" onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}>
-                        <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                        <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                       </Button>
                     )}
                   </div>
@@ -562,7 +584,7 @@ export default function QuotationsPage() {
               <Input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Design details, delivery promise..." />
             </Field>
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -612,6 +634,9 @@ export default function QuotationsPage() {
                 <div className="flex gap-2">
                   <Button variant="outline" className="flex-1" size="sm" onClick={() => printQuotation(viewQuote)}>
                     <Printer className="h-4 w-4" /> Print / PDF
+                  </Button>
+                  <Button variant="outline" className="flex-1" size="sm" onClick={() => backupApi.downloadQuotationPDF(viewQuote.id)}>
+                    <Download className="h-4 w-4" /> Download PDF
                   </Button>
                   <Button className="flex-1" size="sm" disabled={convertingId === viewQuote.id} onClick={() => { const q = viewQuote; setViewQuote(null); convert(q) }}>
                     <Wallet className="h-4 w-4" /> Convert to Invoice

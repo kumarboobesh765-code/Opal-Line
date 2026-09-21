@@ -74,7 +74,7 @@ const productIcons: Record<string, LucideIcon> = {
 }
 
 const activityIcons: Record<Activity['type'], { icon: LucideIcon; className: string }> = {
-  'silver-rate': { icon: Tag, className: 'bg-primary-50 text-primary-700' },
+  'silver-rate': { icon: Tag, className: 'bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300' },
   'shopify-import': { icon: ShoppingBag, className: 'bg-info-50 text-info-700' },
   invoice: { icon: FileText, className: 'bg-success-50 text-success-700' },
   payment: { icon: IndianRupee, className: 'bg-success-50 text-success-700' },
@@ -250,7 +250,7 @@ export default function DashboardPage() {
                         <TableRow key={p.id} className="border-b-0">
                           <TableCell>
                             <div className="flex items-center gap-2.5">
-                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+                              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
                                 <Icon className="h-4 w-4" />
                               </div>
                               <div>
@@ -354,7 +354,7 @@ export default function DashboardPage() {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="text-right font-semibold tabular-nums text-red-600">{formatPieces(l.stock)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums text-red-600 dark:text-red-400">{formatPieces(l.stock)}</TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground">{formatPieces(l.reorderLevel)}</TableCell>
                         <TableCell className="text-center">
                           <Badge variant={l.status === 'critical' ? 'danger' : 'warning'} dot>
@@ -622,7 +622,7 @@ function AnalyticsCard({ stat }: { stat: AnalyticsStat }) {
         <span
           className={cn(
             'mt-1 inline-flex items-center gap-0.5 text-[11px] font-semibold',
-            stat.trend === 'up' ? 'text-success-700' : 'text-red-600',
+            stat.trend === 'up' ? 'text-success-700' : 'text-red-600 dark:text-red-400',
           )}
         >
           {stat.trend === 'up' ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
@@ -703,13 +703,13 @@ function QuickActions() {
 
 function OperationalStrip({ summary }: { summary: Record<string, string | number> }) {
   const items: { label: string; value: string; icon: LucideIcon; tint: string }[] = [
-    { label: 'Total Products', value: `${summary.totalProducts}`, icon: Gem, tint: 'bg-primary-50 text-primary-700' },
+    { label: 'Total Products', value: `${summary.totalProducts}`, icon: Gem, tint: 'bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300' },
     { label: 'Total Customers', value: `${summary.totalCustomers}`, icon: Users, tint: 'bg-info-50 text-info-700' },
     { label: 'Total Suppliers', value: `${summary.totalSuppliers}`, icon: BuildingIcon, tint: 'bg-warning-50 text-warning-700' },
     { label: 'Total Stock (Qty)', value: `${formatNumber(Number(summary.totalStockQty))} pcs`, icon: Boxes, tint: 'bg-success-50 text-success-700' },
-    { label: 'Total Stock (Wt)', value: formatWeight(Number(summary.totalStockWeight)), icon: ScaleIcon, tint: 'bg-primary-50 text-primary-700' },
+    { label: 'Total Stock (Wt)', value: formatWeight(Number(summary.totalStockWeight)), icon: ScaleIcon, tint: 'bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300' },
     { label: "Today's Expenses", value: compactCurrency(Number(summary.todayExpenses)), icon: Wallet, tint: 'bg-warning-50 text-warning-700' },
-    { label: 'Pending Payments', value: compactCurrency(Number(summary.pendingPayments)), icon: Clock, tint: 'bg-red-50 text-red-600' },
+    { label: 'Pending Payments', value: compactCurrency(Number(summary.pendingPayments)), icon: Clock, tint: 'bg-red-50 text-red-600 dark:text-red-400' },
   ]
   return (
     <Card className="divide-y divide-border overflow-hidden">

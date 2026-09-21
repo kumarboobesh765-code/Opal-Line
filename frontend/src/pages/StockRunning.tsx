@@ -115,7 +115,7 @@ export default function StockRunningPage() {
           const reorder = row.original.reorderLevel
           const isLow = stock <= reorder
           return (
-            <span className={isLow ? 'text-red-600 font-bold' : 'font-semibold tabular-nums'}>
+            <span className={isLow ? 'text-red-600 dark:text-red-400 font-bold' : 'font-semibold tabular-nums'}>
               {formatNumber(stock)}{isLow && <AlertTriangle className="ml-1 h-3 w-3 inline-block" />}
             </span>
           )
@@ -145,7 +145,7 @@ export default function StockRunningPage() {
           const isAtRisk = days <= 7 && days > 0
           const isLow = days <= 14 && days > 7
           return (
-            <span className={isAtRisk ? 'text-red-600 font-bold' : isLow ? 'text-orange-600' : 'text-foreground'}>
+            <span className={isAtRisk ? 'text-red-600 dark:text-red-400 font-bold' : isLow ? 'text-orange-600' : 'text-foreground'}>
               {days}d {isAtRisk && <AlertTriangle className="ml-1 h-3 w-3 inline-block" />}
             </span>
           )

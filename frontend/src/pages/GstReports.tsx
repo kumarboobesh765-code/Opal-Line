@@ -70,7 +70,7 @@ export default function GstReportsPage() {
       />
 
       {error ? (
-        <Card className="p-4 text-sm text-red-600">{error}</Card>
+        <Card className="p-4 text-sm text-red-600 dark:text-red-400">{error}</Card>
       ) : loading || !s || !g1 ? (
         <Card className="flex items-center justify-center gap-2 p-8 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading GST report...
@@ -78,7 +78,7 @@ export default function GstReportsPage() {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <MiniCard icon={IndianRupee} label="Taxable Supplies" value={formatCurrency(s.taxable)} sub={monthLabel} tint="bg-primary-50 text-primary-700" />
+            <MiniCard icon={IndianRupee} label="Taxable Supplies" value={formatCurrency(s.taxable)} sub={monthLabel} tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
             <MiniCard icon={ArrowUpRight} label="Output GST" value={formatCurrency(s.outputGst)} sub="Liability for period" tint="bg-warning-50 text-warning-700" />
             <MiniCard icon={ArrowDownRight} label="Input GST" value={formatCurrency(s.inputGst)} sub="Credit available" tint="bg-info-50 text-info-700" />
             <MiniCard icon={Scale} label="Net GST Payable" value={formatCurrency(s.netGst)} sub={`CGST ₹${s.cgst.toLocaleString('en-IN')} · SGST ₹${s.sgst.toLocaleString('en-IN')}`} tint="bg-success-50 text-success-700" />

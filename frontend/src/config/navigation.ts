@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowLeftRight,
+  Calculator,
   FileSpreadsheet,
   BarChart3,
   Barcode,
@@ -10,6 +11,7 @@ import {
   DatabaseBackup,
   FileText,
   Gem,
+  Gift,
   HandCoins,
   KanbanSquare,
   Landmark,
@@ -67,6 +69,7 @@ export const navSections: NavSection[] = [
       { title: 'Order Pipeline', path: '/sales/pipeline', icon: KanbanSquare },
       { title: 'Dispatch', path: '/sales/dispatch', icon: Truck },
       { title: 'Customers', path: '/sales/customers', icon: Users },
+      { title: 'Loyalty', path: '/sales/loyalty', icon: Gift },
       { title: 'Returns', path: '/sales/returns', icon: Undo2 },
       { title: 'Bookings', path: '/sales/bookings', icon: ShoppingBag },
     ],
@@ -95,10 +98,12 @@ export const navSections: NavSection[] = [
   {
     label: 'Accounts',
     items: [
+      { title: 'Double-Entry Accounting', path: '/accounts/accounting', icon: Calculator },
       { title: 'Expenses', path: '/accounts/expenses', icon: Wallet },
       { title: 'Payments', path: '/accounts/payments', icon: HandCoins },
       { title: 'Bank Accounts', path: '/accounts/bank', icon: Landmark },
       { title: 'Ledger', path: '/accounts/ledger', icon: BookOpen },
+      { title: 'Import Data', path: '/accounts/import', icon: Upload },
     ],
   },
   {
@@ -107,6 +112,7 @@ export const navSections: NavSection[] = [
       { title: 'Business Reports', path: '/reports/business', icon: BarChart3 },
       { title: 'Day Book', path: '/reports/day-book', icon: BookOpen },
       { title: 'GST Reports', path: '/reports/gst', icon: Receipt },
+      { title: 'HSN Summary', path: '/reports/hsn', icon: FileSpreadsheet },
       { title: 'Sales Analysis', path: '/reports/sales', icon: TrendingUp },
       { title: 'Inventory Reports', path: '/reports/inventory', icon: PackageSearch },
       { title: 'Outstanding Dues', path: '/reports/dues', icon: HandCoins },

@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useEffect, useState } from 'react'
 import { Mail, MessageCircle, RefreshCw, Save, PackageCheck } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -46,9 +47,9 @@ export default function NotificationSettingsPage() {
     setSaving(true)
     try {
       await dbApi.updateNotificationSettings(settings)
-      window.alert('Notification settings saved!')
+      toast.success('Notification settings saved')
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Failed to save settings')
+      toast.error(err instanceof Error ? err.message : 'Failed to save settings')
     } finally {
       setSaving(false)
     }

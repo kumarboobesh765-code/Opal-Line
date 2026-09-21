@@ -14,6 +14,8 @@ import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateW
 
 export const backupRouter = Router()
 
+const MAX_BACKUP_SIZE = 50 * 1024 * 1024 // 50MB
+
 const IST_TIMEZONE = 'Asia/Kolkata'
 
 // Backups live under the backend package root (the nearest ancestor containing
@@ -892,11 +894,21 @@ backupRouter.post('/dry-run', requirePermission('system', 'view'), async (req, r
     return res.status(400).json({ error: 'fileName is required' })
   }
 
+  const filePath = path.join(backupDirectory(), path.basename(fileName))
+  try {
+    const st = statSync(filePath)
+    if (st.size > MAX_BACKUP_SIZE) {
+      return res.status(400).json({ error: `Backup file exceeds maximum size of ${MAX_BACKUP_SIZE / (1024 * 1024)}MB` })
+    }
+  } catch {
+    return res.status(400).json({ error: 'Backup file not found' })
+  }
+
   let data: Record<string, unknown[]>
   let scopeType: string | undefined
 
   try {
-    const raw = await readFile(path.join(backupDirectory(), path.basename(fileName)), 'utf8')
+    const raw = await readFile(filePath, 'utf8')
     const parsed = JSON.parse(raw)
     if (parsed._encrypted && parsed.payload) {
       const decrypted = decryptBackupFile(parsed.payload)
@@ -911,6 +923,21 @@ backupRouter.post('/dry-run', requirePermission('system', 'view'), async (req, r
     }
   } catch (err) {
     return res.status(400).json({ error: 'Could not read backup file: ' + (err instanceof Error ? err.message : 'Unknown error') })
+  }
+
+  // Validate backup structure: must have a `tables` object with arrays of rows
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return res.status(400).json({ error: 'Invalid backup structure: expected a tables object' })
+  }
+  for (const [tableName, rows] of Object.entries(data)) {
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: `Invalid backup structure: table "${tableName}" must be an array` })
+    }
+    for (const row of rows) {
+      if (row && typeof row === 'object' && !('id' in row)) {
+        return res.status(400).json({ error: `Invalid backup structure: rows in table "${tableName}" must have an "id" field` })
+      }
+    }
   }
 
   try {
@@ -991,8 +1018,18 @@ backupRouter.post('/restore', requirePermission('system', 'edit'), async (req, r
 
   // Read backup from file
   if (fileName) {
+    const filePath = path.join(backupDirectory(), path.basename(fileName))
     try {
-      const raw = await readFile(path.join(backupDirectory(), path.basename(fileName)), 'utf8')
+      const st = statSync(filePath)
+      if (st.size > MAX_BACKUP_SIZE) {
+        return res.status(400).json({ error: `Backup file exceeds maximum size of ${MAX_BACKUP_SIZE / (1024 * 1024)}MB` })
+      }
+    } catch {
+      return res.status(400).json({ error: 'Backup file not found' })
+    }
+
+    try {
+      const raw = await readFile(filePath, 'utf8')
       let parsed: Record<string, unknown>
       try {
         parsed = JSON.parse(raw)
@@ -1036,6 +1073,18 @@ backupRouter.post('/restore', requirePermission('system', 'edit'), async (req, r
   const scopeLabel = labelFromFile ?? scope.label
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return res.status(400).json({ error: 'Backup data is required' })
+  }
+
+  // Validate backup structure: must have tables with arrays of rows
+  for (const [tableName, rows] of Object.entries(data)) {
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: `Invalid backup structure: table "${tableName}" must be an array` })
+    }
+    for (const row of rows) {
+      if (row && typeof row === 'object' && !('id' in row)) {
+        return res.status(400).json({ error: `Invalid backup structure: rows in table "${tableName}" must have an "id" field` })
+      }
+    }
   }
 
   // DRY RUN MODE: Preview without actually restoring

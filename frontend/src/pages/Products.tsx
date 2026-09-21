@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
@@ -87,7 +88,7 @@ const productTints: Record<string, { bg: string; text: string }> = {
   'Silver Bracelet': { bg: 'bg-info-50', text: 'text-info-700' },
   'Silver Chain': { bg: 'bg-success-50', text: 'text-success-700' },
   'Silver Pendant': { bg: 'bg-warning-50', text: 'text-warning-700' },
-  'Silver Earrings': { bg: 'bg-red-50', text: 'text-red-600' },
+  'Silver Earrings': { bg: 'bg-red-50', text: 'text-red-600 dark:text-red-400' },
 }
 
 export default function ProductsPage() {
@@ -291,7 +292,7 @@ export default function ProductsPage() {
         return (
           <span className="flex items-center justify-end gap-1.5">
             {low ? <Badge variant="danger" dot>Reorder</Badge> : null}
-            <span className={cn('font-medium tabular-nums', low ? 'text-red-600' : 'text-foreground')}>{stock} pcs</span>
+            <span className={cn('font-medium tabular-nums', low ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>{stock} pcs</span>
           </span>
         )
       }, meta: { align: 'right' as const } },
@@ -378,7 +379,7 @@ export default function ProductsPage() {
                   {row.original.status === 'inactive' ? 'Activate' : 'Deactivate'}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => toggleStatus(row.original)}>
+                <DropdownMenuItem className="text-red-600 dark:text-red-400 focus:text-red-600 dark:text-red-400" onClick={() => toggleStatus(row.original)}>
                   {row.original.status === 'inactive' ? 'Activate product' : 'Deactivate product'}
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -432,7 +433,7 @@ export default function ProductsPage() {
         <Card>
           <CardContent className="flex flex-col gap-2 border border-amber-300 bg-amber-50 p-4 dark:border-amber-500/40 dark:bg-amber-950/30">
             <div className="flex items-center gap-2">
-              <Search className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <Search className="h-4 w-4 text-amber-600 dark:text-amber-400 dark:text-amber-400" />
               <h3 className="font-semibold text-foreground">Duplicate SKUs detected ({duplicates.length})</h3>
             </div>
             <ul className="space-y-1 text-sm text-muted-foreground">
@@ -539,7 +540,7 @@ export default function ProductsPage() {
                   setReorderFor(null)
                   load()
                 } catch (err) {
-                  window.alert(err instanceof Error ? err.message : 'Update failed')
+                  toast.error(err instanceof Error ? err.message : 'Update failed')
                 } finally {
                   setReorderSaving(false)
                 }

@@ -132,7 +132,7 @@ export function requirePermission(moduleKey: string, action: keyof ModulePermiss
     }
     const granted = perms.effective[moduleKey]?.[action]
     if (!granted) {
-      res.status(403).json({ error: `Permission denied: ${action} on ${moduleKey}` })
+        res.status(403).json({ error: 'Access denied' })
       return
     }
     next()
@@ -194,7 +194,7 @@ export function enforceRbac(req: Request, res: Response, next: NextFunction) {
         return
       }
       if (!perms.effective[moduleKey]?.[action]) {
-        res.status(403).json({ error: `Permission denied: ${action} on ${moduleKey}` })
+      res.status(403).json({ error: 'Access denied' })
         return
       }
       next()

@@ -1,6 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowUpRight, ArrowDownRight, Bell, FileText, Gem, Menu, Plus, Settings, ShieldCheck, ShoppingBag, UserPlus, ChevronDown, LogOut, RefreshCcw, Search } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Bell, FileText, Gem, Menu, Moon, Plus, Settings, ShieldCheck, ShoppingBag, Sun, UserPlus, ChevronDown, LogOut, RefreshCcw, Search } from 'lucide-react'
 import { useAuth } from '@/auth/auth-context'
 import { useSilverRate } from '@/lib/silver-rate-context'
 import { formatDateTime } from '@/lib/format'
@@ -17,6 +17,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { dbApi } from '@/lib/api'
+import { getTheme, toggleTheme, type Theme } from '@/lib/theme'
 import type { Activity } from '@/types'
 
 interface HeaderProps {
@@ -28,6 +29,7 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
   const { rate: silverRate } = useSilverRate()
   const { currentUser, logout, refresh, permissionsMeta, hasPermission } = useAuth()
   const navigate = useNavigate()
+  const [theme, setThemeState] = useState<Theme>(() => getTheme())
   const [notifications, setNotifications] = useState<Activity[]>([])
   const [feed, setFeed] = useState<Array<{ type: string; title: string; detail: string | null; at: string | null; href: string }>>([])
   const [unreadCount, setUnreadCount] = useState(0)
@@ -128,6 +130,15 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
             </div>
           </Link>
         ) : null}
+
+        <button
+          type="button"
+          onClick={() => setThemeState(toggleTheme())}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+        </button>
 
         <DropdownMenu onOpenChange={(open) => { if (open) handleNotificationOpen() }}>
           <TooltipProvider delayDuration={200}>
@@ -270,7 +281,7 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout} className="text-red-600 focus:text-red-600">
+            <DropdownMenuItem onClick={handleLogout} className="text-red-600 dark:text-red-400 focus:text-red-600 dark:text-red-400">
               <LogOut className="h-3.5 w-3.5" /> Logout
             </DropdownMenuItem>
           </DropdownMenuContent>

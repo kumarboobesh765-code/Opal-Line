@@ -972,3 +972,114 @@ dashboardRouter.get('/orders/:id/full', async (req, res) => {
     res.status(500).json({ error: 'Failed to load order detail' })
   }
 })
+
+// ─── HSN-wise Summary Report ──────────────────────────────────────
+dashboardRouter.get('/reports/hsn', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const monthParam = Number(req.query.month)
+    const target = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12 ? monthParam : new Date().getMonth() + 1
+    const yearParam = Number(req.query.year)
+    const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
+    const prefix = `${year}-${pad(target)}`
+
+    const invoices = await loadInvoices()
+    const items = invoices
+      .filter((i) => String(i.date ?? '').startsWith(prefix) && String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
+      .flatMap((inv) => {
+        const invAny = inv as unknown as Record<string, unknown>
+        const lineItems = (invAny.lineItems as Array<Record<string, unknown>> | null) ?? []
+        return lineItems.map((li) => ({
+          hsn: String(li.hsn ?? '7113'),
+          quantity: Number(li.quantity ?? 1),
+          taxableValue: Number(li.taxableValue ?? li.amount ?? 0),
+          gst: Number(li.gst ?? li.tax ?? 0),
+        }))
+      })
+
+    // Group by HSN
+    const hsnMap = new Map<string, { hsn: string; description: string; qty: number; taxableValue: number; cgst: number; sgst: number; igst: number; totalTax: number }>()
+    for (const item of items) {
+      const existing = hsnMap.get(item.hsn)
+      if (existing) {
+        existing.qty += item.quantity
+        existing.taxableValue += item.taxableValue
+        existing.cgst += Math.round((item.gst / 2) * 100) / 100
+        existing.sgst += Math.round((item.gst / 2) * 100) / 100
+        existing.totalTax += item.gst
+      } else {
+        hsnMap.set(item.hsn, {
+          hsn: item.hsn,
+          description: item.hsn === '7113' ? 'Silver jewellery articles' : 'Other goods',
+          qty: item.quantity,
+          taxableValue: item.taxableValue,
+          cgst: Math.round((item.gst / 2) * 100) / 100,
+          sgst: Math.round((item.gst / 2) * 100) / 100,
+          igst: 0,
+          totalTax: item.gst,
+        })
+      }
+    }
+
+    res.json(Array.from(hsnMap.values()).sort((a, b) => b.taxableValue - a.taxableValue))
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate HSN summary' })
+  }
+})
+
+// ─── GST Reconciliation Report ────────────────────────────────────
+dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const monthParam = Number(req.query.month)
+    const target = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12 ? monthParam : new Date().getMonth() + 1
+    const yearParam = Number(req.query.year)
+    const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
+    const prefix = `${year}-${pad(target)}`
+
+    const invoices = await loadInvoices()
+    const active = invoices.filter((i) => String(i.date ?? '').startsWith(prefix) && String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
+
+    let outputGst = 0
+    let b2bTaxable = 0
+    let b2cTaxable = 0
+    const mismatches: Array<{ invoiceNumber: string; expected: number; actual: number; diff: number }> = []
+
+    const isBusiness = (name: string) => /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i.test(String(name ?? ''))
+
+    for (const inv of active) {
+      const taxable = num(inv.subtotal) - num(inv.discount)
+      const gst = num(inv.gstAmount)
+      outputGst += gst
+      if (isBusiness(String(inv.customer ?? ''))) {
+        b2bTaxable += taxable
+      } else {
+        b2cTaxable += taxable
+      }
+
+      // Check: expected GST = taxable * rate / 100
+      const rate = Number(inv.gst || 3)
+      const expectedGst = Math.round(taxable * rate / 100 * 100) / 100
+      const diff = Math.abs(expectedGst - gst)
+      if (diff > 0.01) {
+        mismatches.push({
+          invoiceNumber: String(inv.number ?? inv.id),
+          expected: expectedGst,
+          actual: gst,
+          diff,
+        })
+      }
+    }
+
+    res.json({
+      outputGst: round2(outputGst),
+      inputGst: 0, // TODO: purchase invoice GST tracking
+      netPayable: round2(outputGst),
+      b2bTaxable: round2(b2bTaxable),
+      b2cTaxable: round2(b2cTaxable),
+      mismatches,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate GST reconciliation' })
+  }
+})

@@ -115,7 +115,7 @@ export default function OrderBoard() {
         }
       />
 
-      {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500">{error}</p>}
+      {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500 dark:text-red-400">{error}</p>}
 
       {loading && orders.length === 0 ? (
         <div className="flex items-center justify-center py-24 text-muted-foreground">

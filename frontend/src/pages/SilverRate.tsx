@@ -395,7 +395,7 @@ export default function SilverRatePage() {
                               <TableRow key={product.id}>
                                 <TableCell>
                                   <div className="flex items-center gap-2">
-                                    <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+                                    <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
                                       <Gem className="h-3.5 w-3.5" />
                                     </div>
                                     <div>
@@ -408,7 +408,7 @@ export default function SilverRatePage() {
                                 <TableCell className="text-right tabular-nums">{formatCurrency(oldPrice)}</TableCell>
                                 <TableCell className="text-right font-semibold tabular-nums text-foreground">{formatCurrency(newPrice)}</TableCell>
                                 <TableCell className="text-right">
-                                  <span className={cn('font-semibold tabular-nums', rounded ? 'text-muted-foreground' : diff > 0 ? 'text-success-700' : 'text-red-600')}>
+                                  <span className={cn('font-semibold tabular-nums', rounded ? 'text-muted-foreground' : diff > 0 ? 'text-success-700' : 'text-red-600 dark:text-red-400')}>
                                     {rounded ? '—' : `${diff > 0 ? '+' : ''}${formatCurrency(diff)}`}
                                   </span>
                                 </TableCell>
@@ -474,7 +474,7 @@ export default function SilverRatePage() {
             </>
           ) : (
             <div className="flex flex-col items-center gap-3 py-6 text-center">
-              <div className={cn('flex h-14 w-14 items-center justify-center rounded-full', result && !result.ok ? 'bg-red-50 text-red-600' : 'bg-success-50 text-success-700')}>
+              <div className={cn('flex h-14 w-14 items-center justify-center rounded-full', result && !result.ok ? 'bg-red-50 text-red-600 dark:text-red-400' : 'bg-success-50 text-success-700')}>
                 {result && !result.ok ? <AlertTriangle className="h-7 w-7" /> : <CheckCircle2 className="h-7 w-7" />}
               </div>
               <p className="text-base font-semibold text-foreground">
@@ -545,7 +545,7 @@ function MiniBadge({ label, value, accent }: { label: string; value: string; acc
   return (
     <div className={cn('rounded-lg border p-3', accent === 'green' ? 'border-success-100 bg-success-50/60' : accent === 'red' ? 'border-red-100 bg-red-50/60' : 'bg-muted/40')}>
       <p className="text-[10.5px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={cn('mt-0.5 text-sm font-bold tabular-nums', accent === 'green' ? 'text-success-700' : accent === 'red' ? 'text-red-600' : 'text-foreground')}>
+      <p className={cn('mt-0.5 text-sm font-bold tabular-nums', accent === 'green' ? 'text-success-700' : accent === 'red' ? 'text-red-600 dark:text-red-400' : 'text-foreground')}>
         {value}
       </p>
     </div>

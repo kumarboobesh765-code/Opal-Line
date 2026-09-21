@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useEffect, useState } from 'react'
 import { Upload, FileText, Download, RefreshCw, Users, ShoppingCart, Check, ArrowRight, Mail } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -47,7 +48,7 @@ export default function ShopifyDataImportPage() {
       setParsedHeaders(result.headers)
       setStep('preview')
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Parse failed')
+      toast.error(err instanceof Error ? err.message : 'Parse failed')
     } finally {
       setBusy(null)
     }
@@ -65,7 +66,7 @@ export default function ShopifyDataImportPage() {
       setResult(res)
       setStep('done')
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Import failed')
+      toast.error(err instanceof Error ? err.message : 'Import failed')
     } finally {
       setBusy(null)
     }
@@ -77,7 +78,7 @@ export default function ShopifyDataImportPage() {
       const res = type === 'customers' ? await backupApi.enrichCustomers() : await backupApi.enrichOrders()
       setEnrichResult(res)
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Enrichment failed')
+      toast.error(err instanceof Error ? err.message : 'Enrichment failed')
     } finally {
       setBusy(null)
     }
@@ -96,7 +97,7 @@ export default function ShopifyDataImportPage() {
       const res = await backupApi.pollOrderEmails()
       setEmailResult(res)
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Email poll failed')
+      toast.error(err instanceof Error ? err.message : 'Email poll failed')
     } finally {
       setBusy(null)
     }
@@ -117,7 +118,7 @@ export default function ShopifyDataImportPage() {
       <PageHeader
         title={
           <span className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 ring-1 ring-primary-100">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300 ring-1 ring-primary-100">
               <Upload className="h-5 w-5" />
             </div>
             <span>Shopify Data Import</span>
@@ -339,8 +340,8 @@ export default function ShopifyDataImportPage() {
                   <p>🔄 Updated: {result.updated}</p>
                   {result.errors.length > 0 && (
                     <div className="mt-2">
-                      <p className="text-red-600">⚠️ Errors:</p>
-                      <ul className="list-disc pl-5 text-red-600/80">
+                      <p className="text-red-600 dark:text-red-400">⚠️ Errors:</p>
+                      <ul className="list-disc pl-5 text-red-600 dark:text-red-400/80">
                         {result.errors.slice(0, 5).map((e, i) => <li key={i}>{e}</li>)}
                         {result.errors.length > 5 && <li>...and {result.errors.length - 5} more</li>}
                       </ul>

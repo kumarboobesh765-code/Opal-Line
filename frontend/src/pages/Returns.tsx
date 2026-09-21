@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 ﻿import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { Ban, CheckCircle2, FileDown, Search, Undo2, Wallet } from 'lucide-react'
@@ -48,7 +49,7 @@ export default function ReturnsPage() {
       await dbApi.update('sales-returns', id, { status })
       setReturns((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)) as never)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Update failed')
+      toast.error(err instanceof Error ? err.message : 'Update failed')
     }
   }
 
@@ -127,7 +128,7 @@ export default function ReturnsPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => setReturnStatus(row.original.id, 'rejected')}>
-                      <Ban className="h-3.5 w-3.5 text-red-600" />
+                      <Ban className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Reject return</TooltipContent>

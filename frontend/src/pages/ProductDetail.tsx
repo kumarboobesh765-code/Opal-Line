@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 ﻿import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
@@ -65,7 +66,7 @@ export default function ProductDetailPage() {
   if (error) {
     return (
       <div className="mx-auto w-full max-w-[1400px] px-4 py-6">
-        <p className="text-sm text-red-600">{error}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       </div>
     )
   }
@@ -87,7 +88,7 @@ export default function ProductDetailPage() {
       if (fresh) setProduct(fresh)
       setNotice(`Shopify sync complete — ${res.results.products?.count ?? 0} products up to date.`)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Sync failed')
+      toast.error(err instanceof Error ? err.message : 'Sync failed')
     } finally {
       setSyncing(false)
     }
@@ -114,7 +115,7 @@ export default function ProductDetailPage() {
       <PageHeader
         title={
           <span className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 ring-1 ring-primary-100">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300 ring-1 ring-primary-100">
               <Gem className="h-5 w-5" />
             </div>
             {product.name}
@@ -391,7 +392,7 @@ function ShopifySyncState({ id, status }: { id?: string; status: Product['shopif
     synced: { label: 'Product is synced with Shopify', cls: 'bg-success-50 text-success-700' },
     pending: { label: 'Price update pending admin approval', cls: 'bg-warning-50 text-warning-700' },
     'not-listed': { label: 'Not listed on Shopify yet', cls: 'bg-muted text-muted-foreground' },
-    error: { label: 'Sync failed — retry required', cls: 'bg-red-50 text-red-600' },
+    error: { label: 'Sync failed — retry required', cls: 'bg-red-50 text-red-600 dark:text-red-400' },
   }
   const s = states[status ?? 'not-listed'] ?? { label: 'Not listed on Shopify yet', cls: 'bg-muted text-muted-foreground' }
   return (

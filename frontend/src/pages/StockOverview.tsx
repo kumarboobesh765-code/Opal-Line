@@ -75,7 +75,7 @@ export default function StockOverviewPage() {
         meta: { headerClassName: 'min-w-[220px]' },
         cell: ({ row }) => (
           <Link to={`/inventory/products/${row.original.id}`} className="group flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <Gem className="h-4 w-4" />
             </div>
             <div className="min-w-0">
@@ -247,7 +247,7 @@ function ReorderSuggestionsCard() {
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
-        <CardTitle className="flex items-center gap-2 text-sm"><Lightbulb className="h-4 w-4 text-amber-500" /> Smart Reorder Suggestions</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-sm"><Lightbulb className="h-4 w-4 text-amber-500 dark:text-amber-400" /> Smart Reorder Suggestions</CardTitle>
         <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setOpen((o) => !o)}>
           {open ? 'Hide' : `Show (${suggestions.length})`}
         </button>

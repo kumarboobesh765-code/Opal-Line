@@ -149,7 +149,7 @@ export default function StockCountPage() {
             </div>
           )}
           {savedMsg && (
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-950/30">
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/40 p-3 text-sm text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-950/30">
               <CheckCircle2 className="h-4 w-4" />
               {savedMsg}
             </div>
@@ -207,7 +207,7 @@ export default function StockCountPage() {
                       </TableCell>
                       <TableCell>
                         <Button size="sm" variant="ghost" onClick={() => setItems((prev) => prev.filter((y) => y.id !== x.id))}>
-                          <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                          <Trash2 className="h-3.5 w-3.5 text-red-500 dark:text-red-400" />
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -220,7 +220,7 @@ export default function StockCountPage() {
           {items.length > 0 && (
             <p className="text-xs text-muted-foreground">
               {items.length} item(s) · total variance{' '}
-              <span className={totalVariance < 0 ? 'font-semibold text-red-600' : totalVariance > 0 ? 'font-semibold text-emerald-600' : ''}>
+              <span className={totalVariance < 0 ? 'font-semibold text-red-600 dark:text-red-400' : totalVariance > 0 ? 'font-semibold text-emerald-600' : ''}>
                 {totalVariance > 0 ? '+' : ''}
                 {totalVariance}
               </span>{' '}

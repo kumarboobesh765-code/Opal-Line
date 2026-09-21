@@ -5,6 +5,7 @@ import { SilverRateProvider } from '@/lib/silver-rate-context'
 import { AppShell } from '@/components/layout/app-shell'
 import { RequireAuth, RequireModule } from '@/components/RequirePermission'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { DialogHost, ToastHost } from '@/components/ui/confirm'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FileQuestion } from 'lucide-react'
 import LoginPage from '@/pages/Login'
@@ -21,6 +22,7 @@ const OrderBoardPage = lazy(() => import('@/pages/OrderBoard'))
 const DispatchPage = lazy(() => import('@/pages/Dispatch'))
 const BookingsPage = lazy(() => import('@/pages/Bookings'))
 const CustomersPage = lazy(() => import('@/pages/Customers'))
+const LoyaltyPage = lazy(() => import('@/pages/Loyalty'))
 const ReturnsPage = lazy(() => import('@/pages/Returns'))
 const PurchaseOrdersPage = lazy(() => import('@/pages/PurchaseOrders'))
 const PurchaseInvoicesPage = lazy(() => import('@/pages/PurchaseInvoices'))
@@ -58,6 +60,9 @@ const NotificationLogPage = lazy(() => import('@/pages/NotificationLog'))
 const SupplierDuesPage = lazy(() => import('@/pages/SupplierDues'))
 const UsersPage = lazy(() => import('@/pages/Users'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
+const AccountingPage = lazy(() => import('@/pages/Accounting'))
+const ImportDataPage = lazy(() => import('@/pages/ImportData'))
+const HsnSummaryPage = lazy(() => import('@/pages/HsnSummary'))
 const BackupRestorePage = lazy(() => import('@/pages/BackupRestore'))
 const AuditLogsPage = lazy(() => import('@/pages/AuditLogs'))
 const ActivityLogsPage = lazy(() => import('@/pages/ActivityLogs'))
@@ -90,6 +95,8 @@ function App() {
       <BrowserRouter>
         <SilverRateProvider>
           <ErrorBoundary>
+            <ToastHost />
+            <DialogHost />
             <Suspense fallback={<div className="flex h-full min-h-[60vh] items-center justify-center text-sm text-muted-foreground">Loading...</div>}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
@@ -111,6 +118,7 @@ function App() {
             <Route path="/sales/pipeline" element={guarded('sales', <OrderBoardPage />)} />
             <Route path="/sales/dispatch" element={guarded('sales', <DispatchPage />)} />
             <Route path="/sales/customers" element={guarded('sales', <CustomersPage />)} />
+            <Route path="/sales/loyalty" element={guarded('sales', <LoyaltyPage />)} />
             <Route path="/sales/returns" element={guarded('sales', <ReturnsPage />)} />
             <Route path="/sales/bookings" element={guarded('sales', <BookingsPage />)} />
 
@@ -128,13 +136,16 @@ function App() {
             <Route path="/inventory/stock-count" element={guarded('inventory', <StockCountPage />)} />
             <Route path="/inventory/stock-running" element={guarded('inventory', <StockRunningPage />)} />
 
+            <Route path="/accounts/accounting" element={guarded('accounts', <AccountingPage />)} />
             <Route path="/accounts/expenses" element={guarded('accounts', <ExpensesPage />)} />
             <Route path="/accounts/payments" element={guarded('accounts', <PaymentsPage />)} />
             <Route path="/accounts/bank" element={guarded('accounts', <BankAccountsPage />)} />
             <Route path="/accounts/ledger" element={guarded('accounts', <LedgerPage />)} />
+            <Route path="/accounts/import" element={guarded('accounts', <ImportDataPage />)} />
 
             <Route path="/reports/business" element={guarded('reports', <BusinessReportsPage />)} />
             <Route path="/reports/gst" element={guarded('reports', <GstReportsPage />)} />
+            <Route path="/reports/hsn" element={guarded('reports', <HsnSummaryPage />)} />
             <Route path="/reports/sales" element={guarded('reports', <SalesAnalysisPage />)} />
             <Route path="/reports/day-book" element={guarded('reports', <DayBookPage />)} />
             <Route path="/reports/inventory" element={guarded('reports', <InventoryReportsPage />)} />

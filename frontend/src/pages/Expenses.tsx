@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { CheckCircle2, Loader2, Plus, Receipt, Search, Trash2, User, Wallet } from 'lucide-react'
@@ -92,16 +93,27 @@ export default function ExpensesPage() {
       await dbApi.update('expenses', expense.id, { status: 'approved' })
       load()
     } catch {
-      window.alert('Failed to approve expense')
+      toast.error('Failed to approve expense')
     }
   }
 
   const remove = async (expense: Expense) => {
+    if (!(await confirmDialog({ title: `Delete this expense (${expense.category}, ${formatCurrency(expense.amount)})?`, danger: true, confirmLabel: 'Delete' }))) return
     try {
       await dbApi.remove('expenses', expense.id)
       load()
+      toast.undoable('Expense deleted', async () => {
+        try {
+          const { id: _omit, ...rest } = expense
+          await dbApi.create('expenses', rest)
+          load()
+          toast.success('Delete undone — expense restored')
+        } catch {
+          toast.error('Could not restore expense')
+        }
+      })
     } catch {
-      window.alert('Failed to delete expense')
+      toast.error('Failed to delete expense')
     }
   }
 
@@ -193,7 +205,7 @@ export default function ExpensesPage() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon-sm" onClick={() => remove(row.original)}>
-                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                    <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Delete expense</TooltipContent>
@@ -219,7 +231,7 @@ export default function ExpensesPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={Receipt} label="Total Expenses" value={formatCurrency(totalAmount)} sub="All time" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={Receipt} label="Total Expenses" value={formatCurrency(totalAmount)} sub="All time" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={CheckCircle2} label="Approved" value={formatCurrency(approvedAmount)} sub="Cleared expenses" tint="bg-success-50 text-success-700" />
         <MiniCard icon={Wallet} label="Pending" value={formatCurrency(pendingAmount)} sub="Awaiting approval" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={Receipt} label="This Month" value={formatCurrency(expenses.filter((e) => e.date.startsWith(thisMonthKey)).reduce((a, e) => a + e.amount, 0))} sub={thisMonthLabel} tint="bg-info-50 text-info-700" />
@@ -316,7 +328,7 @@ export default function ExpensesPage() {
                 className="w-full"
               />
             </Field>
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>

@@ -65,7 +65,7 @@ export default function BarcodeLabelsPage() {
         const params = new URLSearchParams({ preset, price: String(showPrice), weight: String(showWeight), qr: String(showQR) })
         // For selected products, open with IDs
         const url = `/api/v1/db/products/labels?${params.toString()}`
-        window.open(url, '_blank')
+        window.open(url, '_blank', 'noopener')
       }
     } finally {
       setTimeout(() => setGenerating(false), 1000)
@@ -86,7 +86,7 @@ export default function BarcodeLabelsPage() {
       <PageHeader
         title={
           <span className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 ring-1 ring-primary-100">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300 ring-1 ring-primary-100">
               <Tag className="h-5 w-5" />
             </div>
             <span>Barcode Labels</span>
@@ -170,7 +170,7 @@ export default function BarcodeLabelsPage() {
                   <div
                     key={product.id}
                     className={`flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${
-                      selected.has(product.id) ? 'bg-primary-50' : ''
+                      selected.has(product.id) ? 'bg-primary-50 dark:bg-primary-500/20' : ''
                     }`}
                     onClick={() => toggleSelect(product.id)}
                   >

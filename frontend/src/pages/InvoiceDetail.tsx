@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 ﻿import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
@@ -206,12 +207,22 @@ export default function InvoiceDetailPage() {
     w.document.close()
   }
 
-  const emailInvoice = () => {
-    const subject = encodeURIComponent(`Invoice ${invoice.number} from Opal Line`)
-    const body = encodeURIComponent(
-      `Hi ${invoice.customer},\n\nThank you for your order ${invoice.shopifyOrder}.\n\nInvoice ${invoice.number} — Total: ${formatCurrency(invoice.grandTotal)}\n\nRegards,\nOpal Line`,
-    )
-    window.location.href = `mailto:${invoice.customerEmail}?subject=${subject}&body=${body}`
+  const [emailSending, setEmailSending] = useState(false)
+
+  const emailInvoice = async () => {
+    setEmailSending(true)
+    try {
+      const result = await dbApi.emailInvoice(invoice.id, invoice.customerEmail || undefined)
+      if (result.ok) {
+        toast.success(`Invoice ${invoice.number} emailed to ${result.to}`)
+      } else {
+        toast.error(result.error || 'Email send failed')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Email send failed')
+    } finally {
+      setEmailSending(false)
+    }
   }
 
   const sendWhatsAppInvoice = async () => {
@@ -219,25 +230,25 @@ export default function InvoiceDetailPage() {
     try {
       const result = await dbApi.sendInvoiceWhatsApp(invoice.id)
       if (result.ok) {
-        window.alert(`Invoice ${invoice.number} sent to ${result.to} on WhatsApp ✅`)
+        toast.success(`Invoice ${invoice.number} sent to ${result.to} on WhatsApp`)
       } else {
-        window.alert(result.error || 'WhatsApp send failed')
+        toast.error(result.error || 'WhatsApp send failed')
       }
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'WhatsApp send failed')
+      toast.error(err instanceof Error ? err.message : 'WhatsApp send failed')
     } finally {
       setWaSending(false)
     }
   }
 
   const refundInvoice = async () => {
-    if (!window.confirm(`Mark invoice ${invoice.number} as refunded? This cannot be undone.`)) return
+    if (!(await confirmDialog({ title: `Mark invoice ${invoice.number} as refunded? This cannot be undone.` }))) return
     setRefunding(true)
     try {
       await dbApi.update('invoices', invoice.id, { status: 'refunded', paymentStatus: 'refunded' })
       setInvoice({ ...invoice, status: 'refunded', paymentStatus: 'refunded' })
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Refund failed')
+      toast.error(err instanceof Error ? err.message : 'Refund failed')
     } finally {
       setRefunding(false)
     }
@@ -256,17 +267,17 @@ export default function InvoiceDetailPage() {
     const items = Object.entries(returnQty)
       .filter(([, qty]) => qty > 0)
       .map(([sku, qty]) => ({ sku, qty }))
-    if (items.length === 0) { window.alert('Enter a quantity greater than 0 for at least one item.'); return }
+    if (items.length === 0) { toast.error('Enter a quantity greater than 0 for at least one item.'); return }
     setReturning(true)
     try {
       const r = await dbApi.createReturn(invoice.id, { items, restock })
-      window.alert(
-        `Return processed.\nCredit Note: ${r.creditNoteNumber}\nAmount: ₹${r.amount.toLocaleString('en-IN')}${r.restocked ? '\nItems restocked.' : ''}`,
+      toast.success(
+        `Return processed — credit note ${r.creditNoteNumber}, ₹${r.amount.toLocaleString('en-IN')}${r.restocked ? ', items restocked' : ''}`,
       )
       setReturnOpen(false)
       window.location.reload()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Return failed')
+      toast.error(err instanceof Error ? err.message : 'Return failed')
     } finally {
       setReturning(false)
     }
@@ -287,7 +298,7 @@ export default function InvoiceDetailPage() {
       <PageHeader
         title={
           <span className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 ring-1 ring-primary-100">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300 ring-1 ring-primary-100">
               <FileText className="h-5 w-5" />
             </div>
             <span>Sales Invoice</span>
@@ -304,7 +315,7 @@ export default function InvoiceDetailPage() {
           <>
             <Button variant="outline" size="sm" onClick={printInvoice}><Printer className="h-3.5 w-3.5" /> Print</Button>
             <Button variant="outline" size="sm" onClick={printInvoice}><Download className="h-3.5 w-3.5" /> Save as PDF</Button>
-            <Button variant="outline" size="sm" onClick={emailInvoice}><Mail className="h-3.5 w-3.5" /> Email</Button>
+            <Button variant="outline" size="sm" onClick={emailInvoice} disabled={emailSending}><Mail className="h-3.5 w-3.5" /> {emailSending ? 'Sending…' : 'Email'}</Button>
             {invoice.customerPhone ? (
               <Button variant="outline" size="sm" onClick={sendWhatsAppInvoice} disabled={waSending}><MessageCircle className="h-3.5 w-3.5" /> {waSending ? 'Sending…' : 'Send WhatsApp'}</Button>
             ) : null}
@@ -344,7 +355,7 @@ export default function InvoiceDetailPage() {
                     <TableRow key={i}>
                       <TableCell>
                         <div className="flex items-center gap-2.5">
-                          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
                             <FileText className="h-3.5 w-3.5" />
                           </div>
                           <div>

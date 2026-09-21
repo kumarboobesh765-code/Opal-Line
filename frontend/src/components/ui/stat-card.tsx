@@ -6,32 +6,32 @@ const accentStyles = {
   purple: {
     icon: 'bg-primary-50 text-primary-700 ring-primary-100/60',
     trendUp: 'text-success-700 bg-success-50',
-    trendDown: 'text-red-600 bg-red-50',
+    trendDown: 'text-red-600 dark:text-red-400 bg-red-50',
   },
   green: {
     icon: 'bg-success-50 text-success-700 ring-success-100/60',
     trendUp: 'text-success-700 bg-success-50',
-    trendDown: 'text-red-600 bg-red-50',
+    trendDown: 'text-red-600 dark:text-red-400 bg-red-50',
   },
   orange: {
     icon: 'bg-warning-50 text-warning-700 ring-warning-100/60',
     trendUp: 'text-success-700 bg-success-50',
-    trendDown: 'text-red-600 bg-red-50',
+    trendDown: 'text-red-600 dark:text-red-400 bg-red-50',
   },
   red: {
-    icon: 'bg-red-50 text-red-600 ring-red-100/60',
+    icon: 'bg-red-50 text-red-600 dark:text-red-400 ring-red-100/60',
     trendUp: 'text-success-700 bg-success-50',
-    trendDown: 'text-red-600 bg-red-50',
+    trendDown: 'text-red-600 dark:text-red-400 bg-red-50',
   },
   blue: {
     icon: 'bg-info-50 text-info-700 ring-info-100/60',
     trendUp: 'text-success-700 bg-success-50',
-    trendDown: 'text-red-600 bg-red-50',
+    trendDown: 'text-red-600 dark:text-red-400 bg-red-50',
   },
   slate: {
-    icon: 'bg-slate-100 text-slate-600 ring-slate-100/60',
+    icon: 'bg-slate-100 text-slate-700 ring-slate-100/60 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-800/60',
     trendUp: 'text-success-700 bg-success-50',
-    trendDown: 'text-red-600 bg-red-50',
+    trendDown: 'text-red-600 dark:text-red-400 bg-red-50',
   },
 }
 
@@ -83,7 +83,7 @@ export function StatCard({
             {delta}
           </span>
         ) : trend === 'flat' ? (
-          <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-semibold text-slate-600 bg-slate-100">
+          <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-semibold text-slate-700 bg-slate-100 dark:bg-slate-800 dark:text-slate-300">
             <Minus className="h-3 w-3" />
             {delta ?? '—'}
           </span>

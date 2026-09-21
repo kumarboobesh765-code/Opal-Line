@@ -25,8 +25,8 @@ const moduleTint: Record<string, string> = {
   'Silver Rate': 'bg-warning-50 text-warning-700',
   Shopify: 'bg-info-50 text-info-700',
   Sales: 'bg-success-50 text-success-700',
-  Payments: 'bg-primary-50 text-primary-700',
-  Products: 'bg-purple-50 text-purple-700',
+  Payments: 'bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300',
+  Products: 'bg-purple-50 dark:bg-purple-950/40 text-purple-700',
   Inventory: 'bg-info-50 text-info-700',
   Accounting: 'bg-success-50 text-success-700',
   Purchase: 'bg-warning-50 text-warning-700',
@@ -153,7 +153,7 @@ export default function AuditLogsPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={Activity} label="Total Events" value={String(logs.length)} sub="Recorded actions" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={Activity} label="Total Events" value={String(logs.length)} sub="Recorded actions" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={FileQuestion} label="Modules" value={String(modules.length)} sub="Across the system" tint="bg-info-50 text-info-700" />
         <MiniCard icon={ShieldAlert} label="System Actions" value={String(logs.filter((l) => l.user === 'System').length)} sub="Automated events" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={Activity} label="Today" value={String(logs.filter((l) => istDateKey(l.timestamp) === todayIST()).length)} sub="Events today" tint="bg-success-50 text-success-700" />

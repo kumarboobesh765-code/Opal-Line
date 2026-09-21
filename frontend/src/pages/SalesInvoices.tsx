@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
@@ -61,14 +62,14 @@ export default function SalesInvoicesPage() {
   const [customers, setCustomers] = useState<Array<{ name: string; phone?: string | null }>>([])
 
   const setInvoiceStatus = async (inv: Invoice, status: Invoice['status']) => {
-    if (!window.confirm(`Mark invoice ${inv.number} as ${status}?`)) return
+    if (!(await confirmDialog({ title: `Mark invoice ${inv.number} as ${status}?` }))) return
     try {
       const patch: Record<string, unknown> = { status }
       if (status === 'refunded') patch.paymentStatus = 'refunded'
       await dbApi.update('invoices', inv.id, patch)
       setInvoices((prev) => prev.map((x) => (x.id === inv.id ? { ...x, ...patch } : x)))
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Update failed')
+      toast.error(err instanceof Error ? err.message : 'Update failed')
     }
   }
 
@@ -95,14 +96,14 @@ export default function SalesInvoicesPage() {
   }, [invoices, query, paymentFilter, statusFilter])
 
   const duplicateInvoice = async (inv: Invoice) => {
-    if (!confirm(`Create a draft copy of ${inv.number}? The draft gets a new number, today's date, and pending payment.`)) return
+    if (!(await confirmDialog({ title: `Create a draft copy of ${inv.number}?`, description: "The draft gets a new number, today's date, and pending payment.", confirmLabel: 'Duplicate' }))) return
     setDuplicatingId(inv.id)
     try {
       const created = await dbApi.duplicateInvoice(inv.id)
       setInvoices((prev) => [created as unknown as Invoice, ...prev])
       setViewInvoice(created as unknown as Invoice)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Duplicate failed')
+      toast.error(err instanceof Error ? err.message : 'Duplicate failed')
     } finally {
       setDuplicatingId(null)
     }
@@ -117,7 +118,7 @@ export default function SalesInvoicesPage() {
         cell: ({ row }) => (
           <Link to={`/sales/invoices/${row.original.id}`} className="group">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
                 <FileText className="h-4 w-4" />
               </div>
               <div>
@@ -222,7 +223,7 @@ export default function SalesInvoicesPage() {
               <DropdownMenuItem onClick={() => navigate(`/sales/invoices/${row.original.id}`)}><Download className="h-3.5 w-3.5" /> Download PDF</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setInvoiceStatus(row.original, 'refunded')}><Undo2 className="h-3.5 w-3.5" /> Refund</DropdownMenuItem>
-              <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => setInvoiceStatus(row.original, 'cancelled')}><X className="h-3.5 w-3.5" /> Cancel</DropdownMenuItem>
+              <DropdownMenuItem className="text-red-600 dark:text-red-400 focus:text-red-600 dark:text-red-400" onClick={() => setInvoiceStatus(row.original, 'cancelled')}><X className="h-3.5 w-3.5" /> Cancel</DropdownMenuItem>
             </DropdownMenuContent>
             </DropdownMenu>
             </TooltipProvider>

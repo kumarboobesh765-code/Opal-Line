@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { ArrowDownRight, ArrowUpRight, Download, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
@@ -110,12 +111,25 @@ export default function LedgerPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this ledger entry?')) return
+    if (!(await confirmDialog({ title: 'Delete this ledger entry?', danger: true, confirmLabel: 'Delete' }))) return
+    const snapshot = entries.find((e) => e.id === id)
     try {
       await dbApi.remove('ledger', id)
       load()
+      if (snapshot) {
+        toast.undoable('Ledger entry deleted', async () => {
+          try {
+            const { id: _omit, ...rest } = snapshot
+            await dbApi.create('ledger', rest)
+            load()
+            toast.success('Delete undone — entry restored')
+          } catch {
+            toast.error('Could not restore entry')
+          }
+        })
+      }
     } catch {
-      alert('Failed to delete entry')
+      toast.error('Failed to delete entry')
     }
   }
 
@@ -139,12 +153,12 @@ export default function LedgerPage() {
       {
         accessorKey: 'debit',
         header: 'Debit',
-        cell: ({ row }) => <span className="text-red-600 font-mono tabular-nums flex items-center gap-1"><ArrowUpRight className="h-3 w-3" /> {formatCurrency(row.original.debit)}</span>,
+        cell: ({ row }) => <span className="text-red-600 dark:text-red-400 font-mono tabular-nums flex items-center gap-1"><ArrowUpRight className="h-3 w-3" /> {formatCurrency(row.original.debit)}</span>,
       },
       {
         accessorKey: 'credit',
         header: 'Credit',
-        cell: ({ row }) => <span className="text-green-600 font-mono tabular-nums flex items-center gap-1"><ArrowDownRight className="h-3 w-3" /> {formatCurrency(row.original.credit)}</span>,
+        cell: ({ row }) => <span className="text-green-600 dark:text-green-400 font-mono tabular-nums flex items-center gap-1"><ArrowDownRight className="h-3 w-3" /> {formatCurrency(row.original.credit)}</span>,
       },
       {
         id: 'actions',
@@ -164,7 +178,7 @@ export default function LedgerPage() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(row.original.id)}>
-                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                    <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Delete entry</TooltipContent>
@@ -198,13 +212,13 @@ export default function LedgerPage() {
         <Card>
           <CardContent className="p-5">
             <p className="text-sm text-muted-foreground">Total Debit</p>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-red-600 flex items-center gap-1"><ArrowUpRight className="h-5 w-5" /> {formatCurrency(totalDebit)}</p>
+            <p className="mt-1 text-2xl font-bold tabular-nums text-red-600 dark:text-red-400 flex items-center gap-1"><ArrowUpRight className="h-5 w-5" /> {formatCurrency(totalDebit)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
             <p className="text-sm text-muted-foreground">Total Credit</p>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-green-600 flex items-center gap-1"><ArrowDownRight className="h-5 w-5" /> {formatCurrency(totalCredit)}</p>
+            <p className="mt-1 text-2xl font-bold tabular-nums text-green-600 dark:text-green-400 flex items-center gap-1"><ArrowDownRight className="h-5 w-5" /> {formatCurrency(totalCredit)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -217,9 +231,9 @@ export default function LedgerPage() {
           <CardContent className="p-5">
             <p className="text-sm text-muted-foreground">Net Position</p>
             <p className="mt-1 text-2xl font-bold tabular-nums">{net >= 0 ? (
-              <span className="text-green-600 flex items-center gap-1"><ArrowDownRight className="h-5 w-5" /> {formatCurrency(net)}</span>
+              <span className="text-green-600 dark:text-green-400 flex items-center gap-1"><ArrowDownRight className="h-5 w-5" /> {formatCurrency(net)}</span>
             ) : (
-              <span className="text-red-600 flex items-center gap-1"><ArrowUpRight className="h-5 w-5" /> {formatCurrency(-net)}</span>
+              <span className="text-red-600 dark:text-red-400 flex items-center gap-1"><ArrowUpRight className="h-5 w-5" /> {formatCurrency(-net)}</span>
             )}</p>
           </CardContent>
         </Card>
@@ -255,7 +269,7 @@ export default function LedgerPage() {
             <DialogTitle>{editing ? 'Edit Ledger Entry' : 'Add Ledger Entry'}</DialogTitle>
             <DialogDescription>{editing ? 'Update the ledger entry details.' : 'Record a new debit or credit entry.'}</DialogDescription>
           </DialogHeader>
-          {error && <div className="mb-4 p-3 text-sm text-red-600 bg-red-50 rounded-lg">{error}</div>}
+          {error && <div className="mb-4 p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 rounded-lg">{error}</div>}
           <div className="grid gap-4 py-4">
             <div>
               <Label htmlFor="date">Date</Label>

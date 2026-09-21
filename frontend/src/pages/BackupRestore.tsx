@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Database, DatabaseBackup, Download, FileCheck, Loader2, Lock, RefreshCw, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
+import { Database, DatabaseBackup, Download, FileCheck, ListChecks, Loader2, Lock, RefreshCw, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,7 +8,7 @@ import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { RequireModule } from '@/components/RequirePermission'
-import { backupApi, type BackupDiffResult, type BackupFileInfo, type BackupResult, type BackupScopeInfo, type BackupValidation, type DryRunResult } from '@/lib/api'
+import { backupApi, dbApi, shopifyApi, type BackupDiffResult, type BackupFileInfo, type BackupResult, type BackupScopeInfo, type BackupValidation, type DryRunResult } from '@/lib/api'
 import { formatDateTime } from '@/lib/format'
 import type { ActivityLogEntry } from '@/types'
 
@@ -92,6 +92,66 @@ function BackupRestoreContent() {
     }
   }
 
+  const [testsBusy, setTestsBusy] = useState(false)
+  const [testsRunning, setTestsRunning] = useState<string | null>(null)
+  const [testsResult, setTestsResult] = useState<Array<{ name: string; ok: boolean; detail: string }> | null>(null)
+
+  /** Run every integration test sequentially and list pass/fail per service. */
+  const runIntegrationTests = async () => {
+    if (testsBusy) return
+    setTestsBusy(true)
+    setTestsResult(null)
+    const results: Array<{ name: string; ok: boolean; detail: string }> = []
+    const push = (name: string, ok: boolean, detail: string) => {
+      results.push({ name, ok, detail })
+      setTestsResult([...results])
+    }
+    // Database
+    setTestsRunning('Database')
+    try {
+      const s = await dbApi.getDbStatus()
+      push('Database', s.connected, s.connected ? `Connected — ${s.host ?? ''}:${s.port ?? ''}/${s.database ?? ''}${s.latencyMs != null ? ` (${s.latencyMs}ms)` : ''}` : s.error ?? 'Disconnected')
+    } catch (e) { push('Database', false, e instanceof Error ? e.message : 'Health check failed') }
+    // Shopify
+    setTestsRunning('Shopify')
+    try {
+      const r = await shopifyApi.testConnection()
+      push('Shopify', r.ok, r.ok ? r.shop ? `Connected to ${r.shop}` : 'Credentials valid' : r.error ?? 'Connection failed')
+    } catch (e) { push('Shopify', false, e instanceof Error ? e.message : 'Connection failed') }
+    // Mailbox (order ingest)
+    setTestsRunning('Mailbox')
+    try {
+      const r = await shopifyApi.testMailbox()
+      push('Order Mailbox', r.ok, r.ok ? `IMAP login OK — ${r.folder ?? 'INBOX'}${r.messageCount != null ? ` (${r.messageCount} msgs)` : ''}` : r.error ?? 'Login failed')
+    } catch (e) { push('Order Mailbox', false, e instanceof Error ? e.message : 'Test failed') }
+    // Email (outgoing)
+    setTestsRunning('Email')
+    try {
+      const r = await shopifyApi.testEmail()
+      push('Email Sending', r.ok, r.ok ? `Test email sent to ${r.to}` : r.error ?? 'Send failed')
+    } catch (e) { push('Email Sending', false, e instanceof Error ? e.message : 'Test failed') }
+    // WhatsApp (config validation, no message sent)
+    setTestsRunning('WhatsApp')
+    try {
+      const r = await shopifyApi.testWhatsAppConfig()
+      push('WhatsApp', r.ok, r.ok ? r.message ?? 'Token valid' : r.error ?? 'Not configured')
+    } catch (e) { push('WhatsApp', false, e instanceof Error ? e.message : 'Test failed') }
+    // Razorpay
+    setTestsRunning('Razorpay')
+    try {
+      const r = await shopifyApi.testRazorpay()
+      push('Razorpay', r.ok, r.ok ? r.message ?? 'Credentials valid' : r.error ?? 'Not configured')
+    } catch (e) { push('Razorpay', false, e instanceof Error ? e.message : 'Test failed') }
+    // Off-site backup bucket
+    setTestsRunning('Off-site backup')
+    try {
+      const r = await shopifyApi.testOffsiteBackup()
+      push('Off-Site Backup', r.ok, r.ok ? r.bucket ? `Bucket reachable: ${r.bucket}` : 'Bucket reachable' : r.error ?? 'Not configured')
+    } catch (e) { push('Off-Site Backup', false, e instanceof Error ? e.message : 'Test failed') }
+    setTestsRunning(null)
+    setTestsBusy(false)
+  }
+
   const showMsg = (ok: boolean, text: string) => setMessage({ ok, text })
 
   const runBackup = async (scope: BackupScopeInfo, encrypted = false) => {
@@ -132,7 +192,7 @@ function BackupRestoreContent() {
   const downloadAllZip = () => {
     setZipBusy(true); setMessage(null)
     try {
-      window.open('/api/v1/backup/files/download-all', '_blank')
+      window.open('/api/v1/backup/files/download-all', '_blank', 'noopener')
       showMsg(true, 'Backup archive download started.')
     } finally { setZipBusy(false) }
   }
@@ -292,13 +352,27 @@ function BackupRestoreContent() {
               {verifyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
               {verifyBusy ? 'Verifying...' : 'Verify All Backups'}
             </Button>
-            <span className="text-xs text-muted-foreground">Also runs weekly (Mon 8:30 AM IST) and emails on corruption.</span>
+            <Button size="sm" variant="outline" onClick={runIntegrationTests} disabled={testsBusy || testsRunning !== null}>
+              {testsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+              {testsBusy ? `Testing ${testsRunning ?? ''}...` : 'Test Integrations'}
+            </Button>
+            <span className="text-xs text-muted-foreground">Verification also runs weekly (Mon 8:30 AM IST) and emails on corruption.</span>
           </div>
+          {testsResult && (
+            <div className="space-y-1 rounded-lg border p-3 text-sm">
+              {testsResult.map((t) => (
+                <div key={t.name} className="flex items-center justify-between gap-3">
+                  <span className="font-medium">{t.name}</span>
+                  <span className={`text-xs ${t.ok ? 'text-success-600' : 'text-red-600 dark:text-red-400'}`}>{t.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {verifyResult && (
             <div className="rounded-lg border p-3 text-sm">
               <p className="font-medium">{verifyResult.ok}/{verifyResult.checked} files OK</p>
               {verifyResult.corrupt.length > 0 && (
-                <ul className="mt-1 list-disc pl-5 text-xs text-red-600">
+                <ul className="mt-1 list-disc pl-5 text-xs text-red-600 dark:text-red-400">
                   {verifyResult.corrupt.map((c) => <li key={c.fileName}><span className="font-mono">{c.fileName}</span> — {c.error}</li>)}
                 </ul>
               )}
@@ -424,14 +498,14 @@ function BackupRestoreContent() {
                   <Download className="h-4 w-4" />
                   Download
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => selectedFile && deleteFile(selectedFile)} disabled={!selectedFile || deleting !== null || busy !== null} className="text-red-600 hover:text-red-700">
+                <Button size="sm" variant="outline" onClick={() => selectedFile && deleteFile(selectedFile)} disabled={!selectedFile || deleting !== null || busy !== null} className="text-red-600 dark:text-red-400 hover:text-red-700">
                   {deleting === selectedFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   Delete
                 </Button>
               </div>
               <div className="max-h-[240px] overflow-y-auto rounded-lg border divide-y divide-border">
                 {files.map((f) => (
-                  <div key={f.fileName} className={`flex items-center gap-3 px-4 py-2.5 text-sm cursor-pointer hover:bg-muted/50 ${selectedFile === f.fileName ? 'bg-primary-50' : ''}`} onClick={() => setSelectedFile(f.fileName)}>
+                  <div key={f.fileName} className={`flex items-center gap-3 px-4 py-2.5 text-sm cursor-pointer hover:bg-muted/50 ${selectedFile === f.fileName ? 'bg-primary-50 dark:bg-primary-500/20' : ''}`} onClick={() => setSelectedFile(f.fileName)}>
                     {f.isEncrypted ? <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> : <Database className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
                     <div className="min-w-0 flex-1">
                       <div className="font-medium text-foreground truncate">{f.label ?? f.type ?? 'Backup'}</div>

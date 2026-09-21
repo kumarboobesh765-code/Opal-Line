@@ -57,6 +57,8 @@ function ConnectionsTab() {
   const [testEmailTo, setTestEmailTo] = useState('')
   const [testingEmail, setTestingEmail] = useState(false)
   const [emailTest, setEmailTest] = useState<{ ok: boolean; to?: string; error?: string } | null>(null)
+  const [testingMailbox, setTestingMailbox] = useState(false)
+  const [mailboxTest, setMailboxTest] = useState<{ ok: boolean; text: string } | null>(null)
   const [wa, setWa] = useState<{ configured: boolean; phoneNumberId: string | null } | null>(null)
   const [waTestTo, setWaTestTo] = useState('')
   const [testingWa, setTestingWa] = useState(false)
@@ -193,6 +195,24 @@ function ConnectionsTab() {
     }
   }
 
+  const runMailboxTest = async () => {
+    setTestingMailbox(true)
+    setMailboxTest(null)
+    try {
+      const r = await shopifyApi.testMailbox()
+      if (r.ok) {
+        const bits = [r.provider === 'mailtm' ? 'mail.tm' : `IMAP ${r.host ?? ''}`, r.folder, r.messageCount != null ? `${r.messageCount} message(s)` : null].filter(Boolean)
+        setMailboxTest({ ok: true, text: `Mailbox login OK — ${bits.join(' · ')}` })
+      } else {
+        setMailboxTest({ ok: false, text: r.error ?? 'Mailbox login failed' })
+      }
+    } catch (e) {
+      setMailboxTest({ ok: false, text: e instanceof Error ? e.message : 'Test failed' })
+    } finally {
+      setTestingMailbox(false)
+    }
+  }
+
   const runWhatsAppTest = async () => {
     setTestingWa(true)
     setWaTest(null)
@@ -252,7 +272,7 @@ function ConnectionsTab() {
               <h3 className="font-semibold text-foreground">Shopify Configuration</h3>
             </div>
             {conn.shopifyConfigured ? (
-              <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> Connected</span>
+              <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"><Wifi className="h-3 w-3" /> Connected</span>
             ) : (
               <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not connected</span>
             )}
@@ -316,8 +336,8 @@ function ConnectionsTab() {
               {testingShopify ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plug className="h-4 w-4" />}
               {testingShopify ? 'Testing...' : 'Test Connection'}
             </Button>
-            {shopifyTestResult === 'ok' && <span className="text-xs font-medium text-green-600">{shopifyTestMsg || 'Connected successfully'}</span>}
-            {shopifyTestResult === 'fail' && <span className="text-xs font-medium text-red-600 max-w-[28rem]">{shopifyTestMsg || 'Connection failed'}</span>}
+            {shopifyTestResult === 'ok' && <span className="text-xs font-medium text-green-600 dark:text-green-400">{shopifyTestMsg || 'Connected successfully'}</span>}
+            {shopifyTestResult === 'fail' && <span className="text-xs font-medium text-red-600 dark:text-red-400 max-w-[28rem]">{shopifyTestMsg || 'Connection failed'}</span>}
           </div>
 
           <p className="text-xs text-muted-foreground">
@@ -335,12 +355,12 @@ function ConnectionsTab() {
             </div>
             {dbStatus ? (
               dbStatus.connected ? (
-                <span className="flex items-center gap-1 text-xs font-medium text-green-600">
+                <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400">
                   <Wifi className="h-3 w-3" /> Connected
                   {dbStatus.latencyMs != null && <span className="text-muted-foreground ml-1">{dbStatus.latencyMs}ms</span>}
                 </span>
               ) : (
-                <span className="flex items-center gap-1 text-xs font-medium text-red-600"><WifiOff className="h-3 w-3" /> Disconnected</span>
+                <span className="flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400"><WifiOff className="h-3 w-3" /> Disconnected</span>
               )
             ) : (
               <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
@@ -400,7 +420,7 @@ function ConnectionsTab() {
           </Field>
 
           {dbStatus?.error && (
-            <p className="text-xs text-red-500">{dbStatus.error}</p>
+            <p className="text-xs text-red-500 dark:text-red-400">{dbStatus.error}</p>
           )}
 
           {dbStatus?.connected && (
@@ -446,7 +466,7 @@ function ConnectionsTab() {
             </div>
             {ingest ? (
               ingest.configured ? (
-                <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> Mailbox ready</span>
+                <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"><Wifi className="h-3 w-3" /> Mailbox ready</span>
               ) : (
                 <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not configured</span>
               )
@@ -471,6 +491,7 @@ function ConnectionsTab() {
           <p className="text-xs text-muted-foreground">
             Shopify "New order" notification emails are read from the mailbox via IMAP and converted into orders.
             Outgoing alerts use RESEND_API_KEY or Gmail SMTP (NOTIFICATION_SMTP_* vars).
+            Use <span className="font-medium">Send Test Email</span> to check outgoing mail and <span className="font-medium">Test Mailbox</span> to check the order-ingest inbox.
           </p>
 
           <div className="space-y-2 pt-1">
@@ -482,15 +503,22 @@ function ConnectionsTab() {
                 onChange={(e) => setTestEmailTo(e.target.value)}
               />
             </Field>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button size="sm" variant="outline" onClick={runEmailTest} disabled={testingEmail}>
                 {testingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                 {testingEmail ? 'Sending...' : 'Send Test Email'}
               </Button>
+              <Button size="sm" variant="outline" onClick={runMailboxTest} disabled={testingMailbox}>
+                {testingMailbox ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                {testingMailbox ? 'Checking...' : 'Test Mailbox (IMAP)'}
+              </Button>
               {emailTest && (
                 emailTest.ok
-                  ? <span className="text-xs font-medium text-green-600">Sent to {emailTest.to}</span>
-                  : <span className="text-xs font-medium text-red-600 max-w-[22rem]">{emailTest.error}</span>
+                  ? <span className="text-xs font-medium text-green-600 dark:text-green-400">Sent to {emailTest.to}</span>
+                  : <span className="text-xs font-medium text-red-600 dark:text-red-400 max-w-[22rem]">{emailTest.error}</span>
+              )}
+              {mailboxTest && (
+                <span className={`text-xs font-medium ${mailboxTest.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400 max-w-[22rem]'}`}>{mailboxTest.text}</span>
               )}
             </div>
           </div>
@@ -506,7 +534,7 @@ function ConnectionsTab() {
             </div>
             {wa ? (
               wa.configured
-                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> Connected</span>
+                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"><Wifi className="h-3 w-3" /> Connected</span>
                 : <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not configured</span>
             ) : (
               <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
@@ -539,8 +567,8 @@ function ConnectionsTab() {
               </Button>
               {waTest && (
                 waTest.ok
-                  ? <span className="text-xs font-medium text-green-600">Message sent</span>
-                  : <span className="text-xs font-medium text-red-600 max-w-[20rem]">{waTest.error}</span>
+                  ? <span className="text-xs font-medium text-green-600 dark:text-green-400">Message sent</span>
+                  : <span className="text-xs font-medium text-red-600 dark:text-red-400 max-w-[20rem]">{waTest.error}</span>
               )}
             </div>
           </div>
@@ -556,8 +584,8 @@ function ConnectionsTab() {
             </div>
             {hooks ? (
               hooks.healthy
-                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Check className="h-3 w-3" /> All registered</span>
-                : <span className="flex items-center gap-1 text-xs font-medium text-amber-600">Issues found</span>
+                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"><Check className="h-3 w-3" /> All registered</span>
+                : <span className="flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">Issues found</span>
             ) : (
               <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
             )}
@@ -595,7 +623,7 @@ function ConnectionsTab() {
             </div>
             {offsite ? (
               offsite.configured
-                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600"><Wifi className="h-3 w-3" /> {offsite.bucket}</span>
+                ? <span className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"><Wifi className="h-3 w-3" /> {offsite.bucket}</span>
                 : <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><WifiOff className="h-3 w-3" /> Not configured</span>
             ) : (
               <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Checking...</span>
@@ -635,7 +663,7 @@ function ConnectionsTab() {
             <Check className="h-4 w-4" /> Saved
           </span>
         )}
-        {status === 'error' && <span className="text-sm font-medium text-red-600">{error}</span>}
+        {status === 'error' && <span className="text-sm font-medium text-red-600 dark:text-red-400">{error}</span>}
         <Button size="sm" onClick={saveConnections} disabled={saving || !loaded}>
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           {saving ? 'Saving...' : 'Save Connections'}

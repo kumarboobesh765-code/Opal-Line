@@ -3,6 +3,7 @@ import { db } from './db/client'
 import * as schema from './db/schema'
 import { logger } from './logger'
 import { sendEmail } from './notifications'
+import { escapeHtml } from './htmlEscape'
 
 /**
  * Due-date reminders: daily at 09:15, email customers whose unpaid invoices
@@ -63,7 +64,7 @@ export async function runDueReminders(): Promise<{ sent: number; invoices: numbe
     const total = entry.invoices.reduce((a, i) => a + i.grandTotal, 0)
     const money = (n: number) => '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
     const lines = entry.invoices
-      .map((i) => `<li>${i.number} — ${money(i.grandTotal)} — due ${i.dueDate ? new Date(i.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'soon'}</li>`)
+      .map((i) => `<li>${escapeHtml(i.number)} — ${escapeHtml(money(i.grandTotal))} — due ${i.dueDate ? new Date(i.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'soon'}</li>`)
       .join('')
     const ok = await sendEmail({
       to: entry.email,
@@ -71,10 +72,10 @@ export async function runDueReminders(): Promise<{ sent: number; invoices: numbe
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <h2 style="color:#d97706;">⏰ Friendly Payment Reminder</h2>
-          <p style="color:#666;">Hi ${customer},</p>
+          <p style="color:#666;">Hi ${escapeHtml(customer)},</p>
           <p style="color:#666;">A gentle reminder that the following invoice(s) are due within the next ${WINDOW_DAYS} days:</p>
           <ul style="color:#374151;">${lines}</ul>
-          <p style="color:#111;"><b>Total due: ${money(total)}</b></p>
+          <p style="color:#111;"><b>Total due: ${escapeHtml(money(total))}</b></p>
           <p style="color:#666;">Please arrange payment at your earliest convenience to avoid any late fees.</p>
           <p style="color: #999; font-size: 12px;">Opal Line ERP — Automated Reminder</p>
         </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, Building2, Check, Landmark, Loader2, Save, Settings as SettingsIcon, SlidersHorizontal, Tag, Users } from 'lucide-react'
+import { Bell, Building2, Check, Landmark, Loader2, Monitor, Moon, Save, Settings as SettingsIcon, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RequireModule } from '@/components/RequirePermission'
 import { dbApi } from '@/lib/api'
+import { setTheme, type Theme } from '@/lib/theme'
 import type { AppSettings } from '@/types'
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -74,7 +75,7 @@ function SettingsContent() {
       setSettings((s) => ({ ...s, ...saved }))
       setStatus('saved')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save settings')
+      setError('Failed to save settings')
       setStatus('error')
     } finally {
       setSaving(false)
@@ -93,7 +94,7 @@ function SettingsContent() {
                 <Check className="h-4 w-4" /> Saved
               </span>
             ) : null}
-            {status === 'error' ? <span className="text-sm font-medium text-red-600">{error}</span> : null}
+            {status === 'error' ? <span className="text-sm font-medium text-red-600 dark:text-red-400">{error}</span> : null}
             <Button size="sm" onClick={save} disabled={saving || !loaded}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {saving ? 'Saving...' : 'Save Changes'}
@@ -105,11 +106,16 @@ function SettingsContent() {
       <Tabs defaultValue="business">
         <TabsList>
           <TabsTrigger value="business"><Building2 /> Business</TabsTrigger>
+          <TabsTrigger value="appearance"><Sun /> Appearance</TabsTrigger>
           <TabsTrigger value="silver"><Tag /> Silver Rate</TabsTrigger>
           <TabsTrigger value="banking"><Landmark /> Banking</TabsTrigger>
           <TabsTrigger value="notifications"><Bell /> Notifications</TabsTrigger>
           <TabsTrigger value="team"><Users /> Team</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="appearance">
+          <AppearanceCard />
+        </TabsContent>
 
         <TabsContent value="business">
           <div className="grid gap-4 md:grid-cols-2">
@@ -283,6 +289,76 @@ function SettingsContent() {
         </TabsContent>
       </Tabs>
     </div>
+  )
+}
+
+type ThemeChoice = Theme | 'system'
+
+function AppearanceCard() {
+  // 'system' is stored as absence of an explicit choice; detect current effective theme.
+  const [choice, setChoice] = useState<ThemeChoice>(() => {
+    const saved = typeof window !== 'undefined' ? window.localStorage.getItem('opal-theme') : null
+    return saved === 'dark' || saved === 'light' ? saved : 'system'
+  })
+
+  const apply = (next: ThemeChoice) => {
+    setChoice(next)
+    if (next === 'system') {
+      window.localStorage.removeItem('opal-theme')
+      const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches
+      setTheme(prefersDark ? 'dark' : 'light')
+    } else {
+      setTheme(next)
+    }
+  }
+
+  const options: Array<{ value: ThemeChoice; label: string; icon: typeof Sun; description: string }> = [
+    { value: 'light', label: 'Light', icon: Sun, description: 'Bright interface for well-lit rooms' },
+    { value: 'dark', label: 'Dark', icon: Moon, description: 'Easy on the eyes in low light' },
+    { value: 'system', label: 'System', icon: Monitor, description: 'Match your device setting automatically' },
+  ]
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center gap-2">
+          <Sun className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground">Theme</h3>
+        </div>
+        <p className="text-sm text-muted-foreground">Choose how Opal Line looks. This applies immediately and is remembered on this device.</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {options.map((opt) => {
+            const Icon = opt.icon
+            const active = choice === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => apply(opt.value)}
+                className={`flex flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors ${active ? 'border-primary-500 bg-accent ring-1 ring-primary-500' : 'border-border hover:border-primary-300 hover:bg-muted/40'}`}
+              >
+                <div className="flex w-full items-center justify-between">
+                  <Icon className={`h-5 w-5 ${active ? 'text-primary-600' : 'text-muted-foreground'}`} />
+                  {active ? (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-primary-600">
+                      <Check className="h-3.5 w-3.5" /> Active
+                    </span>
+                  ) : null}
+                </div>
+                <span className="text-sm font-semibold text-foreground">{opt.label}</span>
+                <span className="text-xs text-muted-foreground">{opt.description}</span>
+                {/* Mini preview strip */}
+                <div className="mt-1 flex h-8 w-full overflow-hidden rounded border border-border">
+                  <div className={`w-1/4 ${opt.value === 'dark' ? 'bg-[#241a35]' : 'bg-[#2e2550]'}`} />
+                  <div className={`flex-1 ${opt.value === 'dark' ? 'bg-[#12151d]' : 'bg-[#f5f4fa]'}`} />
+                </div>
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground">The 🌙 button in the header toggles between light and dark instantly; System keeps following your device.</p>
+      </CardContent>
+    </Card>
   )
 }
 

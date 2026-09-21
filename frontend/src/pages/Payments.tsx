@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { Banknote, CheckCircle2, HandCoins, Loader2, Plus, RefreshCcw, RotateCcw, Trash2, Wallet } from 'lucide-react'
@@ -89,12 +90,12 @@ export default function PaymentsPage() {
       await dbApi.update('payments', payment.id, { reconciled })
       load()
     } catch {
-      window.alert('Failed to update reconciliation status')
+      toast.error('Failed to update reconciliation status')
     }
   }
 
   const handleRefund = async (payment: Payment) => {
-    if (!confirm(`Create refund for payment ${payment.ref}?`)) return
+    if (!(await confirmDialog({ title: `Create refund for payment ${payment.ref}?`, confirmLabel: 'Refund' }))) return
     try {
       await dbApi.create('payments', {
         ref: `REF-${payment.ref}`,
@@ -109,17 +110,30 @@ export default function PaymentsPage() {
       })
       load()
     } catch {
-      alert('Failed to create refund')
+      toast.error('Failed to create refund')
     }
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this payment record?')) return
+    if (!(await confirmDialog({ title: 'Delete this payment record?', danger: true, confirmLabel: 'Delete' }))) return
+    const snapshot = payments.find((p) => p.id === id)
     try {
       await dbApi.remove('payments', id)
       load()
+      if (snapshot) {
+        toast.undoable('Payment record deleted', async () => {
+          try {
+            const { id: _omit, ...rest } = snapshot
+            await dbApi.create('payments', rest)
+            load()
+            toast.success('Delete undone — payment restored')
+          } catch {
+            toast.error('Could not restore payment')
+          }
+        })
+      }
     } catch {
-      alert('Failed to delete payment')
+      toast.error('Failed to delete payment')
     }
   }
 
@@ -205,7 +219,7 @@ export default function PaymentsPage() {
         header: 'Amount',
         meta: { align: 'right' as const },
         cell: ({ row }) => (
-          <span className={`font-semibold tabular-nums ${row.original.amount < 0 ? 'text-red-600' : 'text-foreground'}`}>
+          <span className={`font-semibold tabular-nums ${row.original.amount < 0 ? 'text-red-600 dark:text-red-400' : 'text-foreground'}`}>
             {formatCurrency(row.original.amount)}
           </span>
         ),
@@ -267,7 +281,7 @@ export default function PaymentsPage() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon-sm" onClick={() => handleDelete(row.original.id)}>
-                    <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                    <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Delete payment</TooltipContent>
@@ -354,7 +368,7 @@ export default function PaymentsPage() {
             <DialogTitle>Add Payment</DialogTitle>
             <DialogDescription>Record a manual payment or adjustment.</DialogDescription>
           </DialogHeader>
-          {error && <div className="mb-4 p-3 text-sm text-red-600 bg-red-50 rounded-lg">{error}</div>}
+          {error && <div className="mb-4 p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 rounded-lg">{error}</div>}
           <div className="grid gap-4 py-4">
             <div>
               <Label htmlFor="ref">Payment Reference</Label>

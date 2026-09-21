@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
 import { execSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
@@ -65,8 +66,20 @@ function systemPostgresRoot(): string | null {
   return null
 }
 
+function getOrCreatePgPassword(): string {
+  const pwFile = join(APP_DATA, '.pg-password')
+  try {
+    if (existsSync(pwFile)) {
+      return readFileSync(pwFile, 'utf8').trim()
+    }
+  } catch { /* generate new */ }
+  const pw = randomBytes(16).toString('base64url')
+  try { writeFileSync(pwFile, pw, { mode: 0o600 }) } catch { /* best effort */ }
+  return pw
+}
+
 async function ensurePostgres(): Promise<string> {
-  const pgPassword = 'opal_local'
+  const pgPassword = process.env.PG_PASSWORD?.trim() || getOrCreatePgPassword()
   const dbName = 'opal_line'
   const url = `postgresql://postgres:${pgPassword}@127.0.0.1:${PG_PORT}/${dbName}`
 
@@ -336,14 +349,11 @@ async function main() {
     // On first run, show credentials dialog after a short delay
     if (isFirstRun) {
       setTimeout(() => {
-        const credsFile = join(DATA_DIR, 'credentials.txt')
-        let creds = 'Username: admin\nPassword: Opal@2026'
-        try { creds = readFileSync(credsFile, 'utf8') } catch { /* use default */ }
         dialog.showMessageBox({
           type: 'info',
           title: 'Opal Line Billing — First Run',
           message: 'Admin account created!',
-          detail: creds,
+          detail: 'Username: admin\nPassword: Opal@2026\n\nYou MUST change this password after first login.',
           buttons: ['OK'],
         })
       }, 3000)

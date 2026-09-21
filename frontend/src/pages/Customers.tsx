@@ -1,3 +1,4 @@
+import { toast, promptDialog } from '@/components/ui/confirm'
 ﻿import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
@@ -107,7 +108,7 @@ export default function CustomersPage() {
       await dbApi.update('customers', c.id, { status: next })
       setCustomers((prev) => prev.map((x) => (x.id === c.id ? { ...x, status: next } : x)))
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Update failed')
+      toast.error(err instanceof Error ? err.message : 'Update failed')
     }
   }
 
@@ -122,7 +123,7 @@ export default function CustomersPage() {
       setCustomers((prev) => prev.map((x) => (ids.has(x.id) ? { ...x, status } : x)))
       setSelected([])
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Bulk update failed')
+      toast.error(err instanceof Error ? err.message : 'Bulk update failed')
     } finally {
       setBulkBusy(false)
     }
@@ -133,10 +134,10 @@ export default function CustomersPage() {
     setImporting(true)
     try {
       const res = await shopifyApi.sync(['customers'])
-      window.alert(`Imported ${res.results.customers?.count ?? 0} customers from Shopify.`)
+      toast.success(`Imported ${res.results.customers?.count ?? 0} customers from Shopify`)
       await dbApi.getCustomers().then(setCustomers)
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Import failed')
+      toast.error(err instanceof Error ? err.message : 'Import failed')
     } finally {
       setImporting(false)
     }
@@ -164,7 +165,7 @@ export default function CustomersPage() {
       setAddPhone('')
       setAddCity('')
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Could not create customer')
+      toast.error(err instanceof Error ? err.message : 'Could not create customer')
     } finally {
       setSaving(false)
     }
@@ -304,7 +305,7 @@ export default function CustomersPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryTile icon={Users} label="Total Customers" value={String(customers.length)} sub={`${customers.filter((c) => c.status === 'active').length} active`} tint="bg-primary-50 text-primary-700" />
+        <SummaryTile icon={Users} label="Total Customers" value={String(customers.length)} sub={`${customers.filter((c) => c.status === 'active').length} active`} tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <SummaryTile icon={Mail} label="Email Subscribers" value={String(customers.filter((c) => c.email).length)} sub="With email on file" tint="bg-info-50 text-info-700" />
         <SummaryTile icon={ShoppingBag} label="Repeat Customers" value={String(customers.filter((c) => (c.orders ?? 0) >= 2).length)} sub="More than 1 order" tint="bg-success-50 text-success-700" />
         <SummaryTile icon={CircleDollarSign} label="Lifetime Value" value={formatCurrency(totalSpend)} sub="All customers" tint="bg-warning-50 text-warning-700" />
@@ -412,10 +413,10 @@ export default function CustomersPage() {
                     className="h-6 px-2 text-[11px]"
                     disabled={adjustingPoints}
                     onClick={async () => {
-                      const raw = window.prompt(`Adjust points for ${viewCustomer.name} (use negative to deduct):`, '50')
+                      const raw = await promptDialog({ title: `Adjust points for ${viewCustomer.name}`, description: 'Use a negative number to deduct points.', defaultValue: '50', inputType: 'number', confirmLabel: 'Apply' })
                       if (raw === null) return
                       const pts = Number(raw)
-                      if (!Number.isFinite(pts) || pts === 0) { window.alert('Enter a non-zero number'); return }
+                      if (!Number.isFinite(pts) || pts === 0) { toast.error('Enter a non-zero number'); return }
                       setAdjustingPoints(true)
                       try {
                         await dbApi.loyaltyAdjust(viewCustomer.name, Math.round(pts), 'Manual adjustment')
@@ -423,7 +424,7 @@ export default function CustomersPage() {
                         setLoyaltyBalance(b.found ? (b.balance ?? 0) : null)
                         setLoyaltyEntries(h.entries ?? [])
                       } catch (err) {
-                        window.alert(err instanceof Error ? err.message : 'Adjust failed')
+                        toast.error(err instanceof Error ? err.message : 'Adjust failed')
                       } finally {
                         setAdjustingPoints(false)
                       }
@@ -478,7 +479,7 @@ export default function CustomersPage() {
                       </div>
                       <div className={`rounded-md border px-2 py-1.5 text-center ${outstanding > 0 ? 'border-amber-500/40 bg-amber-500/10' : 'border-border/60 bg-muted/30'}`}>
                         <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Outstanding</p>
-                        <p className={`text-sm font-semibold tabular-nums ${outstanding > 0 ? 'text-amber-600' : 'text-foreground'}`}>{formatCurrency(outstanding)}</p>
+                        <p className={`text-sm font-semibold tabular-nums ${outstanding > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>{formatCurrency(outstanding)}</p>
                       </div>
                     </div>
                     {customerInvoices.length === 0 ? (

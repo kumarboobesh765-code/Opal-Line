@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, Send } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -46,10 +47,10 @@ export default function NotificationLogPage() {
     setResending(id)
     try {
       await dbApi.resendNotification(id)
-      window.alert('Notification re-sent successfully.')
+      toast.success('Notification re-sent successfully.')
       await load()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Failed to resend')
+      toast.error(err instanceof Error ? err.message : 'Failed to resend')
     } finally {
       setResending(null)
     }

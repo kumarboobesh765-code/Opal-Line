@@ -62,7 +62,7 @@ export default function PurchaseInvoicesPage() {
         meta: { headerClassName: 'min-w-[160px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <Receipt className="h-4 w-4" />
             </div>
             <div>
@@ -152,7 +152,7 @@ export default function PurchaseInvoicesPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={Receipt} label="Total Invoices" value={formatNumber(invoices.length)} sub="All time" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={Receipt} label="Total Invoices" value={formatNumber(invoices.length)} sub="All time" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={Wallet} label="Total Value" value={formatCurrency(invoices.reduce((a, i) => a + i.total, 0))} sub="Including GST" tint="bg-info-50 text-info-700" />
         <MiniCard icon={Wallet} label="Outstanding" value={formatCurrency(outstanding)} sub="Not yet paid" tint="bg-warning-50 text-warning-700" />
         <MiniCard icon={Weight} label="Silver Received" value={formatWeight(totalWeight)} sub="Gross weight" tint="bg-success-50 text-success-700" />

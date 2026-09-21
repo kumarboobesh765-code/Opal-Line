@@ -61,7 +61,7 @@ export default function InventoryReportsPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MiniCard icon={IndianRupee} label="Inventory Value" value={formatCurrency(totalValue || overview?.inventoryValue || 0)} sub="At selling price" tint="bg-primary-50 text-primary-700" />
+        <MiniCard icon={IndianRupee} label="Inventory Value" value={formatCurrency(totalValue || overview?.inventoryValue || 0)} sub="At selling price" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
         <MiniCard icon={Boxes} label="Stock Quantity" value={formatNumber(overview?.totalQuantity || categories.reduce((a, c) => a + c.qty, 0))} sub="Across all products" tint="bg-info-50 text-info-700" />
         <MiniCard icon={Scale} label="Stock Weight" value={formatWeight(totalWeight || overview?.totalWeight || 0)} sub="Gross weight" tint="bg-success-50 text-success-700" />
         <MiniCard icon={Package} label="Low Stock" value={String(overview?.lowStock ?? '—')} sub={`${overview?.outOfStock ?? 0} out of stock`} tint="bg-warning-50 text-warning-700" />
@@ -107,7 +107,7 @@ export default function InventoryReportsPage() {
               <Row label="Total Products" value={String(categories.reduce((a, c) => a + c.products, 0))} />
               <Row label="Total Quantity" value={formatNumber(categories.reduce((a, c) => a + c.qty, 0))} />
               <Row label="Low Stock Items" value={String(overview?.lowStock ?? '—')} />
-              <Row label="Out of Stock" value={String(overview?.outOfStock ?? 0)} highlight="text-red-600" />
+              <Row label="Out of Stock" value={String(overview?.outOfStock ?? 0)} highlight="text-red-600 dark:text-red-400" />
               <Row label="Inventory Value" value={formatCurrency(totalValue || overview?.inventoryValue || 0)} highlight="text-primary-700" bold />
             </div>
           </CardContent>

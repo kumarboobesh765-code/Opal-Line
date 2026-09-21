@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import {
@@ -134,7 +135,7 @@ export default function StockTransfersPage() {
       await dbApi.update('inventory/transfers', id, { status })
       load()
     } catch {
-      window.alert('Failed to update transfer status')
+      toast.error('Failed to update transfer status')
     }
   }
 
@@ -148,7 +149,7 @@ export default function StockTransfersPage() {
         meta: { headerClassName: 'min-w-[140px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
               <ArrowLeftRight className="h-4 w-4" />
             </div>
             <div>
@@ -223,7 +224,7 @@ export default function StockTransfersPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => updateStatus(row.original.id, 'cancelled')}>
-                      <XCircle className="h-3.5 w-3.5 text-red-600" />
+                      <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Cancel transfer</TooltipContent>
@@ -353,7 +354,7 @@ export default function StockTransfersPage() {
                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpFromLine className="h-4 w-4" />} Create Transfer
                   </Button>
                 </DialogFooter>
-                {error ? <p className="px-6 pb-4 text-sm text-red-600">{error}</p> : null}
+                {error ? <p className="px-6 pb-4 text-sm text-red-600 dark:text-red-400">{error}</p> : null}
               </DialogContent>
             </Dialog>
           </>

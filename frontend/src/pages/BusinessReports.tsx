@@ -7,6 +7,7 @@ import { Select } from '@/components/ui/select'
 import { dbApi } from '@/lib/api'
 import type { SilverRate } from '@/types'
 import { formatCurrency, todayIST } from '@/lib/format'
+import { escapeHtml } from '@/lib/utils'
 
 interface AgingBucket {
   label: string
@@ -94,7 +95,7 @@ export default function BusinessReportsPage() {
 
   const exportPdf = () => {
     if (!summary || !stats) return
-    const w = window.open('', '_blank', 'width=900,height=700')
+    const w = window.open('', '_blank', 'width=900,height=700,noopener')
     if (!w) return
     w.opener = null
     w.document.write(`<!doctype html><html><head><title>Business Report</title><style>
@@ -104,20 +105,20 @@ export default function BusinessReportsPage() {
       th{text-align:left;background:#f1f5f9;padding:8px} td{padding:8px;border-top:1px solid #e2e8f0}
     </style></head><body>
       <h1>Opal Line · Business Report</h1>
-      <div class="sub">${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+      <div class="sub">${escapeHtml(new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }))}</div>
       <table>
         <tr><th>Metric</th><th>Value</th></tr>
-        <tr><td>Revenue (Month)</td><td>${formatCurrency(stats.revenueMonth)}</td></tr>
-        <tr><td>Orders (Month)</td><td>${stats.ordersMonth}</td></tr>
-        <tr><td>Avg Order Value</td><td>${formatCurrency(stats.aov)}</td></tr>
-        <tr><td>Gross Profit (Month)</td><td>${formatCurrency(stats.grossProfitMonth)} (${stats.grossMarginPct.toFixed(1)}% margin)</td></tr>
-        <tr><td>Inventory Value</td><td>${formatCurrency(stats.inventoryValue)}</td></tr>
-        <tr><td>Low Stock Items</td><td>${stats.lowStockCount}</td></tr>
-        <tr><td>Return Rate</td><td>${stats.returnRatePct.toFixed(1)}%</td></tr>
-        <tr><td>Total Stock (Qty)</td><td>${summary.totalStockQty}</td></tr>
-        <tr><td>Total Stock (Weight)</td><td>${summary.totalStockWeight} gm</td></tr>
-        <tr><td>Active Suppliers</td><td>${summary.activeSuppliers} of ${summary.totalSuppliers}</td></tr>
-        <tr><td>Pending Payments</td><td>${formatCurrency(summary.pendingPayments)}</td></tr>
+        <tr><td>Revenue (Month)</td><td>${escapeHtml(formatCurrency(stats.revenueMonth))}</td></tr>
+        <tr><td>Orders (Month)</td><td>${escapeHtml(String(stats.ordersMonth))}</td></tr>
+        <tr><td>Avg Order Value</td><td>${escapeHtml(formatCurrency(stats.aov))}</td></tr>
+        <tr><td>Gross Profit (Month)</td><td>${escapeHtml(formatCurrency(stats.grossProfitMonth))} (${escapeHtml(stats.grossMarginPct.toFixed(1))}% margin)</td></tr>
+        <tr><td>Inventory Value</td><td>${escapeHtml(formatCurrency(stats.inventoryValue))}</td></tr>
+        <tr><td>Low Stock Items</td><td>${escapeHtml(String(stats.lowStockCount))}</td></tr>
+        <tr><td>Return Rate</td><td>${escapeHtml(stats.returnRatePct.toFixed(1))}%</td></tr>
+        <tr><td>Total Stock (Qty)</td><td>${escapeHtml(String(summary.totalStockQty))}</td></tr>
+        <tr><td>Total Stock (Weight)</td><td>${escapeHtml(String(summary.totalStockWeight))} gm</td></tr>
+        <tr><td>Active Suppliers</td><td>${escapeHtml(String(summary.activeSuppliers))} of ${escapeHtml(String(summary.totalSuppliers))}</td></tr>
+        <tr><td>Pending Payments</td><td>${escapeHtml(formatCurrency(summary.pendingPayments))}</td></tr>
       </table>
       <script>window.onload=function(){window.focus();window.print();}</script>
     </body></html>`)
@@ -153,7 +154,7 @@ export default function BusinessReportsPage() {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <MiniCard icon={IndianRupee} label="Revenue (Month)" value={formatCurrency(stats?.revenueMonth ?? 0)} sub="Current month sales" tint="bg-primary-50 text-primary-700" />
+            <MiniCard icon={IndianRupee} label="Revenue (Month)" value={formatCurrency(stats?.revenueMonth ?? 0)} sub="Current month sales" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
             <MiniCard icon={Package} label="AOV" value={formatCurrency(stats?.aov ?? 0)} sub={`${stats?.ordersMonth ?? 0} orders`} tint="bg-info-50 text-info-700" />
             <MiniCard icon={Users} label="Return Rate" value={`${stats ? stats.returnRatePct.toFixed(1) : '0.0'}%`} sub="Of total orders" tint="bg-success-50 text-success-700" />
             <MiniCard icon={BarChart3} label="Gross Profit (Month)" value={formatCurrency(stats?.grossProfitMonth ?? 0)} sub={`${stats ? stats.grossMarginPct.toFixed(1) : '0.0'}% margin`} tint="bg-warning-50 text-warning-700" />

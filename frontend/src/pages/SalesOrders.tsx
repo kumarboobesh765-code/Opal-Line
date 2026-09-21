@@ -1,3 +1,4 @@
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
@@ -242,18 +243,18 @@ export default function SalesOrdersPage() {
 
   const bulkInvoice = async () => {
     if (selectedOrders.length === 0) return
-    if (!window.confirm(`Create invoices for ${selectedOrders.length} order(s)? Orders already invoiced are skipped.`)) return
+    if (!(await confirmDialog({ title: `Create invoices for ${selectedOrders.length} order(s)? Orders already invoiced are skipped.` }))) return
     setBulkBusy(true)
     try {
       const r = await dbApi.bulkOrderInvoice(selectedOrders.map((o) => o.id))
       const parts = [`${r.created} invoice(s) created`]
       if (r.alreadyInvoiced > 0) parts.push(`${r.alreadyInvoiced} already invoiced`)
       if (r.failed > 0) parts.push(`${r.failed} failed`)
-      window.alert(parts.join(', '))
+      toast.success(parts.join(', '))
       setSelectedOrders([])
       reload()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Bulk invoicing failed')
+      toast.error(err instanceof Error ? err.message : 'Bulk invoicing failed')
     } finally {
       setBulkBusy(false)
     }
@@ -261,15 +262,15 @@ export default function SalesOrdersPage() {
 
   const bulkStatus = async (status: string) => {
     if (selectedOrders.length === 0) return
-    if (!window.confirm(`Set ${selectedOrders.length} order(s) to "${status}"?`)) return
+    if (!(await confirmDialog({ title: `Set ${selectedOrders.length} order(s) to "${status}"?` }))) return
     setBulkBusy(true)
     try {
       const r = await dbApi.bulkOrderStatus(selectedOrders.map((o) => o.id), status)
-      window.alert(`${r.updated} order(s) updated to ${r.status}.`)
+      toast.success(`${r.updated} order(s) updated to ${r.status}`)
       setSelectedOrders([])
       reload()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Bulk status update failed')
+      toast.error(err instanceof Error ? err.message : 'Bulk status update failed')
     } finally {
       setBulkBusy(false)
     }
@@ -287,12 +288,12 @@ export default function SalesOrdersPage() {
   }, [])
 
   const cancelOrder = useCallback(async (o: SalesOrder) => {
-    if (!window.confirm(`Cancel order ${o.shopifyId}?`)) return
+    if (!(await confirmDialog({ title: `Cancel order ${o.shopifyId}?` }))) return
     try {
       await dbApi.update('sales-orders', o.id, { status: 'cancelled' })
       setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, status: 'cancelled' } : x)))
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Could not cancel order')
+      toast.error(err instanceof Error ? err.message : 'Could not cancel order')
     }
   }, [])
 
@@ -301,13 +302,13 @@ export default function SalesOrdersPage() {
     try {
       const res = await shopifyApi.refreshOrder(o.id)
       if (res.ok) {
-        window.alert(`Order ${o.shopifyId ?? ''} refreshed from Shopify.`)
+        toast.success(`Order ${o.shopifyId ?? ''} refreshed from Shopify`)
         dbApi.getSalesOrders().then((r) => setOrders(r)).catch(() => undefined)
       } else {
-        window.alert(res.message ?? 'Refresh failed')
+        toast.error(res.message ?? 'Refresh failed')
       }
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Refresh failed')
+      toast.error(err instanceof Error ? err.message : 'Refresh failed')
     } finally {
       setInvoiceSavingId(null)
     }
@@ -325,7 +326,7 @@ export default function SalesOrdersPage() {
         setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, invoice: result.invoiceNumber! } : x)))
         navigate(`/sales/invoices?highlight=${encodeURIComponent(result.invoiceNumber)}`)
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : 'Could not create invoice')
+        toast.error(err instanceof Error ? err.message : 'Could not create invoice')
       } finally {
         setInvoiceSavingId(null)
       }
@@ -337,14 +338,14 @@ export default function SalesOrdersPage() {
     try {
       const s = await shopifyApi.getStatus()
       if (!s.store) {
-        window.alert('Shopify is not configured.')
+        toast.error('Shopify is not configured.')
         return
       }
       const base = `https://${s.store}.myshopify.com/admin`
       const query = encodeURIComponent(o.shopifyId.replace(/^#/, ''))
       window.open(`${base}/orders?query=${query}`, '_blank', 'noopener')
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Could not open Shopify')
+      toast.error(err instanceof Error ? err.message : 'Could not open Shopify')
     }
   }, [])
 
@@ -576,7 +577,7 @@ export default function SalesOrdersPage() {
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-red-600 focus:text-red-600" onClick={() => cancelOrder(row.original)}>Cancel Order</DropdownMenuItem>
+              <DropdownMenuItem className="text-red-600 dark:text-red-400 focus:text-red-600 dark:text-red-400" onClick={() => cancelOrder(row.original)}>Cancel Order</DropdownMenuItem>
             </DropdownMenuContent>
             </DropdownMenu>
             </TooltipProvider>
@@ -1038,7 +1039,7 @@ export default function SalesOrdersPage() {
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          className="mb-0.5 text-muted-foreground hover:text-red-600"
+                          className="mb-0.5 text-muted-foreground hover:text-red-600 dark:text-red-400"
                           disabled={lineItems.length === 1}
                           onClick={() => setLineItems((prev) => prev.filter((x) => x.key !== li.key))}
                         >
@@ -1429,7 +1430,7 @@ function Customer360Card({ customer }: { customer: string }) {
                       <div key={p.id} className="flex items-center justify-between gap-2 text-xs">
                         <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{p.invoice ?? p.ref ?? '—'}</span>
                         <span className="shrink-0 text-muted-foreground">{p.date ? formatDate(p.date) : ''}</span>
-                        <span className={cn('shrink-0 tabular-nums font-medium', (p.amount ?? 0) < 0 && 'text-red-500')}>
+                        <span className={cn('shrink-0 tabular-nums font-medium', (p.amount ?? 0) < 0 && 'text-red-500 dark:text-red-400')}>
                           {formatCurrency(Number(p.amount ?? 0))}
                         </span>
                       </div>

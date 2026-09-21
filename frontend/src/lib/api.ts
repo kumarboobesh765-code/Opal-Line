@@ -300,6 +300,12 @@ export const shopifyApi = {
     request<{ configured: boolean; phoneNumberId: string | null }>('/settings/whatsapp-status'),
   testWhatsApp: (to: string) =>
     request<{ ok: boolean; error?: string }>('/settings/test-whatsapp', { method: 'POST', body: JSON.stringify({ to }) }),
+  testWhatsAppConfig: () =>
+    request<{ ok: boolean; message?: string; error?: string }>('/settings/test-whatsapp-config', { method: 'POST' }),
+  testMailbox: () =>
+    request<{ ok: boolean; provider: string; mailbox: string | null; host?: string; folder?: string; messageCount?: number; error?: string }>('/settings/test-mailbox', { method: 'POST' }),
+  testRazorpay: () =>
+    request<{ ok: boolean; mode?: string; message?: string; error?: string }>('/settings/test-razorpay', { method: 'POST' }),
   webhookHealth: () =>
     request<{ publicBaseUrl: string | null; expectedAddress: string | null; healthy: boolean; entries: Array<{ topic: string; status: string; address?: string; id?: number }> }>('/settings/webhook-health'),
   repairWebhooks: () =>
@@ -508,6 +514,16 @@ export const dbApi = {
     }),
   sendInvoiceWhatsApp: (invoiceId: string) =>
     request<{ ok: boolean; to?: string; messageId?: string; error?: string }>(`/whatsapp/invoice/${invoiceId}`, { method: 'POST' }),
+  emailInvoice: (invoiceId: string, to?: string) =>
+    request<{ ok: boolean; message?: string; to?: string; error?: string }>(`/db/invoices/${encodeURIComponent(invoiceId)}/email`, {
+      method: 'POST',
+      body: JSON.stringify({ to }),
+    }),
+  importProductsCsv: (csv: string) =>
+    request<{ ok: boolean; imported: number; created: number; updated: number; errors: string[] }>('/db/products/import-csv', {
+      method: 'POST',
+      body: JSON.stringify({ csv }),
+    }),
   loyaltyBalance: (customer: string) =>
     request<{ found: boolean; customer?: { id: string; name: string; phone: string | null }; balance?: number; pointValue?: number; enabled?: boolean }>(`/loyalty/balance?customer=${encodeURIComponent(customer)}`),
   loyaltyHistory: (customer: string) =>
@@ -862,7 +878,7 @@ export const backupApi = {
   deleteFile: (fileName: string): Promise<{ ok: boolean }> =>
     request<{ ok: boolean }>(`/backup/files/${encodeURIComponent(fileName)}`, { method: 'DELETE' }),
   downloadFile: (fileName: string) => {
-    window.open(`${API_BASE}/backup/files/${encodeURIComponent(fileName)}/download`, '_blank')
+    window.open(`${API_BASE}/backup/files/${encodeURIComponent(fileName)}/download`, '_blank', 'noopener')
   },
   cleanup: (keepLast = 10): Promise<{ ok: boolean; deleted: string[]; kept: number }> =>
     request(`/backup/cleanup`, {
@@ -879,16 +895,19 @@ export const backupApi = {
   sendDailySummary: (): Promise<{ ok: boolean }> =>
     request('/backup/notifications/daily-summary', { method: 'POST' }),
   downloadInvoicePDF: (invoiceId: string) => {
-    window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank')
+    window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank', 'noopener')
+  },
+  downloadQuotationPDF: (quotationId: string) => {
+    window.open(`${API_BASE}/db/quotations/${encodeURIComponent(quotationId)}/pdf`, '_blank', 'noopener')
   },
   downloadCreditNotePDF: (returnId: string) => {
-    window.open(`${API_BASE}/db/credit-notes/${encodeURIComponent(returnId)}/pdf`, '_blank')
+    window.open(`${API_BASE}/db/credit-notes/${encodeURIComponent(returnId)}/pdf`, '_blank', 'noopener')
   },
   downloadGstExport: (month: number, year: number, format: 'csv' | 'json') => {
-    window.open(`${API_BASE}/dashboard/reports/gst/export?month=${month}&year=${year}&format=${format}`, '_blank')
+    window.open(`${API_BASE}/dashboard/reports/gst/export?month=${month}&year=${year}&format=${format}`, '_blank', 'noopener')
   },
   downloadCustomerStatement: (customer: string) => {
-    window.open(`${API_BASE}/db/customers/${encodeURIComponent(customer)}/statement`, '_blank')
+    window.open(`${API_BASE}/db/customers/${encodeURIComponent(customer)}/statement`, '_blank', 'noopener')
   },
   emailCustomerStatement: (customer: string, to: string) =>
     request<{ sent: boolean; invoiceCount: number; outstanding: number }>(`/db/customers/${encodeURIComponent(customer)}/statement/email`, {
@@ -902,10 +921,10 @@ export const backupApi = {
     if (opts?.showWeight === false) params.set('weight', 'false')
     if (opts?.showQR === false) params.set('qr', 'false')
     if (opts?.ids && opts.ids.length > 0) params.set('ids', opts.ids.join(','))
-    window.open(`${API_BASE}/db/products/labels?${params.toString()}`, '_blank')
+    window.open(`${API_BASE}/db/products/labels?${params.toString()}`, '_blank', 'noopener')
   },
   downloadCatalogPdf: () => {
-    window.open(`${API_BASE}/db/products/catalog-pdf`, '_blank')
+    window.open(`${API_BASE}/db/products/catalog-pdf`, '_blank', 'noopener')
   },
   downloadProductLabels: (productIds: string[], opts?: { preset?: string; showPrice?: boolean; showWeight?: boolean; showQR?: boolean }) =>
     request<Blob>('/db/products/labels', {
@@ -948,4 +967,132 @@ export const backupApi = {
     request('/backup/shopify/import-orders', {
       method: 'POST', body: JSON.stringify({ rows }),
     }),
+}
+
+// ─── Double-entry Accounting API ─────────────────────────────────
+export interface TrialBalanceRow {
+  accountId: string
+  accountCode: string
+  accountName: string
+  accountType: string
+  totalDebit: number
+  totalCredit: number
+  balance: number
+}
+export interface TrialBalanceResult {
+  accounts: TrialBalanceRow[]
+  totalDebit: number
+  totalCredit: number
+  isBalanced: boolean
+}
+export interface PnlRow {
+  accountId: string
+  accountCode: string
+  accountName: string
+  accountType: string
+  totalDebit: number
+  totalCredit: number
+  amount: number
+}
+export interface ProfitAndLossResult {
+  revenue: PnlRow[]
+  expenses: PnlRow[]
+  totalRevenue: number
+  totalExpenses: number
+  netProfit: number
+}
+export interface BalanceSheetRow {
+  accountId: string
+  accountCode: string
+  accountName: string
+  accountType: string
+  totalDebit: number
+  totalCredit: number
+  balance: number
+}
+export interface BalanceSheetResult {
+  assets: BalanceSheetRow[]
+  liabilities: BalanceSheetRow[]
+  equity: BalanceSheetRow[]
+  totalAssets: number
+  totalLiabilities: number
+  totalEquity: number
+}
+export interface JournalEntry {
+  id: string
+  entryNumber: string
+  date: string
+  description: string | null
+  reference: string | null
+  referenceType: string | null
+  referenceId: string | null
+  isAuto: boolean
+  branchId: string | null
+  createdBy: string | null
+  createdAt: string
+}
+export interface Account {
+  id: string
+  code: string
+  name: string
+  type: string
+  subType: string | null
+  parentId: string | null
+  isGroup: boolean
+  openingBalance: number
+  currentBalance: number
+  currency: string
+  branchId: string | null
+  isActive: boolean
+  createdAt: string
+}
+
+export const accountingApi = {
+  getAccounts: () => request<Account[]>('/accounts'),
+  createAccount: (body: { code: string; name: string; type: string; subType?: string; parentId?: string; openingBalance?: number }) =>
+    request<Account>('/accounts', { method: 'POST', body: JSON.stringify(body) }),
+  updateAccount: (id: string, body: Partial<{ name: string; type: string; subType: string; isActive: boolean }>) =>
+    request<Account>(`/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  getTrialBalance: (params?: { dateFrom?: string; dateTo?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.dateFrom) q.set('dateFrom', params.dateFrom)
+    if (params?.dateTo) q.set('dateTo', params.dateTo)
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return request<TrialBalanceResult>(`/accounts/trial-balance${suffix}`)
+  },
+  getProfitAndLoss: (params?: { dateFrom?: string; dateTo?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.dateFrom) q.set('dateFrom', params.dateFrom)
+    if (params?.dateTo) q.set('dateTo', params.dateTo)
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return request<ProfitAndLossResult>(`/accounts/profit-and-loss${suffix}`)
+  },
+  getBalanceSheet: () =>
+    request<BalanceSheetResult>('/accounts/balance-sheet'),
+  getJournalEntries: (params?: { dateFrom?: string; dateTo?: string; referenceType?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.dateFrom) q.set('dateFrom', params.dateFrom)
+    if (params?.dateTo) q.set('dateTo', params.dateTo)
+    if (params?.referenceType) q.set('referenceType', params.referenceType)
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return request<JournalEntry[]>(`/accounts/journal-entries${suffix}`)
+  },
+  createJournalEntry: (body: { date: string; description?: string; reference?: string; referenceType?: string; referenceId?: string; lines: Array<{ accountId: string; debit: number; credit: number; description?: string }> }) =>
+    request<{ id: string; entryNumber: string }>('/accounts/journal-entries', { method: 'POST', body: JSON.stringify(body) }),
+  postInvoiceToJournal: (invoiceId: string) =>
+    request<{ id: string; entryNumber: string; invoiceNumber: string }>(`/accounts/journal-entries/post/${invoiceId}`, { method: 'POST' }),
+  getHsnSummary: (params?: { month?: number; year?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.month) q.set('month', String(params.month))
+    if (params?.year) q.set('year', String(params.year))
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return request<{ hsn: string; description: string; qty: number; taxableValue: number; cgst: number; sgst: number; igst: number; totalTax: number }[]>(`/db/reports/hsn${suffix}`)
+  },
+  getGstReconciliation: (params?: { month?: number; year?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.month) q.set('month', String(params.month))
+    if (params?.year) q.set('year', String(params.year))
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return request<{ outputGst: number; inputGst: number; netPayable: number; b2bTaxable: number; b2cTaxable: number; mismatches: Array<{ invoiceNumber: string; expected: number; actual: number; diff: number }> }>(`/db/reports/gst-reconciliation${suffix}`)
+  },
 }

@@ -237,7 +237,7 @@ export default function SyncComparePage() {
 
       {error && (
         <Card>
-          <CardContent className="p-5 text-sm text-red-600">{error}</CardContent>
+          <CardContent className="p-5 text-sm text-red-600 dark:text-red-400">{error}</CardContent>
         </Card>
       )}
 
@@ -285,7 +285,7 @@ export default function SyncComparePage() {
                       <TableCell className="max-w-[220px] truncate text-sm">{r.name}</TableCell>
                       <TableCell className="text-right text-sm">{fmt(r.localPrice)}</TableCell>
                       <TableCell className="text-right text-sm">{fmt(r.shopifyPrice)}</TableCell>
-                      <TableCell className={`text-right text-sm font-medium ${r.priceDelta && r.priceDelta !== 0 ? 'text-amber-600' : ''}`}>
+                      <TableCell className={`text-right text-sm font-medium ${r.priceDelta && r.priceDelta !== 0 ? 'text-amber-600 dark:text-amber-400' : ''}`}>
                         {r.priceDelta == null ? '—' : r.priceDelta > 0 ? `+${fmt(r.priceDelta)}` : fmt(r.priceDelta)}
                       </TableCell>
                       <TableCell className="text-right text-sm">{fmt(r.localStock)}</TableCell>

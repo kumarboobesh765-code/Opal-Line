@@ -1,3 +1,4 @@
+import { confirmDialog } from '@/components/ui/confirm'
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
@@ -117,7 +118,7 @@ export default function LowStockAlertPage() {
         meta: { headerClassName: 'min-w-[220px]' },
         cell: ({ row }) => (
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-600">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-red-50 text-red-600 dark:text-red-400">
               <Gem className="h-4 w-4" />
             </div>
             <div>
@@ -231,7 +232,7 @@ export default function LowStockAlertPage() {
         actions={
           <>
             <Button variant="outline" size="sm" disabled={autoPoBusy} onClick={async () => {
-              if (!confirm('Create draft purchase orders for all low-stock products, grouped by supplier?')) return
+              if (!(await confirmDialog({ title: 'Create draft purchase orders?', description: 'Draft POs will be created for all low-stock products, grouped by supplier.', confirmLabel: 'Create POs' }))) return
               setAutoPoBusy(true)
               try {
                 const r = await dbApi.createPOsFromReorder()

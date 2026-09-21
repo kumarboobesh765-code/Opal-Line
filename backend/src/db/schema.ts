@@ -39,9 +39,12 @@ export const products = pgTable('products', {
   huid: text('huid'),
   category: text('category').notNull(),
   collection: text('collection'),
+  metal: text('metal').default('silver'),
   purity: numericNumber('purity'),
+  purityLabel: text('purity_label'),
   grossWeight: numericNumber('gross_weight'),
   stoneWeight: numericNumber('stone_weight'),
+  diamondWeight: numericNumber('diamond_weight'),
   netWeight: numericNumber('net_weight'),
   makingCharge: numericNumber('making_charge'),
   gst: numericNumber('gst'),
@@ -62,6 +65,7 @@ export const products = pgTable('products', {
   tags: text('tags'),
   trackInventory: boolean('track_inventory').notNull().default(true),
   chargeOnTax: boolean('charge_on_tax').notNull().default(true),
+  branchId: text('branch_id'),
   createdAt: date('created_at'),
 }, (table) => ({
   skuIdx: uniqueIndex('products_sku_idx').on(table.sku),
@@ -150,12 +154,21 @@ export const salesInvoices = pgTable('sales_invoices', {
   gstAmount: numericNumber('gst_amount'),
   discount: numericNumber('discount'),
   grandTotal: numericNumber('grand_total'),
+  tdsType: text('tds_type').default('none'),
+  tdsRate: numericNumber('tds_rate'),
+  tdsAmount: numericNumber('tds_amount'),
+  tdsSection: text('tds_section'),
+  buyerGstin: text('buyer_gstin'),
+  irn: text('irn'),
+  irnDate: ts('irn_date'),
+  qrCode: text('qr_code'),
   paymentMethod: text('payment_method'),
   paymentStatus: text('payment_status'),
   paymentId: text('payment_id'),
   status: text('status'),
   date: ts('date'),
   dueDate: ts('due_date'),
+  currency: text('currency').default('INR'),
 }, (table) => ({
   numberIdx: uniqueIndex('sales_invoices_number_idx').on(table.number),
   shopifyOrderIdx: index('sales_invoices_shopify_order_idx').on(table.shopifyOrder),
@@ -440,10 +453,29 @@ export const silverRates = pgTable('silver_rates', {
   updatedAtIdx: index('silver_rates_updated_at_idx').on(table.updatedAt),
 }))
 
+export const goldRates = pgTable('gold_rates', {
+  id: text('id').primaryKey(),
+  rate: numeric('rate').notNull(),
+  purity: numeric('purity').notNull().default('99.9'),
+  currency: text('currency').notNull().default('INR'),
+  source: text('source'),
+  updatedAt: ts('updated_at').defaultNow(),
+}, (table) => ({
+  updatedAtIdx: index('gold_rates_updated_at_idx').on(table.updatedAt),
+}))
+
 export const settings = pgTable('settings', {
   id: text('id').primaryKey(),
   businessName: text('business_name'),
   gstin: text('gstin'),
+  pan: text('pan'),
+  tdsEnabled: boolean('tds_enabled').default(false),
+  tcsEnabled: boolean('tcs_enabled').default(false),
+  defaultTdsSection: text('default_tds_section'),
+  einvoiceEnabled: boolean('einvoice_enabled').default(false),
+  ewayBillEnabled: boolean('eway_bill_enabled').default(false),
+  upiId: text('upi_id'),
+  upiMerchantName: text('upi_merchant_name'),
   phone: text('phone'),
   email: text('email'),
   address: text('address'),
@@ -512,6 +544,7 @@ export const quotations = pgTable('quotations', {
   date: ts('date').notNull().defaultNow(),
   createdAt: ts('created_at').notNull().defaultNow(),
   updatedAt: ts('updated_at'),
+  currency: text('currency').default('INR'),
 }, (table) => ({
   statusIdx: index('quotations_status_idx').on(table.status),
   customerIdx: index('quotations_customer_idx').on(table.customer),
@@ -537,6 +570,79 @@ export const quotationItems = pgTable('quotation_items', {
 import { sql } from 'drizzle-orm'
 // ─── Loyalty points ─────────────────────────────────────────────────────────
 
+// ─── Batch / lot tracking ──────────────────────────────────────────────────
+
+export const batches = pgTable('batches', {
+  id: text('id').primaryKey(),
+  productId: text('product_id').notNull(),
+  batchNumber: text('batch_number').notNull(),
+  quantity: integer('quantity').notNull().default(0),
+  costPrice: numericNumber('cost_price'),
+  manufacturingDate: date('manufacturing_date'),
+  expiryDate: date('expiry_date'),
+  supplier: text('supplier'),
+  status: text('status').default('active'),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  productIdx: index('batches_product_idx').on(table.productId),
+  batchNumberIdx: index('batches_number_idx').on(table.batchNumber),
+}))
+
+// ─── Manufacturing / BOM ──────────────────────────────────────────────────
+
+export const boms = pgTable('boms', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  productId: text('product_id'),
+  description: text('description'),
+  yieldQty: integer('yield_qty').default(1),
+  totalCost: numericNumber('total_cost'),
+  status: text('status').default('active'),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  productIdx: index('boms_product_idx').on(table.productId),
+}))
+
+export const bomItems = pgTable('bom_items', {
+  id: text('id').primaryKey(),
+  bomId: text('bom_id').notNull(),
+  productId: text('product_id').notNull(),
+  quantity: numericNumber('quantity'),
+  unit: text('unit').default('g'),
+  wastagePercent: numericNumber('wastage_percent'),
+  cost: numericNumber('cost'),
+}, (table) => ({
+  bomIdx: index('bom_items_bom_idx').on(table.bomId),
+}))
+
+// ─── Karigar (artisan / worker) ───────────────────────────────────────────
+
+export const karigars = pgTable('karigars', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  phone: text('phone'),
+  specialty: text('specialty'),
+  rate: numericNumber('rate'),
+  rateType: text('rate_type').default('per_gram'),
+  balance: numericNumber('balance'),
+  address: text('address'),
+  status: text('status').default('active'),
+  createdAt: timestamp('created_at').defaultNow(),
+})
+
+// ─── Multi-branch ─────────────────────────────────────────────────────────
+
+export const branches = pgTable('branches', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  code: text('code').notNull().unique(),
+  address: text('address'),
+  phone: text('phone'),
+  managerName: text('manager_name'),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+})
+
 export const loyaltyTransactions = pgTable('loyalty_transactions', {
   id: text('id').primaryKey(),
   customerId: text('customer_id').notNull(),
@@ -553,3 +659,74 @@ export const loyaltyTransactions = pgTable('loyalty_transactions', {
   invoiceIdx: index('loyalty_transactions_invoice_id_idx').on(table.invoiceId),
   dateIdx: index('loyalty_transactions_date_idx').on(table.date),
 }))
+
+// ─── Multi-currency support ─────────────────────────────────────────────────
+
+export const currencies = pgTable('currencies', {
+  id: text('id').primaryKey(),
+  code: text('code').notNull().unique(),
+  name: text('name').notNull(),
+  symbol: text('symbol').notNull(),
+  exchangeRate: numericNumber('exchange_rate'),
+  isActive: boolean('is_active').default(true),
+  updatedAt: ts('updated_at').defaultNow(),
+})
+
+// ─── Double-entry accounting ──────────────────────────────────────────────
+
+export const accounts = pgTable('accounts', {
+  id: text('id').primaryKey(),
+  code: text('code').notNull().unique(),
+  name: text('name').notNull(),
+  type: text('type').notNull(),
+  subType: text('sub_type'),
+  parentId: text('parent_id'),
+  isGroup: boolean('is_group').default(false),
+  openingBalance: numericNumber('opening_balance').default(0),
+  currentBalance: numericNumber('current_balance').default(0),
+  currency: text('currency').default('INR'),
+  branchId: text('branch_id'),
+  isActive: boolean('is_active').default(true),
+  createdAt: ts('created_at'),
+}, (table) => ({
+  typeIdx: index('accounts_type_idx').on(table.type),
+}))
+
+export const journalEntries = pgTable('journal_entries', {
+  id: text('id').primaryKey(),
+  entryNumber: text('entry_number').notNull().unique(),
+  date: date('date').notNull(),
+  description: text('description'),
+  reference: text('reference'),
+  referenceType: text('reference_type'),
+  referenceId: text('reference_id'),
+  isAuto: boolean('is_auto').default(true),
+  branchId: text('branch_id'),
+  createdBy: text('created_by'),
+  createdAt: ts('created_at'),
+}, (table) => ({
+  dateIdx: index('journal_entries_date_idx').on(table.date),
+  refIdx: index('journal_entries_ref_idx').on(table.referenceType, table.referenceId),
+}))
+
+export const journalEntryLines = pgTable('journal_entry_lines', {
+  id: text('id').primaryKey(),
+  journalEntryId: text('journal_entry_id').notNull(),
+  accountId: text('account_id').notNull(),
+  debit: numericNumber('debit').default(0),
+  credit: numericNumber('credit').default(0),
+  description: text('description'),
+  branchId: text('branch_id'),
+}, (table) => ({
+  entryIdx: index('jel_entry_idx').on(table.journalEntryId),
+  accountIdx: index('jel_account_idx').on(table.accountId),
+}))
+
+export const financialPeriods = pgTable('financial_periods', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  startDate: date('start_date').notNull(),
+  endDate: date('end_date').notNull(),
+  isOpen: boolean('is_open').default(true),
+  closedAt: timestamp('closed_at'),
+})

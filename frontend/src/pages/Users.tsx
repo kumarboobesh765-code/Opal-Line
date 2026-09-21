@@ -1,3 +1,4 @@
+import { toast } from '@/components/ui/confirm'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { Clock, Eye, EyeOff, KeyRound, Loader2, Pencil, PlayCircle, Plus, Search, Shield, ShieldCheck, Trash2, UserCog, UserRoundPen, Users } from 'lucide-react'
@@ -167,7 +168,7 @@ export default function UsersPage() {
       await dbApi.update('users', user.id, { status })
       load()
     } catch {
-      window.alert('Failed to update user status')
+      toast.error('Failed to update user status')
     }
   }
 
@@ -276,7 +277,7 @@ export default function UsersPage() {
       await rbacApi.removeRole(role.id)
       load()
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : 'Failed to delete role')
+      toast.error(e instanceof Error ? e.message : 'Failed to delete role')
     }
   }
 
@@ -377,7 +378,7 @@ export default function UsersPage() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" disabled={!canEdit} onClick={() => setStatus(row.original, 'inactive')}>
-                      <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                      <Trash2 className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Deactivate user</TooltipContent>
@@ -424,7 +425,7 @@ export default function UsersPage() {
 
         <TabsContent value="users">
           <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 md:grid-cols-3">
-            <MiniCard icon={Users} label="Total Users" value={String(users.length)} sub="All accounts" tint="bg-primary-50 text-primary-700" />
+            <MiniCard icon={Users} label="Total Users" value={String(users.length)} sub="All accounts" tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />
             <MiniCard icon={UserCog} label="Active" value={String(activeCount)} sub="Currently active" tint="bg-success-50 text-success-700" />
             <MiniCard icon={Shield} label="Roles" value={String(roles.length)} sub="Permission profiles" tint="bg-info-50 text-info-700" />
           </div>
@@ -489,7 +490,7 @@ export default function UsersPage() {
                 <Card key={role.id} className="flex flex-col p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2.5">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary-700">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300">
                         <Shield className="h-4.5 w-4.5" />
                       </div>
                       <div>
@@ -522,7 +523,7 @@ export default function UsersPage() {
                       <KeyRound className="h-3.5 w-3.5" /> Permissions
                     </Button>
                     {!role.isSystem ? (
-                      <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-600" disabled={!canEdit} onClick={() => deleteRole(role)}>
+                      <Button variant="ghost" size="sm" className="text-red-600 dark:text-red-400 hover:text-red-600 dark:text-red-400" disabled={!canEdit} onClick={() => deleteRole(role)}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     ) : null}
@@ -596,7 +597,7 @@ export default function UsersPage() {
                 </div>
               </Field>
             </div>
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setInviteOpen(false)}>Cancel</Button>
@@ -671,7 +672,7 @@ export default function UsersPage() {
                   className="w-full"
                 />
               </Field>
-              {error ? <p className="text-sm text-red-600">{error}</p> : null}
+              {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
             </div>
           ) : null}
           <DialogFooter>
@@ -710,7 +711,7 @@ export default function UsersPage() {
                 </button>
               </div>
             </Field>
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResetUser(null)}>Cancel</Button>
@@ -769,7 +770,7 @@ export default function UsersPage() {
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           )}
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPermsOpen(false)}>Cancel</Button>
             <Button onClick={savePerms} disabled={saving || !permsData}>
@@ -810,7 +811,7 @@ export default function UsersPage() {
               permissions={roleDraft.permissions}
               onChange={(next) => setRoleDraft((f) => ({ ...f, permissions: next }))}
             />
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRoleDialogOpen(false)}>Cancel</Button>

@@ -125,7 +125,7 @@ export default function ShopifyDashboardPage() {
             </span>
             {status.syncing ? <Badge variant="warning" dot>Syncing...</Badge> : null}
             {status.lastError ? (
-              <span className="ml-auto flex items-center gap-1.5 text-xs text-red-600">
+              <span className="ml-auto flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
                 <AlertCircle className="h-3.5 w-3.5" /> {status.lastError}
               </span>
             ) : null}
@@ -193,14 +193,14 @@ function SyncLogRow({ log }: { log: SyncLogEntry }) {
   const ok = log.status === 'success'
   return (
     <div className="flex items-center gap-3 rounded-md border bg-muted/30 px-3 py-2.5">
-      <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-md', ok ? 'bg-success-50 text-success-700' : 'bg-red-50 text-red-600')}>
+      <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-md', ok ? 'bg-success-50 text-success-700' : 'bg-red-50 text-red-600 dark:text-red-400')}>
         {ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium text-foreground">
           {resourceLabel[log.resource] ?? log.resource} <span className="text-muted-foreground">· {formatNumber(log.count)} records</span>
         </p>
-        {log.message ? <p className="truncate text-xs text-red-600">{log.message}</p> : null}
+        {log.message ? <p className="truncate text-xs text-red-600 dark:text-red-400">{log.message}</p> : null}
       </div>
       <Badge variant={ok ? 'success' : 'danger'}>{ok ? 'Success' : 'Failed'}</Badge>
       <span className="shrink-0 text-[11px] text-muted-foreground">{formatDateTime(log.time)}</span>

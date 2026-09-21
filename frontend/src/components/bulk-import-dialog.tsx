@@ -163,7 +163,7 @@ export function BulkImportDialog({ open, onOpenChange, mode, onDone }: {
           <div className={cn('rounded-md border p-3 text-xs space-y-1', result.ok ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-amber-500/30 bg-amber-500/10')}>
             {result.lines.map((l, i) => (
               <p key={i} className="flex items-start gap-1.5">
-                {l.startsWith('⚠') ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" /> : <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />}
+                {l.startsWith('⚠') ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500 dark:text-amber-400" /> : <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />}
                 <span>{l.replace(/^⚠ /, '')}</span>
               </p>
             ))}

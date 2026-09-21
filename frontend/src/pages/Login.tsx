@@ -28,7 +28,7 @@ export default function LoginPage() {
       await login(identifier.trim(), password)
       navigate('/', { replace: true })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to sign in')
+      setError('Invalid username or password')
       setSigningIn(false)
     }
   }
@@ -101,7 +101,7 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {error ? <p className="text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
 
             <Button className="w-full" onClick={signIn} disabled={!identifier.trim() || !password || signingIn}>
               {signingIn ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
