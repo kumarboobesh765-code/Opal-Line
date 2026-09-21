@@ -153,7 +153,14 @@ const csrfProtection = (req: express.Request, res: express.Response, next: expre
   if (!token || !verifyCsrfToken(token)) {
     return res.status(403).json({ error: 'Invalid CSRF token' })
   }
-  
+
+  // Double-submit defence: the header token must also match the XSRF-TOKEN cookie,
+  // so an attacker on another origin cannot replay a leaked token value.
+  const cookieToken = req.cookies?.[CSRF_COOKIE]
+  if (cookieToken && cookieToken !== token) {
+    return res.status(403).json({ error: 'CSRF token mismatch' })
+  }
+
   next()
 }
 
