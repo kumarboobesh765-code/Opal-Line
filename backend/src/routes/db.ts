@@ -1604,6 +1604,9 @@ dbRouter.get('/currencies/exchange-rate', requirePermission('system', 'view'), a
 
 const SETTINGS_ID = 'app'
 
+/** Secrets are shown masked (••••last4) — never raw in API responses. */
+const maskSecret = (v: string): string => (v ? (v.length <= 4 ? '••••' : '••••' + v.slice(-4)) : '')
+
 // Encrypted credential columns must never be returned by the generic GET /settings
 // (they are only surfaced through /settings/connections which masks them).
 const SETTINGS_SECRET_COLUMNS = new Set([
@@ -1668,7 +1671,7 @@ dbRouter.get('/settings/connections', requirePermission('system', 'view'), async
     if (!row) {
       res.json({
         shopifyStoreUrl: shopifyConfig.shop || '',
-        shopifyAccessToken: shopifyConfig.accessToken || '',
+        shopifyAccessToken: maskSecret(shopifyConfig.accessToken || ''),
         shopifyApiVersion: shopifyConfig.apiVersion || '2025-10',
         webhookSecret: '',
         shopifyConfigured: isShopifyConfigured(),
@@ -1702,15 +1705,15 @@ dbRouter.get('/settings/connections', requirePermission('system', 'view'), async
 
     res.json({
       shopifyStoreUrl: shopifyStoreUrl || '',
-      shopifyAccessToken: shopifyAccessToken || '',
+      shopifyAccessToken: maskSecret(shopifyAccessToken),
       shopifyApiVersion: row.shopifyApiVersion ?? '2025-10',
-      webhookSecret: webhookSecret || '',
+      webhookSecret: maskSecret(webhookSecret),
       shopifyConfigured: isShopifyConfigured() || Boolean(shopifyStoreUrl && shopifyAccessToken),
       dbHost: dbHost || '',
       dbPort: dbPort || '',
       dbDatabase: dbDatabase || '',
       dbUser: dbUser || '',
-      dbPassword: dbPassword || '',
+      dbPassword: maskSecret(dbPassword),
       dbConfigured: Boolean(dbHost && dbUser && dbPassword),
     })
   } catch (err) {
@@ -1718,7 +1721,9 @@ dbRouter.get('/settings/connections', requirePermission('system', 'view'), async
   }
 })
 
-const MASKED_VALUE_PATTERN = /^[•*]+$/
+// Masked values are •-prefixed (••••last4 or all bullets) — a real credential
+// never starts with •, so prefix-matching is the safe “leave unchanged” test.
+const MASKED_VALUE_PATTERN = /^•/
 
 dbRouter.put('/settings/connections', requirePermission('system', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
@@ -1726,7 +1731,8 @@ dbRouter.put('/settings/connections', requirePermission('system', 'edit'), async
     const { shopifyStoreUrl, shopifyAccessToken, shopifyApiVersion, webhookSecret, dbHost, dbPort, dbDatabase, dbUser, dbPassword } = req.body ?? {}
     const body: Record<string, unknown> = { updatedAt: new Date().toISOString() }
 
-    const isMasked = (value: unknown): boolean => typeof value === 'string' && MASKED_VALUE_PATTERN.test(value)
+    const isMasked = (value: unknown): boolean =>
+      typeof value === 'string' && (MASKED_VALUE_PATTERN.test(value) || value.includes('\uFFFD'))
 
     if (typeof shopifyStoreUrl === 'string' && shopifyStoreUrl.length > 0 && !isMasked(shopifyStoreUrl)) {
       body.shopifyStoreUrlEncrypted = encrypt(normalizeShopDomain(shopifyStoreUrl))

@@ -181,6 +181,9 @@ export async function testShopifyConnection(overrides?: {
   if (!shop || !accessToken) {
     return { ok: false, error: 'Shopify is not configured. Enter the store URL and access token, then click Save.' }
   }
+  if (/[^\x00-\xFF]/.test(accessToken) || /[^\x00-\xFF]/.test(shop)) {
+    return { ok: false, error: 'The saved Shopify credentials contain invalid characters — a masked or corrupted value was saved. Re-enter the store URL and access token, then click Save.' }
+  }
   try {
     const start = Date.now()
     const url = `https://${shop}.myshopify.com/admin/api/${config.apiVersion}/shop.json`

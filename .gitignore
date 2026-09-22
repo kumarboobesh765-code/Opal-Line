@@ -49,6 +49,12 @@ opal-line-silver-theme.zip
 # Business data (never commit real customer/order backups)
 backend/backups/
 
+# Runtime user uploads (product images) — live data, not source
+backend/uploads/
+
+# Agent tool state
+.freebuff/
+
 # Desktop build output
 dist-electron-app/
 

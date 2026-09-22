@@ -12,9 +12,17 @@ export function normalizeShopDomain(value: string): string {
   return v
 }
 
+// Credentials end up in HTTP header values, which must be Latin-1 safe. A
+// value containing • or U+FFFD means a masked/mangled form value was saved by
+// mistake — treat it as unset so the app reports “not configured” instead of
+// crashing every request with an obscure ByteString header error.
+export function asCredential(v: string): string {
+  return /^[\x00-\xFF]*$/.test(v) ? v : ''
+}
+
 export const config = {
-  shop: normalizeShopDomain(decryptSecret(process.env.SHOPIFY_STORE_URL ?? '')),
-  accessToken: decryptSecret((process.env.SHOPIFY_ACCESS_TOKEN ?? '').trim()),
+  shop: asCredential(normalizeShopDomain(decryptSecret(process.env.SHOPIFY_STORE_URL ?? ''))),
+  accessToken: asCredential(decryptSecret((process.env.SHOPIFY_ACCESS_TOKEN ?? '').trim())),
   apiVersion: (process.env.SHOPIFY_API_VERSION ?? '2025-10').trim(),
   port: Number(process.env.PORT ?? 4000),
 }

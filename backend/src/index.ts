@@ -1864,7 +1864,14 @@ async function startServer() {
     }
   })
 
-  server.on('error', (err) => {
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      const msg = `Port ${config.port} is already in use (EADDRINUSE) — another instance of Opal Line Billing, or the dev server (npm run dev), is already running. Close it and start the app again.`
+      logger.error({ port: config.port }, msg)
+      // Also print plainly: the desktop app watches stderr for this message.
+      console.error(`[server] ${msg}`)
+      process.exit(1)
+    }
     logger.error({ err }, 'Server error')
   })
 

@@ -279,8 +279,18 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
     })
 
     backendProcess.stderr?.on('data', (data: Buffer) => {
-      console.error('[backend:err]', data.toString().trim())
-      logLine('backend-err', data.toString())
+      const text = data.toString()
+      console.error('[backend:err]', text.trim())
+      logLine('backend-err', text)
+      // Port conflict fails instantly — don't make the user wait out the timeout.
+      if (!started && /EADDRINUSE|already in use/i.test(text)) {
+        clearTimeout(timeout)
+        reject(new Error(
+          `Port ${BACKEND_PORT} is already in use.\n\n` +
+          'Another instance of Opal Line Billing — or the development server (npm run dev) — is already using it.\n\n' +
+          'Close the other one, then reopen Opal Line Billing.',
+        ))
+      }
     })
 
     backendProcess.on('error', (err) => {
@@ -292,6 +302,10 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
       console.log(`[electron] Backend exited with code ${code}`)
       logLine('backend', `exited code ${code}`)
       backendProcess = null
+      if (!started) {
+        clearTimeout(timeout)
+        reject(new Error(`The backend process exited with code ${code} before the server was ready.\n\nCheck the logs in the app data folder for details.`))
+      }
     })
   })
 }

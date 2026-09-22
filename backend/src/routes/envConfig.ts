@@ -84,11 +84,11 @@ function readRawEnv(): Map<string, string> {
   return map
 }
 
-// Masking temporarily disabled — reveal raw (decrypted) values so admins can
-// see exactly what is stored. Re-introduce before production use.
+// Secrets are shown masked (••••last4) so credentials never sit raw in the
+// UI. Re-submitting the masked value is treated as “unchanged” by POST.
 function maskValue(v: string): string {
   if (!v) return ''
-  return v
+  return v.length <= 4 ? '••••' : '••••' + v.slice(-4)
 }
 
 export function registerEnvConfigRoutes(app: Express) {
@@ -100,7 +100,7 @@ export function registerEnvConfigRoutes(app: Express) {
     const configured: Record<string, boolean> = {}
     for (const def of ENV_CONFIG_DEFS) {
       const rawVal = raw.get(def.key) ?? process.env[def.key] ?? ''
-      // Secrets are decrypted for display while masking is disabled
+      // Secrets are decrypted then re-masked for display
       const plain = def.secret && rawVal ? decryptSecret(rawVal) : rawVal
       values[def.key] = def.secret ? (plain ? maskValue(plain) : '') : plain
       configured[def.key] = rawVal.trim().length > 0
@@ -116,8 +116,10 @@ export function registerEnvConfigRoutes(app: Express) {
       for (const def of ENV_CONFIG_DEFS) {
         if (!(def.key in values)) continue
         let value = String(values[def.key] ?? '').trim()
-        // Masked placeholder resubmitted → leave as-is
-        if (/^•+$/.test(value) || value === '••••••••') { skipped.push(def.key); continue }
+        // Masked (•…) or mojibake (U+FFFD) values resubmitted → leave as-is.
+        // U+FFFD appears when a mask char was corrupted in transit — a real
+        // credential never contains it, so treat both as “unchanged”.
+        if (value.startsWith('•') || value.includes('\uFFFD')) { skipped.push(def.key); continue }
         // Already ciphertext (encV1:…) → store as-is, never double-encrypt
         if (def.secret && value && !isEncryptedSecret(value)) value = encryptSecret(value)
         if (def.key === 'PUBLIC_BASE_URL' && value) {
