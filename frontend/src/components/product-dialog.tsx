@@ -316,11 +316,15 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
         })
       }
       let pushed = false
-      const placeHolderId = saved.shopifyId != null && String(saved.shopifyId).trim().startsWith('#')
-      const createListing = mode === 'add' ? form.pushToShopify : (!saved.shopifyId || placeHolderId) && form.pushToShopify
-      if (createListing) {
+      const linked = saved.shopifyId != null && String(saved.shopifyId).trim() !== '' && !String(saved.shopifyId).trim().startsWith('#')
+      const priceChanged =
+        Number(saved.sellingPrice ?? 0) !== Number(product?.sellingPrice ?? 0) ||
+        Number(saved.compareAtPrice ?? 0) !== Number(product?.compareAtPrice ?? 0)
+      if (form.pushToShopify) {
+        // New/placeholder listings are created; already-listed products get
+        // their content + local images pushed as an update by the backend.
         const result = await shopifyApi.pushProducts([saved.id])
-        pushed = result.created > 0 || result.errors.length === 0
+        pushed = result.created > 0 || (result.updated ?? 0) > 0
         if (result.created > 0 && form.trackInventory && (saved.stock ?? 0) > 0) {
           try {
             await shopifyApi.pushInventory([saved.id])
@@ -328,17 +332,15 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
             // Inventory push is best-effort here; it can be retried from the Shopify tools.
           }
         }
-      } else if (mode === 'edit' && saved.shopifyId && !String(saved.shopifyId).trim().startsWith('#')) {
-        const priceChanged =
-          Number(saved.sellingPrice ?? 0) !== Number(product?.sellingPrice ?? 0) ||
-          Number(saved.compareAtPrice ?? 0) !== Number(product?.compareAtPrice ?? 0)
-        if (priceChanged) {
-          try {
-            const r = await shopifyApi.updateProductPrice(saved.id)
-            pushed = r.updated === 1
-          } catch {
-            // Best-effort; the local price is saved and can be pushed from Shopify → Price tools.
-          }
+      }
+      // Price changes always travel through the dedicated price endpoint — the
+      // content/image push intentionally leaves variants untouched.
+      if (mode === 'edit' && linked && priceChanged) {
+        try {
+          const r = await shopifyApi.updateProductPrice(saved.id)
+          pushed = r.updated === 1 || pushed
+        } catch {
+          // Best-effort; the local price is saved and can be pushed from Shopify → Price tools.
         }
       }
       onOpenChange(false)

@@ -23,6 +23,7 @@ import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ProductDialog } from '@/components/product-dialog'
+import { productImageGallery } from './Products'
 import { dbApi, shopifyApi } from '@/lib/api'
 import type { Product, SilverRate } from '@/types'
 import { formatCurrency, formatDate, formatWeight } from '@/lib/format'
@@ -37,6 +38,7 @@ export default function ProductDetailPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [syncing, setSyncing] = useState(false)
+  const [galleryIdx, setGalleryIdx] = useState(0)
 
   useEffect(() => {
     setLoading(true)
@@ -95,6 +97,8 @@ export default function ProductDetailPage() {
   }
 
   const rate = silverRate?.rate ?? product.silverRate ?? 0
+  const gallerySrcs = productImageGallery(product)
+  const mainIdx = Math.min(galleryIdx, Math.max(gallerySrcs.length - 1, 0))
   const netWeight = product.netWeight ?? 0
   const makingCharge = product.makingCharge ?? 0
   const stock = product.stock ?? 0
@@ -115,9 +119,13 @@ export default function ProductDetailPage() {
       <PageHeader
         title={
           <span className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300 ring-1 ring-primary-100">
-              <Gem className="h-5 w-5" />
-            </div>
+            {gallerySrcs[0] ? (
+              <img src={gallerySrcs[0]} alt="" className="h-11 w-11 rounded-lg object-cover ring-1 ring-border" />
+            ) : (
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300 ring-1 ring-primary-100">
+                <Gem className="h-5 w-5" />
+              </div>
+            )}
             {product.name}
             <Badge variant="success" className="align-middle">{product.status}</Badge>
           </span>
@@ -150,10 +158,37 @@ export default function ProductDetailPage() {
         onSaved={(saved, pushed) => {
           setProduct(saved)
           setNotice(pushed
-            ? `Updated "${saved.name}" and synced the price to Shopify.`
+            ? `Updated "${saved.name}" and pushed it to Shopify (content, images and price where changed).`
             : `Updated "${saved.name}".`)
         }}
       />
+
+      {gallerySrcs.length > 0 ? (
+        <Card className="overflow-hidden">
+          <CardContent className="flex gap-4 p-4">
+            <div className="relative h-52 w-52 shrink-0 overflow-hidden rounded-lg bg-muted">
+              <img src={gallerySrcs[mainIdx]} alt={product.name} className="h-full w-full object-cover" />
+            </div>
+            {gallerySrcs.length > 1 ? (
+              <div className="flex max-h-52 flex-col gap-2 overflow-y-auto pr-1">
+                {gallerySrcs.map((src, i) => (
+                  <button
+                    key={src}
+                    type="button"
+                    onClick={() => setGalleryIdx(i)}
+                    className={cn(
+                      'h-16 w-16 shrink-0 overflow-hidden rounded-md ring-2 transition',
+                      i === mainIdx ? 'ring-primary-500' : 'ring-transparent hover:ring-primary-200',
+                    )}
+                  >
+                    <img src={src} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <QuickFact label="Selling Price" value={formatCurrency(product.sellingPrice)} sub={`Silver rate ₹${product.silverRate ?? '—'}/g · Making ₹${product.makingCharge ?? '—'}/g`} tint="purple" />

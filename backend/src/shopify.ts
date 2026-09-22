@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm'
 import { config, isConfigured, normalizeShopDomain } from './config'
@@ -849,6 +849,55 @@ interface LocalProductForPush {
   status: string | null
 }
 
+function buildShopifyTags(local: LocalProductForPush): string {
+  return [
+    local.collection ? `opal-collection:${local.collection}` : null,
+    local.chargeOnTax !== false ? `opal-chargeontax:true` : `opal-chargeontax:false`,
+    local.category,
+    local.purity != null ? `${local.purity}%` : null,
+    local.huid ? `huid:${local.huid}` : null,
+    ...(local.tags ? local.tags.split(',').map((t) => t.trim()).filter(Boolean) : []),
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
+/**
+ * Build the Shopify `images` payload from local uploads (served paths / data
+ * URLs) and remote URLs. Local files are read from disk and attached as
+ * base64 — the "push from local path" flow. Each locally-sourced image gets a
+ * stable `alt` marker (filename or content hash) so a re-push can recognise
+ * images already on the Shopify product instead of duplicating them.
+ */
+async function buildShopifyImages(local: LocalProductForPush): Promise<Array<Record<string, string>>> {
+  const imageSrcs = Array.from(new Set([...(local.images ?? []).filter(Boolean), local.image].filter(Boolean) as string[]))
+  const images: Array<Record<string, string>> = []
+  for (const src of imageSrcs.slice(0, 20)) {
+    if (/^data:image\//i.test(src)) {
+      const base64 = src.slice(src.indexOf(',') + 1)
+      if (base64) {
+        const hash = createHash('sha1').update(Buffer.from(base64, 'base64')).digest('hex').slice(0, 16)
+        images.push({ attachment: base64, alt: `data-${hash}` })
+      }
+    } else if (/^https?:\/\//i.test(src)) {
+      images.push({ src })
+    } else if (/^\/?(uploads|images)\//i.test(src)) {
+      // Locally-served file path — read from disk and attach as base64
+      try {
+        const { readFileSync } = await import('node:fs')
+        const { join } = await import('node:path')
+        const { UPLOADS_DIR } = await import('./uploads')
+        const fileName = path.basename(src.replace(/^\/(uploads|images)\//, ''))
+        const buf = readFileSync(join(UPLOADS_DIR(), fileName))
+        images.push({ attachment: buf.toString('base64'), filename: fileName, alt: fileName })
+      } catch {
+        // File missing on disk — skip rather than fail the whole push.
+      }
+    }
+  }
+  return images
+}
+
 async function createShopifyProduct(local: LocalProductForPush): Promise<{ productId: number; variantId: number; inventoryItemId: number | null }> {
   if (!isConfigured()) {
     throw new ShopifyError('Shopify is not configured. Set SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN in server/.env', 503)
@@ -865,16 +914,7 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
   if (trackInventory) variant.inventory_management = 'shopify'
   variant.taxable = chargeOnTax
 
-  const tags = [
-    local.collection ? `opal-collection:${local.collection}` : null,
-    local.chargeOnTax !== false ? `opal-chargeontax:true` : `opal-chargeontax:false`,
-    local.category,
-    local.purity != null ? `${local.purity}%` : null,
-    local.huid ? `huid:${local.huid}` : null,
-    ...(local.tags ? local.tags.split(',').map((t) => t.trim()).filter(Boolean) : []),
-  ]
-    .filter(Boolean)
-    .join(', ')
+  const tags = buildShopifyTags(local)
 
   const body: Record<string, unknown> = {
     product: {
@@ -887,31 +927,7 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
       variants: [variant],
     },
   }
-  // Collect all images: local uploads (data URLs / served paths) + remote URLs.
-  // Shopify accepts either an external URL or a base64 `attachment` payload.
-  const imageSrcs = Array.from(new Set([...(local.images ?? []).filter(Boolean), local.image].filter(Boolean) as string[]))
-  const images: Array<Record<string, string>> = []
-  for (const src of imageSrcs.slice(0, 20)) {
-    if (/^data:image\//i.test(src)) {
-      const base64 = src.slice(src.indexOf(',') + 1)
-      if (base64) images.push({ attachment: base64 })
-    } else if (/^https?:\/\//i.test(src)) {
-      images.push({ src })
-    } else if (/^\/?(uploads|images)\//i.test(src)) {
-      // Locally-served file path — read from disk and attach as base64
-      try {
-        const { readFileSync } = await import('node:fs')
-        const { join } = await import('node:path')
-        const { UPLOADS_DIR } = await import('./uploads')
-        const fileName = src.replace(/^\/(uploads|images)\//, '')
-        const resolved = join(UPLOADS_DIR(), path.basename(fileName))
-        const buf = readFileSync(resolved)
-        images.push({ attachment: buf.toString('base64'), filename: path.basename(fileName) })
-      } catch {
-        // File missing on disk — skip rather than fail the whole push.
-      }
-    }
-  }
+  const images = await buildShopifyImages(local)
   if (images.length > 0) {
     body.product = { ...(body.product as object), images }
   }
@@ -939,6 +955,94 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
     productId,
     variantId: Number(json.product?.variants?.[0]?.id ?? 0),
     inventoryItemId: Number(json.product?.variants?.[0]?.inventory_item_id ?? 0),
+  }
+}
+
+/**
+ * Push content (title, vendor, tags) and local images to an already-listed
+ * Shopify product — the "push from local path" flow for edits. Variants are
+ * intentionally untouched: prices and inventory travel through their own
+ * dedicated sync paths. Images already present on the listing (matched by
+ * their stable alt marker / URL path) are filtered out so re-pushes never
+ * duplicate the gallery.
+ */
+async function updateShopifyProductContent(local: LocalProductForPush): Promise<void> {
+  if (!isConfigured()) {
+    throw new ShopifyError('Shopify is not configured. Set SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN in server/.env', 503)
+  }
+  const id = Number(String(local.shopifyId ?? '').replace(/^#/, ''))
+  if (!id) throw new ShopifyError('Product has no valid Shopify ID', 400)
+
+  const url = new URL(apiPath(config.apiVersion, `products/${id}`))
+
+  // Learn which images the listing already has (best-effort).
+  const existingAlt = new Set<string>()
+  const existingSrcPaths = new Set<string>()
+  try {
+    const get = await fetch(url, {
+      headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
+    })
+    if (get.ok) {
+      const json = (await get.json()) as { product?: { images?: Array<{ alt?: string | null; src?: string }> } }
+      for (const img of json.product?.images ?? []) {
+        if (img.alt) existingAlt.add(img.alt)
+        if (img.src) {
+          try { existingSrcPaths.add(new URL(img.src).pathname) } catch { existingSrcPaths.add(img.src) }
+        }
+      }
+    }
+  } catch { /* fall through and send all images */ }
+
+  const newImages = (await buildShopifyImages(local)).filter((img) => {
+    if (typeof img.alt === 'string' && existingAlt.has(img.alt)) return false
+    if (typeof img.src === 'string') {
+      try { return !existingSrcPaths.has(new URL(img.src).pathname) } catch { return true }
+    }
+    return true
+  })
+
+  const product: Record<string, unknown> = {
+    title: local.name,
+    body_html: `<p>${escapeHtml(local.name)}</p>`,
+    vendor: local.vendor || local.supplier || 'Opal Line',
+    product_type: local.collection || local.productType || local.category || '',
+    tags: buildShopifyTags(local),
+  }
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      'X-Shopify-Access-Token': config.accessToken,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ product: { id, ...product } }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new ShopifyError(`Shopify API error ${res.status}: ${text.slice(0, 200)}`, res.status)
+  }
+
+  // A product PUT never creates gallery entries — new images must go through
+  // the dedicated product-images endpoint (one call per image).
+  for (const img of newImages) {
+    const image: Record<string, string> = {}
+    if (img.attachment) image.attachment = img.attachment
+    if (img.src) image.src = img.src
+    if (img.alt) image.alt = img.alt
+    const r = await fetch(new URL(apiPath(config.apiVersion, `products/${id}/images`)), {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': config.accessToken,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ image }),
+    })
+    if (!r.ok) {
+      const text = await r.text().catch(() => '')
+      throw new ShopifyError(`Shopify API error ${r.status} while adding product image: ${text.slice(0, 200)}`, r.status)
+    }
   }
 }
 
@@ -1016,6 +1120,8 @@ export async function purgeProducts(): Promise<ShopifyPurgeResult> {
 export interface ShopifyPushResult {
   ok: boolean
   created: number
+  /** Already-listed products whose content/images were pushed as an update. */
+  updated?: number
   skipped: number
   errors: string[]
   message?: string
@@ -1046,6 +1152,7 @@ export async function pushProductsToShopify(ids?: string[]): Promise<ShopifyPush
     return { ok: false, created: 0, skipped: 0, errors: [err instanceof Error ? err.message : 'Failed to read products'] }
   }
   let created = 0
+  let updated = 0
   let skipped = 0
   const errors: string[] = []
   let locations: { id: number; name: string }[] = []
@@ -1055,7 +1162,24 @@ export async function pushProductsToShopify(ids?: string[]): Promise<ShopifyPush
       const placeHolderId = row.shopifyId != null && String(row.shopifyId).trim().startsWith('#')
       const genuinelyLinked = row.shopifyId != null && String(row.shopifyId).trim() !== '' && !placeHolderId
       if (genuinelyLinked) {
-        skipped++
+        // Explicitly selected (edit → "Push to Shopify"): sync content and
+        // local images to the existing listing. The bulk "push all" query only
+        // returns unlinked rows, so updates only run when the user asked.
+        if (ids && ids.length > 0) {
+          try {
+            await updateShopifyProductContent(row)
+            updated++
+            addLog('products', 'success', 1, `Updated on Shopify: ${row.sku}`)
+            await persistLog({ entity: 'Product', shopifyId: row.shopifyId ?? row.sku, direction: 'out', action: 'Update', status: 'success' })
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unknown error'
+            errors.push(`${row.sku}: ${message}`)
+            addLog('products', 'failed', 1, message)
+            await persistLog({ entity: 'Product', shopifyId: row.shopifyId ?? row.sku, direction: 'out', action: 'Update', status: 'failed', error: message, retry: true })
+          }
+        } else {
+          skipped++
+        }
         continue
       }
       if (row.status && row.status !== 'active') {
@@ -1092,7 +1216,7 @@ export async function pushProductsToShopify(ids?: string[]): Promise<ShopifyPush
         await persistLog({ entity: 'Product', shopifyId: row.sku, direction: 'out', action: 'Create', status: 'failed', error: message, retry: true })
       }
     }
-    if (created > 0) {
+    if (created + updated > 0) {
       store.lastSync.products = new Date().toISOString()
       try {
         await syncProducts()
@@ -1100,7 +1224,7 @@ export async function pushProductsToShopify(ids?: string[]): Promise<ShopifyPush
         // Best-effort refresh of the in-memory catalog after pushing.
       }
     }
-    return { ok: errors.length === 0, created, skipped, errors }
+    return { ok: errors.length === 0, created, updated, skipped, errors }
   } finally {
     releaseSyncLock()
   }

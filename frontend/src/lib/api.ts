@@ -333,7 +333,7 @@ export const shopifyApi = {
   getPrice: () => request<{ syncedAt: string | null; data: SyncPrice[] }>('/shopify/price'),
   applyPrice: () => request<{ ok: boolean; updated: number; skipped: number; errors: string[] }>('/shopify/price/apply', { method: 'POST' }),
   pushProducts: (ids?: string[]) =>
-    request<{ ok: boolean; created: number; skipped: number; errors: string[]; message?: string }>('/shopify/products/push', {
+    request<{ ok: boolean; created: number; updated?: number; skipped: number; errors: string[]; message?: string }>('/shopify/products/push', {
       method: 'POST',
       body: JSON.stringify({ ids }),
     }),

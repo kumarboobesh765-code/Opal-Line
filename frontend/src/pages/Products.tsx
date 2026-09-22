@@ -65,6 +65,25 @@ export function productImageSrc(p: { image?: string | null; images?: string[] | 
   return undefined
 }
 
+/**
+ * Every usable image URL for a product, primary first — local /uploads files
+ * are resolved against the API origin, remote URLs run through safeImageUrl.
+ */
+export function productImageGallery(p: { image?: string | null; images?: string[] | null }): string[] {
+  const candidates = [p.image, ...(p.images ?? [])].filter(Boolean) as string[]
+  const out: string[] = []
+  for (const c of candidates) {
+    if (c.startsWith('/uploads/')) {
+      const url = `${API_ORIGIN}${c}`
+      if (!out.includes(url)) out.push(url)
+      continue
+    }
+    const remote = safeImageUrl(c)
+    if (remote && !out.includes(remote)) out.push(remote)
+  }
+  return out
+}
+
 const shopifyVariant: Record<NonNullable<Product['shopifyStatus']>, { label: string; variant: 'success' | 'warning' | 'muted' | 'danger' }> = {
   synced: { label: 'Synced', variant: 'success' },
   pending: { label: 'Pending', variant: 'warning' },
