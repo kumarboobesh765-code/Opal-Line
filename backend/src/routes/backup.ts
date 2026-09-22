@@ -39,9 +39,13 @@ function backendRoot(): string {
 
 export function backupDirectory(): string {
   if (_backupDir) return _backupDir
+  // Priority: explicit override → per-user data dir (desktop app; the install
+  // directory under Program Files is read-only) → backend package root (dev).
   _backupDir = process.env.BACKUP_DIR
     ? path.resolve(process.env.BACKUP_DIR)
-    : path.join(backendRoot(), 'backups')
+    : process.env.APP_DATA_DIR?.trim()
+      ? path.join(process.env.APP_DATA_DIR.trim(), 'backups')
+      : path.join(backendRoot(), 'backups')
   return _backupDir
 }
 

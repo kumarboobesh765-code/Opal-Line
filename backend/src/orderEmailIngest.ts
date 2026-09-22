@@ -5,6 +5,7 @@ import { eq, or } from 'drizzle-orm'
 import { db } from './db/client'
 import * as schema from './db/schema'
 import { decryptSecret } from './lib/crypto'
+import { recountCustomerStatsBoth } from './customerStats'
 import { logger } from './logger'
 
 /**
@@ -499,6 +500,7 @@ async function ensureCustomerFromEmail(d: OrderEmailData): Promise<void> {
   if (phone) identityConditions.push(eq(schema.customers.phone, phone))
   const [existing] = await db.select().from(schema.customers).where(or(...identityConditions)).limit(1)
   const city = d.billing?.city || d.shipping?.city || null
+  const province = d.billing?.province || d.shipping?.province || null
   if (existing) {
     await db
       .update(schema.customers)
@@ -507,6 +509,7 @@ async function ensureCustomerFromEmail(d: OrderEmailData): Promise<void> {
         ...(email ? { email } : {}),
         ...(phone ? { phone } : {}),
         ...(city ? { city } : {}),
+        ...(province ? { province } : {}),
       })
       .where(eq(schema.customers.id, existing.id))
     return
@@ -519,6 +522,7 @@ async function ensureCustomerFromEmail(d: OrderEmailData): Promise<void> {
       email,
       phone,
       city,
+      province,
       orders: 0,
       totalSpent: 0,
       status: 'active',
@@ -533,6 +537,11 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
   const shopifyId = `#${d.orderNumber}`
   const billingAddress = d.billing ?? undefined
   const shippingAddress = d.shipping ?? undefined
+
+  // Always sync the customer into the customers table first — even when the
+  // order row already exists and is complete, the customer record itself may
+  // be missing (e.g. order arrived via webhook before any customer sync).
+  await ensureCustomerFromEmail(d)
 
   const [existing] = await db
     .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress, shippingAddress: schema.salesOrders.shippingAddress, lineItems: schema.salesOrders.lineItems })
@@ -581,7 +590,6 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
         shippingAddress: newShipAddr,
       })
       .where(eq(schema.salesOrders.shopifyId, shopifyId))
-    await ensureCustomerFromEmail(d)
     return { updated: true, created: false }
   }
 
@@ -605,7 +613,6 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
       shippingAddress: shippingAddress ?? undefined,
     })
     .onConflictDoNothing()
-  await ensureCustomerFromEmail(d)
   return { updated: false, created: true }
 }
 
@@ -778,6 +785,20 @@ export interface IngestResult {
   errors: string[]
 }
 
+/**
+ * Customers created/updated by email ingestion start with orders=0 and
+ * totalSpent=0 — derive those stats from the real order rows so the customers
+ * list and reports reflect emailed orders immediately.
+ */
+async function recountAfterIngest(res: IngestResult): Promise<void> {
+  if (res.updated === 0 && res.created === 0) return
+  try {
+    await recountCustomerStatsBoth()
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Customer stats recount after ingest failed')
+  }
+}
+
 export async function pollOrderMailbox(): Promise<IngestResult> {
   const res: IngestResult = { ok: false, scanned: 0, parsed: 0, updated: 0, created: 0, errors: [] }
   if (!isEmailIngestConfigured()) {
@@ -795,6 +816,7 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
       await pollMailtm(cfg, res)
       res.ok = true
       logger.info({ scanned: res.scanned, parsed: res.parsed, updated: res.updated, created: res.created }, 'Order email ingestion complete (mail.tm)')
+      await recountAfterIngest(res)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown mail.tm error'
       res.errors.push(message)
@@ -847,6 +869,7 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
     }
     res.ok = true
     logger.info({ scanned: res.scanned, parsed: res.parsed, updated: res.updated, created: res.created }, 'Order email ingestion complete')
+    await recountAfterIngest(res)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown IMAP error'
     res.errors.push(message)

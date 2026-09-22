@@ -1,7 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ENV_PATH = join(process.cwd(), '.env')
+// Must match the file dotenv actually loads. In the packaged desktop app the
+// backend runs from Program Files (read-only) while the writable .env lives in
+// %APPDATA%\Opal Line Billing\data — Electron passes its path via
+// DOTENV_CONFIG_PATH. Using cwd/.env here silently dropped every UI-saved
+// config on restart (and crashed with EPERM on Program Files installs).
+const ENV_PATH = process.env.DOTENV_CONFIG_PATH?.trim() || join(process.cwd(), '.env')
 
 export function upsertEnvVar(key: string, value: string): void {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

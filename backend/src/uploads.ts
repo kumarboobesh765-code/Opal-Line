@@ -22,7 +22,9 @@ export function UPLOADS_DIR(): string {
   }
   _uploadsDir = process.env.UPLOADS_DIR
     ? resolve(process.env.UPLOADS_DIR)
-    : join(dir, 'uploads')
+    : process.env.APP_DATA_DIR?.trim()
+      ? join(process.env.APP_DATA_DIR.trim(), 'uploads')
+      : join(dir, 'uploads')
   return _uploadsDir
 }
 

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { requireAuth } from '../sessions'
 import { requirePermission } from '../rbac'
 import { upsertEnvVar } from '../lib/envfile'
-import { encryptSecret, decryptSecret } from '../lib/crypto'
+import { encryptSecret, decryptSecret, isEncryptedSecret } from '../lib/crypto'
 import { logger } from '../logger'
 
 /**
@@ -70,7 +70,9 @@ export const ENV_CONFIG_DEFS: EnvVarDef[] = [
   { key: 'BACKUP_OFFSITE_REGION', group: 'backup', label: 'Region', placeholder: 'auto' },
 ]
 
-const ENV_PATH = join(process.cwd(), '.env')
+// Same file dotenv loads — in the desktop app that is the writable
+// %APPDATA%\...\data\.env, not the (read-only) install directory.
+const ENV_PATH = process.env.DOTENV_CONFIG_PATH?.trim() || join(process.cwd(), '.env')
 
 function readRawEnv(): Map<string, string> {
   const map = new Map<string, string>()
@@ -116,7 +118,8 @@ export function registerEnvConfigRoutes(app: Express) {
         let value = String(values[def.key] ?? '').trim()
         // Masked placeholder resubmitted → leave as-is
         if (/^•+$/.test(value) || value === '••••••••') { skipped.push(def.key); continue }
-        if (def.secret && value) value = encryptSecret(value)
+        // Already ciphertext (encV1:…) → store as-is, never double-encrypt
+        if (def.secret && value && !isEncryptedSecret(value)) value = encryptSecret(value)
         if (def.key === 'PUBLIC_BASE_URL' && value) {
           value = value.replace(/\/+$/, '')
           if (!/^https:\/\/.+/.test(value)) {

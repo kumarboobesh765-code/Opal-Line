@@ -7,7 +7,14 @@ const ALGORITHM = 'aes-256-gcm'
 const KEY_LENGTH = 32
 const IV_LENGTH = 16
 const TAG_LENGTH = 16
-const KEY_FILE = join(process.cwd(), '.encryption-key')
+// Desktop app: the install directory (Program Files) is read-only, so the
+// master key must live in the per-user data dir or every restart would mint a
+// new key and permanently orphan all DB-encrypted secrets.
+function keyFilePath(): string {
+  const dataDir = process.env.APP_DATA_DIR?.trim()
+  return dataDir ? join(dataDir, '.encryption-key') : join(process.cwd(), '.encryption-key')
+}
+const KEY_FILE = keyFilePath()
 
 let masterKey: Buffer | null = null
 
@@ -77,10 +84,21 @@ export function encryptSecret(plaintext: string): string {
   return ENV_ENC_PREFIX + encrypt(plaintext)
 }
 
+export function isEncryptedSecret(value: string): boolean {
+  return value.startsWith(ENV_ENC_PREFIX)
+}
+
 export function decryptSecret(value: string | null | undefined): string {
   if (!value) return ''
   if (!value.startsWith(ENV_ENC_PREFIX)) return value
-  return decrypt(value.slice(ENV_ENC_PREFIX.length))
+  try {
+    return decrypt(value.slice(ENV_ENC_PREFIX.length))
+  } catch (err) {
+    // Never brick the process over one bad value (e.g. ciphertext written under
+    // a different master key). Log and treat as empty so the app still boots.
+    logger.error({ err }, 'decryptSecret failed — value was encrypted with a different key or is corrupt; treating as empty')
+    return ''
+  }
 }
 
 export function mask(value: string | null | undefined): string {
