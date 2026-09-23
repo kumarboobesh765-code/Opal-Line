@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { Router, type Request, type Response } from 'express'
+import { Router, type Request, type Response, json as expressJson } from 'express'
 import argon2 from 'argon2'
 import { desc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
@@ -759,7 +759,9 @@ dbRouter.post('/products/bulk-import', requirePermission('inventory', 'edit'), a
 })
 
 // ─── Bulk image upload, auto-matched to products by SKU from filename ────────
-dbRouter.post('/products/bulk-images', requirePermission('inventory', 'edit'), async (req, res) => {
+// Own body limit: batches of data-URL images dwarf the global 1mb json limit
+// (200-image cap × up to 8MB per image → allow up to 25mb like /uploads/image)
+dbRouter.post('/products/bulk-images', requirePermission('inventory', 'edit'), expressJson({ limit: '25mb' }), async (req, res) => {
   if (!requireDb(res)) return
   try {
     const images: Array<{ filename?: unknown; dataUrl?: unknown }> = Array.isArray(req.body?.images) ? req.body.images : []

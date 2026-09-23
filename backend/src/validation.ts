@@ -61,7 +61,8 @@ export const silverRateSchema = z.object({
 })
 
 export const pushProductsSchema = z.object({
-  ids: z.array(z.string().uuid('Invalid product ID')).optional(),
+  // Accepts both UUID PKs and legacy short ids (e.g. '007', 'P006') that exist in the table
+  ids: z.array(z.string().min(1).max(64)).optional(),
 })
 
 export const pushInventorySchema = z.object({
