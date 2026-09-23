@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell, dialog } from 'electron'
 import { join, resolve } from 'node:path'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, openSync, closeSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 
@@ -91,12 +91,20 @@ function startPostgresWithRetry(pgCtl: string): void {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     if (isPostgresRunning()) { localPostgresStarted = true; return }
     try {
-      execFileSync(pgCtl, [
-        '-D', PGDATA,
-        '-o', `"${toPgOptionPort()}"`,
-        '-l', join(LOG_DIR, 'postgres.log'),
-        'start', '-w', '-t', '10',
-      ], { stdio: 'pipe', timeout: 20000 })
+      // IMPORTANT: never use stdio:'pipe' here. pg_ctl launches postgres.exe,
+      // which inherits pg_ctl's pipe handles, so execFileSync would block until
+      // the DATABASE exits — the timeout then kills a perfectly healthy server
+      // (seen live as "server started" followed by "immediate shutdown" x3).
+      // Route output to a log file and verify the port ourselves instead.
+      const pgctlLog = openSync(join(LOG_DIR, 'pgctl.log'), 'a')
+      try {
+        execFileSync(pgCtl, [
+          '-D', PGDATA,
+          '-o', `"${toPgOptionPort()}"`,
+          '-l', join(LOG_DIR, 'postgres.log'),
+          'start', '-w', '-t', '15',
+        ], { stdio: ['ignore', pgctlLog, pgctlLog], timeout: 30000 })
+      } finally { closeSync(pgctlLog) }
       if (isPostgresRunning()) {
         localPostgresStarted = true
         console.log(`[postgres] Started on port ${PG_PORT} (attempt ${attempt})`)
@@ -105,23 +113,18 @@ function startPostgresWithRetry(pgCtl: string): void {
       }
       logLine('postgres', `attempt ${attempt}: pg_ctl returned but port ${PG_PORT} is not listening`)
     } catch (err: any) {
-      const detail = [err?.stdout, err?.stderr]
-        .filter(Boolean)
-        .map((s: unknown) => String(s).trim())
-        .filter(Boolean)
-        .join(' | ')
-      console.error(`[postgres] start attempt ${attempt}/${ATTEMPTS} failed:`, detail || err?.message)
-      logLine('postgres', `start attempt ${attempt}/${ATTEMPTS} failed: ${detail || err?.message}`)
+      console.error(`[postgres] start attempt ${attempt}/${ATTEMPTS} failed:`, err?.message)
+      logLine('postgres', `start attempt ${attempt}/${ATTEMPTS} failed: ${err?.message}`)
       // Clear stale pid/crash state before retrying
       try {
-        execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'immediate'], { stdio: 'pipe', timeout: 5000 })
+        execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'immediate'], { stdio: 'ignore', timeout: 5000 })
       } catch { /* not running — expected */ }
     }
     if (attempt < ATTEMPTS) sleep(1500)
   }
   throw new Error(
     `PostgreSQL could not start after ${ATTEMPTS} attempts.\n\n` +
-    `See the database log for the reason:\n${join(LOG_DIR, 'postgres.log')}`,
+    `See the database logs for the reason:\n${join(LOG_DIR, 'postgres.log')}\n${join(LOG_DIR, 'pgctl.log')}`,
   )
 }
 
