@@ -24,7 +24,7 @@ export const config = {
   shop: asCredential(normalizeShopDomain(decryptSecret(process.env.SHOPIFY_STORE_URL ?? ''))),
   accessToken: asCredential(decryptSecret((process.env.SHOPIFY_ACCESS_TOKEN ?? '').trim())),
   apiVersion: (process.env.SHOPIFY_API_VERSION ?? '2025-10').trim(),
-  port: Number(process.env.PORT ?? 4000),
+  port: Number(process.env.PORT ?? 4197),
 }
 
 const envShop = config.shop

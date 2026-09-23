@@ -4,8 +4,8 @@ import { chromium } from 'playwright'
 
 const args = process.argv.slice(2)
 const get = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def }
-const BASE = get('--base', 'http://localhost:5173')
-const API = get('--api', 'http://localhost:4000')
+const BASE = get('--base', 'http://localhost:5197')
+const API = get('--api', 'http://localhost:4197')
 
 const results = { consoleErrors: [], failedRequests: [], pageErrors: [], security: [], interactions: [] }
 const seenErrors = new Set()

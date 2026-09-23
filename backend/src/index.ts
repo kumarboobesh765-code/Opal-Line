@@ -33,7 +33,7 @@ const app = express()
 
 app.set('trust proxy', 1)
 
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173'
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5197'
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -1809,8 +1809,8 @@ for (const key of requiredEnvVars) {
   }
 }
 if (!config.port || config.port < 1 || config.port > 65535) {
-  logger.error({ port: config.port }, 'Invalid PORT, defaulting to 4000')
-  config.port = 4000
+  logger.error({ port: config.port }, 'Invalid PORT, defaulting to 4197')
+  config.port = 4197
 }
 
 // First-run database bootstrap: creates schema + seeds roles/admin on a fresh

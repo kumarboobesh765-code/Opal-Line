@@ -11,10 +11,15 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 5197,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_PROXY ?? 'http://localhost:4000',
+        target: process.env.VITE_API_PROXY ?? 'http://localhost:4197',
+        changeOrigin: true,
+      },
+      // Product image uploads are served by the backend from /uploads
+      '/uploads': {
+        target: process.env.VITE_API_PROXY ?? 'http://localhost:4197',
         changeOrigin: true,
       },
     },
