@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
-let postgresProcess: ChildProcess | null = null
+let localPostgresStarted = false
 
 // Dedicated desktop port — deliberately different from the dev backend port
 // (4197) so the dev server and the installed desktop app can run at the same
@@ -81,6 +81,50 @@ function getOrCreatePgPassword(): string {
   return pw
 }
 
+// pg_ctl start used to be fire-and-forget: if it failed (e.g. the app raced
+// the installer writing files), waitForPostgres gave up silently after 15s
+// and the backend booted with no database — login 500 forever, no error shown.
+// Start synchronously with -w, retry transient failures, and fail loudly.
+function startPostgresWithRetry(pgCtl: string): void {
+  const ATTEMPTS = 3
+  const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    if (isPostgresRunning()) { localPostgresStarted = true; return }
+    try {
+      execFileSync(pgCtl, [
+        '-D', PGDATA,
+        '-o', `"${toPgOptionPort()}"`,
+        '-l', join(LOG_DIR, 'postgres.log'),
+        'start', '-w', '-t', '10',
+      ], { stdio: 'pipe', timeout: 20000 })
+      if (isPostgresRunning()) {
+        localPostgresStarted = true
+        console.log(`[postgres] Started on port ${PG_PORT} (attempt ${attempt})`)
+        logLine('postgres', `started on port ${PG_PORT} (attempt ${attempt})`)
+        return
+      }
+      logLine('postgres', `attempt ${attempt}: pg_ctl returned but port ${PG_PORT} is not listening`)
+    } catch (err: any) {
+      const detail = [err?.stdout, err?.stderr]
+        .filter(Boolean)
+        .map((s: unknown) => String(s).trim())
+        .filter(Boolean)
+        .join(' | ')
+      console.error(`[postgres] start attempt ${attempt}/${ATTEMPTS} failed:`, detail || err?.message)
+      logLine('postgres', `start attempt ${attempt}/${ATTEMPTS} failed: ${detail || err?.message}`)
+      // Clear stale pid/crash state before retrying
+      try {
+        execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'immediate'], { stdio: 'pipe', timeout: 5000 })
+      } catch { /* not running — expected */ }
+    }
+    if (attempt < ATTEMPTS) sleep(1500)
+  }
+  throw new Error(
+    `PostgreSQL could not start after ${ATTEMPTS} attempts.\n\n` +
+    `See the database log for the reason:\n${join(LOG_DIR, 'postgres.log')}`,
+  )
+}
+
 async function ensurePostgres(): Promise<string> {
   const pgPassword = process.env.PG_PASSWORD?.trim() || getOrCreatePgPassword()
   const dbName = 'opal_line'
@@ -105,12 +149,7 @@ async function ensurePostgres(): Promise<string> {
     if (!isPostgresRunning()) {
       console.log('[postgres] Starting bundled PostgreSQL…')
       logLine('postgres', 'starting bundled postgres on ' + PG_PORT)
-      postgresProcess = spawn(pgCtl, [
-        '-D', PGDATA,
-        '-o', `"${toPgOptionPort()}"`,
-        '-l', join(LOG_DIR, 'postgres.log'),
-        'start',
-      ], { stdio: 'pipe' })
+      startPostgresWithRetry(pgCtl)
     }
     waitForPostgres(PG_PORT)
     if (createdb) {
@@ -137,7 +176,7 @@ async function ensurePostgres(): Promise<string> {
           }
         }
         if (!isPostgresRunning()) {
-          postgresProcess = spawn(sysPgCtl, ['-D', PGDATA, '-o', `"${toPgOptionPort()}"`, '-l', join(LOG_DIR, 'postgres.log'), 'start'], { stdio: 'pipe' })
+          startPostgresWithRetry(sysPgCtl)
         }
         waitForPostgres(PG_PORT)
         const sysCreatedb = join(sysPgRootW, 'createdb.exe')
@@ -336,14 +375,14 @@ function createWindow() {
 }
 
 function stopPostgres(): void {
-  if (!postgresProcess) return
+  if (!localPostgresStarted) return
   try {
     const pgCtl = pgBin('pg_ctl') ?? join(systemPostgresRoot() ?? '', 'pg_ctl.exe')
     if (pgCtl && existsSync(PGDATA)) {
       execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'fast'], { stdio: 'pipe', timeout: 10000 })
     }
   } catch { /* best effort */ }
-  postgresProcess = null
+  localPostgresStarted = false
 }
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

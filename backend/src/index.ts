@@ -166,7 +166,7 @@ const csrfProtection = (req: express.Request, res: express.Response, next: expre
 
 app.use(csrfProtection)
 
-app.use(express.json({
+const jsonBodyParser = express.json({
   limit: CONSTANTS.REQUEST_SIZE_LIMIT,
   verify: (req, _res, buf) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,7 +175,15 @@ app.use(express.json({
       r.rawBody = buf
     }
   },
-}))
+})
+// Image-upload routes carry up to 25mb data-URL bodies and register their own
+// express.json({ limit: '25mb' }); the global 1mb parser must not reject them
+// first (it runs before route middleware and would 413 real product photos).
+const LARGE_JSON_PATHS = new Set(['/api/v1/uploads/image', '/api/v1/db/products/bulk-images'])
+app.use((req, res, next) => {
+  if (LARGE_JSON_PATHS.has(req.path)) return next()
+  return jsonBodyParser(req, res, next)
+})
 app.use(express.urlencoded({ extended: true, limit: CONSTANTS.REQUEST_SIZE_LIMIT }))
 
 const authLimiter = rateLimit({

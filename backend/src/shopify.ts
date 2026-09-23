@@ -392,6 +392,9 @@ function mergeImages(local: string[] | null, shopify: string[]): string[] | null
   if (localList.length === 0) return remoteList
   const out = [...remoteList]
   for (const l of localList) {
+    // A Shopify CDN URL that is no longer on the listing is definitively
+    // stale (Shopify owns that file) — drop it, never re-introduce it.
+    if (/^https?:\/\/cdn\.shopify\.com\//i.test(l)) continue
     const fileName = l.split('/').pop()?.split('-').slice(-1)[0] ?? l
     // Keep local entries that are clearly not among the Shopify sources
     if (!remoteList.some((r) => r.includes(fileName) || fileName.length > 8 && r.endsWith(fileName))) {
@@ -978,13 +981,15 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
   // Learn which images the listing already has (best-effort).
   const existingAlt = new Set<string>()
   const existingSrcPaths = new Set<string>()
+  let listingBefore: Array<{ id?: number; alt?: string | null; src?: string }> = []
   try {
     const get = await fetch(url, {
       headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
     })
     if (get.ok) {
-      const json = (await get.json()) as { product?: { images?: Array<{ alt?: string | null; src?: string }> } }
-      for (const img of json.product?.images ?? []) {
+      const json = (await get.json()) as { product?: { images?: Array<{ id?: number; alt?: string | null; src?: string }> } }
+      listingBefore = json.product?.images ?? []
+      for (const img of listingBefore) {
         if (img.alt) existingAlt.add(img.alt)
         if (img.src) {
           try { existingSrcPaths.add(new URL(img.src).pathname) } catch { existingSrcPaths.add(img.src) }
@@ -1025,6 +1030,7 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
 
   // A product PUT never creates gallery entries — new images must go through
   // the dedicated product-images endpoint (one call per image).
+  const justAddedPathnames = new Set<string>()
   for (const img of newImages) {
     const image: Record<string, string> = {}
     if (img.attachment) image.attachment = img.attachment
@@ -1043,7 +1049,125 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
       const text = await r.text().catch(() => '')
       throw new ShopifyError(`Shopify API error ${r.status} while adding product image: ${text.slice(0, 200)}`, r.status)
     }
+    const created = (await r.json().catch(() => ({}))) as { image?: { src?: string } }
+    if (created.image?.src) {
+      try { justAddedPathnames.add(new URL(created.image.src).pathname) } catch { /* unparsable src */ }
+    }
   }
+
+  // Make the listing match the local gallery: remove listing images that no
+  // longer correspond to any local ref (matched by stable alt marker or URL
+  // pathname, plus anything just added above). Never delete when the local
+  // gallery is empty — that would wipe images the user manages elsewhere.
+  const localRefs = [...new Set([...(local.images ?? []), local.image].filter(Boolean) as string[])]
+  if (localRefs.length > 0) {
+    const localAlts = new Set(
+      localRefs
+        .filter((ref) => /^\/?uploads\//i.test(ref) || /^\/?images\//i.test(ref))
+        .map((ref) => path.basename(ref)),
+    )
+    const localPathnames = new Set<string>()
+    for (const ref of localRefs) {
+      if (/^https?:\/\//i.test(ref)) {
+        try { localPathnames.add(new URL(ref).pathname) } catch { /* skip unparsable */ }
+      }
+    }
+    try {
+      const get = await fetch(url, {
+        headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
+      })
+      if (get.ok) {
+        const json = (await get.json()) as { product?: { images?: Array<{ id?: number; alt?: string | null; src?: string }> } }
+        const listedImages = json.product?.images ?? []
+        const keptImages: Array<{ src?: string }> = []
+        for (const img of listedImages) {
+          if (!img.id || !img.src) continue
+          let pathname = img.src
+          try { pathname = new URL(img.src).pathname } catch { /* use raw */ }
+          const keep =
+            justAddedPathnames.has(pathname) ||
+            (img.alt != null && localAlts.has(img.alt)) ||
+            localPathnames.has(pathname)
+          // Build the post-delete view: only images we keep are written back
+          // locally, so a stale listing image (old placeholder card) can never
+          // be mirrored into the local row again.
+          if (keep) { keptImages.push({ src: img.src }); continue }
+          // Stale listing image — delete it with a status check and 429/5xx
+          // backoff. This used to be fire-and-forget: a rate-limited DELETE
+          // failed silently while the write-back still recorded the image.
+          await deleteShopifyImageWithRetry(id, img.id)
+        }
+        // Point the local row at Shopify's hosted copies (CDN URLs) so the
+        // product's image refs are the Shopify image URL itself — image bytes
+        // live only on Shopify/disk, never in the database. Pass keptImages
+        // (post-cleanup), not the pre-delete listing snapshot.
+        await writebackShopifyImageUrls(local.id, String(id), keptImages)
+      }
+    } catch { /* best-effort image cleanup + write-back */ }
+  }
+}
+
+/**
+ * After a push, point the local row at Shopify's hosted image URLs (CDN).
+ * Image bytes are never stored in the database — only the URL string — and
+ * future pushes treat a CDN ref as idempotent (deduped by URL pathname).
+ * Best-effort: never throws into the push flow.
+ */
+async function writebackShopifyImageUrls(
+  localId: string,
+  shopifyId: string | number | null,
+  prefetched?: Array<{ src?: string }>,
+): Promise<void> {
+  if (!db) return
+  const id = Number(String(shopifyId ?? '').replace(/^#/, ''))
+  if (!id) return
+  try {
+    let imgs = prefetched
+    if (!imgs) {
+      const res = await fetch(apiPath(config.apiVersion, `products/${id}`), {
+        headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
+      })
+      if (!res.ok) return
+      const json = (await res.json()) as { product?: { images?: Array<{ src?: string }> } }
+      imgs = json.product?.images ?? []
+    }
+    const srcs = imgs.map((i) => i.src).filter((s): s is string => typeof s === 'string' && s.length > 0)
+    if (srcs.length === 0) return
+    const [current] = await db
+      .select({ image: schema.products.image, images: schema.products.images })
+      .from(schema.products)
+      .where(eq(schema.products.id, localId))
+      .limit(1)
+    const cur = Array.isArray(current?.images) ? (current!.images as string[]) : []
+    const unchanged = current?.image === srcs[0] && cur.length === srcs.length && cur.every((s, i) => s === srcs[i])
+    if (unchanged) return
+    await db.update(schema.products).set({ image: srcs[0], images: srcs }).where(eq(schema.products.id, localId))
+  } catch { /* best-effort */ }
+}
+
+/**
+ * DELETE a listing image with status verification and 429/5xx backoff.
+ * Returns true when the image is gone (or already absent).
+ * Exported for the one-off repair script (scripts/repair-listing-images).
+ */
+export async function deleteShopifyImageWithRetry(productId: number, imageId: number): Promise<boolean> {
+  const url = new URL(apiPath(config.apiVersion, `products/${productId}/images/${imageId}`))
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 500 * attempt))
+    try {
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
+      })
+      if (res.ok || res.status === 404) return true
+      if (res.status !== 429 && res.status < 500) {
+        logger.warn({ productId, imageId, status: res.status }, 'shopify: image delete rejected')
+        return false
+      }
+    } catch { /* network error — retry */ }
+  }
+  logger.warn({ productId, imageId }, 'shopify: image delete failed after retries')
+  return false
 }
 
 export async function deleteShopifyProduct(productId: number): Promise<void> {
@@ -1189,6 +1313,9 @@ export async function pushProductsToShopify(ids?: string[]): Promise<ShopifyPush
       try {
         const { productId, variantId, inventoryItemId } = await createShopifyProduct(row)
         await db.update(schema.products).set({ shopifyId: String(productId), shopifyStatus: 'synced' }).where(eq(schema.products.id, row.id))
+        // Newly created listing already carries the local images — point the
+        // local row at Shopify's hosted copies right away.
+        await writebackShopifyImageUrls(row.id, productId)
         created++
         addLog('products', 'success', 1, `Created on Shopify: ${row.sku}`)
         await persistLog({ entity: 'Product', shopifyId: String(productId), direction: 'out', action: 'Create', status: 'success' })
