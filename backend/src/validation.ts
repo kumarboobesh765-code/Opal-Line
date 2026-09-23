@@ -66,11 +66,13 @@ export const pushProductsSchema = z.object({
 })
 
 export const pushInventorySchema = z.object({
-  ids: z.array(z.string().uuid('Invalid product ID')).optional(),
+  // Same as pushProductsSchema: legacy short ids are valid product PKs
+  ids: z.array(z.string().min(1).max(64)).optional(),
 })
 
 export const productPriceSchema = z.object({
-  id: z.string().uuid('Invalid product ID'),
+  // Local product id — accepts UUID PKs and legacy short ids ('007', 'P006')
+  id: z.string().min(1).max(64),
 })
 
 export const createInvoiceSchema = z.object({
