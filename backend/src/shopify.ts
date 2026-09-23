@@ -1101,7 +1101,29 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
         // product's image refs are the Shopify image URL itself — image bytes
         // live only on Shopify/disk, never in the database. Pass keptImages
         // (post-cleanup), not the pre-delete listing snapshot.
-        await writebackShopifyImageUrls(local.id, String(id), keptImages)
+        // Shopify processes image uploads asynchronously: the just-added image
+        // may not appear on the listing for a few seconds, which previously
+        // made keptImages empty/stale and skipped the write-back. Wait briefly
+        // and re-fetch until the listing reflects what we just added.
+        let finalImgs = keptImages
+        if (justAddedPathnames.size > 0) {
+          const has = (imgs: Array<{ src?: string }>) =>
+            imgs.filter((i) => {
+              if (!i.src) return false
+              try { return justAddedPathnames.has(new URL(i.src).pathname) } catch { return false }
+            }).length
+          for (let r = 0; r < 4 && has(finalImgs) < justAddedPathnames.size; r++) {
+            await new Promise((res) => setTimeout(res, 1500))
+            try {
+              const g2 = await fetch(url, { headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' } })
+              if (g2.ok) {
+                const j2 = (await g2.json()) as { product?: { images?: Array<{ src?: string }> } }
+                finalImgs = j2.product?.images ?? []
+              }
+            } catch { /* retry */ }
+          }
+        }
+        await writebackShopifyImageUrls(local.id, String(id), finalImgs.length > 0 ? finalImgs : undefined)
       }
     } catch { /* best-effort image cleanup + write-back */ }
   }
