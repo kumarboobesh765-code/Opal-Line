@@ -45,7 +45,7 @@ async function nextQuotationNumber(): Promise<string> {
   throw new Error('Could not generate a unique quotation number')
 }
 
-function normalizeQuotationItems(raw: unknown): Array<Record<string, unknown>> {
+export function normalizeQuotationItems(raw: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) return []
   return raw
     .map((it) => {
@@ -71,7 +71,7 @@ function normalizeQuotationItems(raw: unknown): Array<Record<string, unknown>> {
     .filter((it) => it.sku !== '' || it.product !== '')
 }
 
-function computeTotals(items: Array<Record<string, unknown>>, gstRate: number, discount: number) {
+export function computeTotals(items: Array<Record<string, unknown>>, gstRate: number, discount: number) {
   const subtotal = round2(items.reduce((a, it) => a + num(it.amount, 0), 0))
   const gstAmount = round2((subtotal * gstRate) / 100)
   const grandTotal = round2(subtotal + gstAmount - discount)

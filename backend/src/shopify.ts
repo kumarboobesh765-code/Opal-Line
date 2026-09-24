@@ -367,7 +367,16 @@ export interface ProductsDbSyncResult {
   message?: string
 }
 
-function backComputePricing(price: number, rate: number): { netWeight: number; makingCharge: number } | null {
+/**
+ * Canonical selling price for a silver product: (rate + making charge) x net
+ * weight plus GST. Exported so the silver-rate reprice loop and tests share a
+ * single definition with backComputePricing, its inverse.
+ */
+export function computeSellingPrice(rate: number, netWeight: number, makingCharge: number): number {
+  return round2((rate + makingCharge) * netWeight * 1.03)
+}
+
+export function backComputePricing(price: number, rate: number): { netWeight: number; makingCharge: number } | null {
   if (!price || price <= 0 || !rate || rate <= 0) return null
   const netWeight = price / ((rate + CONSTANTS.DEFAULT_MAKING_CHARGE) * 1.03)
   if (!Number.isFinite(netWeight) || netWeight <= 0) return null
@@ -1741,8 +1750,7 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
     const netWeight = Number(row.netWeight)
     const makingCharge = Number(row.makingCharge)
     if (!netWeight || netWeight <= 0) continue
-    const basePrice = (rate + makingCharge) * netWeight
-    const sellingPrice = round2(basePrice * 1.03)
+    const sellingPrice = computeSellingPrice(rate, netWeight, makingCharge)
     await db.update(schema.products).set({ sellingPrice, silverRate: rate }).where(eq(schema.products.id, row.id))
     recomputed++
   }

@@ -387,7 +387,7 @@ async function applyStockDelta(tx: any, sku: string, delta: number): Promise<voi
     .where(eq(s.products.sku, sku))
 }
 
-function normalizeInvoiceItems(raw: unknown): Array<Record<string, unknown>> {
+export function normalizeInvoiceItems(raw: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(raw)) return []
   return raw
     .map((it) => {

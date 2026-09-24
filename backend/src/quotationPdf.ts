@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import { getRawClient } from './db/client'
 import { logger } from './logger'
 
-interface QuotationItem {
+export interface QuotationItem {
   name: string
   sku: string
   qty: number
@@ -13,7 +13,7 @@ interface QuotationItem {
   amount: number
 }
 
-interface QuotationPdfData {
+export interface QuotationPdfData {
   id: string
   number: string
   date: string
@@ -50,7 +50,7 @@ const COLORS = {
   divider: '#e5e7eb',
 }
 
-function numberToIndianWords(num: number): string {
+export function numberToIndianWords(num: number): string {
   if (num === 0) return 'Zero'
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
     'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
@@ -73,7 +73,7 @@ function numberToIndianWords(num: number): string {
   return result
 }
 
-function formatCurrency(amount: number): string {
+export function formatCurrency(amount: number): string {
   return '\u20B9' + amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
@@ -148,7 +148,7 @@ export async function generateQuotationPDF(quotationId: string): Promise<Buffer 
   }
 }
 
-async function createQuotationPDFBuffer(data: QuotationPdfData): Promise<Buffer> {
+export async function createQuotationPDFBuffer(data: QuotationPdfData): Promise<Buffer> {
   let upiQrBuffer: Buffer | null = null
   if (data.upiId) {
     const merchantName = data.businessName.replace(/\s+/g, '+')

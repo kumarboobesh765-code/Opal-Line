@@ -4,7 +4,7 @@ import { getRawClient } from './db/client'
 import { logger } from './logger'
 import { escapeHtml } from './htmlEscape'
 
-interface InvoiceItem {
+export interface InvoiceItem {
   name: string
   hsn: string
   quantity: number
@@ -16,7 +16,7 @@ interface InvoiceItem {
   huid?: string | null
 }
 
-interface InvoiceData {
+export interface InvoiceData {
   id: string
   invoiceNumber: string
   date: string
@@ -67,7 +67,7 @@ const COLORS = {
   divider: '#e5e7eb',
 }
 
-function numberToIndianWords(num: number): string {
+export function numberToIndianWords(num: number): string {
   if (num === 0) return 'Zero'
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
     'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
@@ -90,7 +90,7 @@ function numberToIndianWords(num: number): string {
   return result
 }
 
-function formatCurrency(amount: number): string {
+export function formatCurrency(amount: number): string {
   return '\u20B9' + amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
@@ -188,7 +188,7 @@ export async function generateInvoicePDF(invoiceId: string): Promise<Buffer | nu
   }
 }
 
-async function createPDFBuffer(data: InvoiceData): Promise<Buffer> {
+export async function createPDFBuffer(data: InvoiceData): Promise<Buffer> {
   // Pre-generate UPI QR code buffer (async) so it's available inside PDFDocument
   let upiQrBuffer: Buffer | null = null
   if (data.upiId) {
