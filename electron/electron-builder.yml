@@ -4,20 +4,31 @@ copyright: Copyright © 2026 Opal Line Jewels LLP
 
 directories:
   output: dist-electron
-  # buildResources: build
+  # Custom app/installer icon (build/icon.ico — regenerate with
+  # `node scripts/build-icon.mjs`)
+  buildResources: build
 
 files:
   - electron/dist/**/*
-  - frontend/dist/**/*
   - "!**/node_modules/**"
   - "!backend/**"
   - "!frontend/src/**"
   - "!**/*.ts"
   - "!**/tsconfig.json"
 
-asar: false
+# The Electron main/preload bundle goes into app.asar. The backend and the
+# frontend dist must NOT: the backend runs as a plain Node child process
+# (ELECTRON_RUN_AS_NODE) with no asar filesystem patching, and it serves the
+# frontend from resources/frontend/dist.
+asar: true
 
 extraResources:
+  # Served by the backend at runtime (see frontendDist candidates in
+  # backend/src/index.ts) — must live outside app.asar.
+  - from: frontend/dist
+    to: frontend/dist
+    filter:
+      - "**/*"
   - from: backend/dist
     to: backend/dist
     filter:
