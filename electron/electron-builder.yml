@@ -57,6 +57,13 @@ win:
   artifactName: "${productName}-Setup-${version}.${ext}"
   # Request no admin privileges — prevents UAC prompt on launch
   requestedExecutionLevel: asInvoker
+  # Code-sign the app exe and the NSIS installer with the code-signing
+  # certificate in Cert:\CurrentUser\My whose subject contains this name.
+  # Defaults to an RFC 3161 timestamp at http://timestamp.digicert.com.
+  # A missing/mismatched cert now fails the build instead of silently
+  # shipping an unsigned exe.
+  signtoolOptions:
+    certificateSubjectName: Opal Line Billing
 
 nsis:
   oneClick: false
