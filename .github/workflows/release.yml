@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allows re-running from an existing tag (select the tag as the ref).
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify release ref
+        shell: pwsh
+        run: |
+          if (-not '${{ github.ref }}'.StartsWith('refs/tags/v')) {
+            Write-Error 'Release builds must run from a v* tag. Push a tag (e.g. v1.0.0) or dispatch this workflow with a tag selected as the ref.'
+            exit 1
+          }
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # electron-builder.yml mandates a cert with subject "Opal Line Billing"
+      # (missing cert = failed build), so the release job imports it from a
+      # repository secret. Create it from a machine that has the cert:
+      #   Export-PfxCertificate -Cert Cert:\CurrentUser\My\<thumbprint> -FilePath code-signing.pfx -Password (ConvertTo-SecureString '' -AsPlainText -Force)
+      #   gh secret set WIN_SIGNING_PFX_B64 --body ([Convert]::ToBase64String([IO.File]::ReadAllBytes('code-signing.pfx')))
+      - name: Import code-signing certificate
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WIN_SIGNING_PFX_B64 }}
+          PFX_PASSWORD: ${{ secrets.WIN_SIGNING_PFX_PASSWORD }}
+        run: |
+          if (-not $env:PFX_B64) {
+            Write-Error 'Missing repository secret WIN_SIGNING_PFX_B64 (base64 PFX of the "Opal Line Billing" code-signing cert). See the comment in .github/workflows/release.yml for how to create it.'
+            exit 1
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'code-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
+          $sec = if ($env:PFX_PASSWORD) { ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force } else { New-Object System.Security.SecureString }
+          $cert = Import-PfxCertificate -FilePath $pfx -Password $sec -CertStoreLocation 'Cert:\CurrentUser\My'
+          Remove-Item $pfx -Force
+          if ($cert.Subject -notlike '*Opal Line Billing*') {
+            Write-Error "Unexpected certificate subject: $($cert.Subject) (expected CN=Opal Line Billing)"
+            exit 1
+          }
+          Write-Host "Imported $($cert.Subject) thumbprint=$($cert.Thumbprint) expires=$($cert.NotAfter)"
+
+      - name: Lint, typecheck and test
+        run: |
+          npm run lint
+          npm run typecheck
+          npm test
+
+      - name: Sync package version with tag
+        shell: pwsh
+        run: |
+          $v = '${{ github.ref_name }}' -replace '^v', ''
+          npm version $v --no-git-tag-version --allow-same-version
+          Write-Host "Building version $v"
+
+      - name: Build signed Windows installer
+        run: npm run electron:build
+
+      - name: Verify installer artifacts and signature
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem 'dist-electron' -Filter '*Setup-*.exe' | Select-Object -First 1
+          if (-not $setup) {
+            Write-Error 'No NSIS installer found in dist-electron/.'
+            exit 1
+          }
+          $sig = Get-AuthenticodeSignature $setup.FullName
+          Write-Host "$($setup.Name) => $($sig.Status)"
+          if ($sig.Status -ne 'Valid') {
+            Write-Error "Installer Authenticode status is '$($sig.Status)', expected 'Valid'."
+            exit 1
+          }
+          $blockmap = "$($setup.FullName).blockmap"
+          if (-not (Test-Path $blockmap)) {
+            Write-Error "Missing blockmap next to installer: $blockmap"
+            exit 1
+          }
+
+      - name: Create GitHub Release with installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-electron/*Setup-*.exe
+            dist-electron/*.blockmap
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

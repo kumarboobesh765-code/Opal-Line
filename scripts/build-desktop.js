@@ -209,7 +209,8 @@ async function main() {
   run('npx electron-builder --config electron/electron-builder.yml --win')
 
   console.log('\n✅ Build complete!')
-  console.log('📦 Installer: dist-electron/Opal Line Billing-Setup-1.0.0.exe')
+  const { version } = require(path.join(ROOT, 'package.json'))
+  console.log(`📦 Installer: dist-electron/Opal Line Billing-Setup-${version}.exe`)
   console.log(hasPg
     ? '   ✔ Bundled PostgreSQL — target PCs need NOTHING pre-installed.'
     : '   ⚠ No PostgreSQL bundled — target PCs need PostgreSQL or DATABASE_URL.')

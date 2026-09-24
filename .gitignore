@@ -17,6 +17,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Secrets
+*.pfx
 .env
 .env.*
 !.env.example
