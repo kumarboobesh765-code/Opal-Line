@@ -21,6 +21,7 @@
     "lint": "npm run lint -w frontend",
     "typecheck": "npm run typecheck -w backend",
     "test": "npm run test -w backend",
+    "test:e2e": "playwright test",
     "db:push": "npm run db:push -w backend",
     "db:generate": "npm run db:generate -w backend",
     "db:seed": "npm run db:seed -w backend",
@@ -34,6 +35,7 @@
     "docker:logs": "docker compose logs -f"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "concurrently": "^10.0.4",
     "electron": "^35.7.5",
     "electron-builder": "^26.0.12",

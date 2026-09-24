@@ -3,6 +3,7 @@ import { eq, gt, lt } from 'drizzle-orm'
 import type { NextFunction, Request, Response } from 'express'
 import { CONSTANTS } from './constants'
 import { logger } from './logger'
+import { parseDbTimestamp } from './lib/dbtime'
 
 export interface Session {
   userId: string
@@ -85,7 +86,10 @@ export async function getSessionUserId(token: string | undefined): Promise<{ use
     const session = rows[0]
     if (!session) return { userId: null, dbError: false }
 
-    if (!session.expiresAt || new Date() > new Date(session.expiresAt)) {
+    // expiresAt is stored as UTC without a zone marker — parse as UTC or the
+    // session appears expired hours early on non-UTC machines.
+    const expiresAt = parseDbTimestamp(session.expiresAt)
+    if (!expiresAt || new Date() > expiresAt) {
       await db.delete(schema.sessions).where(eq(schema.sessions.token, token))
       return { userId: null, dbError: false }
     }

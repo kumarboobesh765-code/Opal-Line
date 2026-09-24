@@ -7,6 +7,7 @@ import { computeUserPermissions } from '../rbac'
 import { recordActivity } from '../activity'
 import { createSession, destroySession, destroyUserSessions, requireAuth, tokenFromRequest, setSessionCookie, clearSessionCookie } from '../sessions'
 import { validate, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema } from '../validation'
+import { parseDbTimestamp } from '../lib/dbtime'
 
 export const authRouter = Router()
 
@@ -22,7 +23,11 @@ async function checkLockout(identifier: string): Promise<{ locked: boolean; rema
       .limit(1)
     const entry = rows[0]
     if (!entry || !entry.lastAttempt) return { locked: false, remainingMs: 0 }
-    const lastAttempt = new Date(entry.lastAttempt).getTime()
+    // Stored timestamps are UTC without a zone marker — parse them as UTC or
+    // every recent failure looks hours old on non-UTC machines and the lockout
+    // counter resets on each attempt (lockout never fires).
+    const lastAttempt = parseDbTimestamp(entry.lastAttempt)?.getTime()
+    if (lastAttempt === undefined || Number.isNaN(lastAttempt)) return { locked: false, remainingMs: 0 }
     if (Date.now() - lastAttempt > LOCKOUT_DURATION_MS) {
       await getDb.delete(schema.loginAttempts).where(eq(schema.loginAttempts.identifier, identifier))
       return { locked: false, remainingMs: 0 }
