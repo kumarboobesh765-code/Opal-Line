@@ -385,7 +385,7 @@ function backComputePricing(price: number, rate: number): { netWeight: number; m
  * Shopify list too — de-duplicate by filename suffix. Local-only entries are
  * preserved so nothing is lost on sync.
  */
-function mergeImages(local: string[] | null, shopify: string[]): string[] | null {
+export function mergeImages(local: string[] | null, shopify: string[]): string[] | null {
   const localList = (local ?? []).filter(Boolean)
   const remoteList = (shopify ?? []).filter(Boolean)
   if (remoteList.length === 0) return localList.length > 0 ? localList : null
@@ -1055,78 +1055,107 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
     }
   }
 
-  // Make the listing match the local gallery: remove listing images that no
-  // longer correspond to any local ref (matched by stable alt marker or URL
-  // pathname, plus anything just added above). Never delete when the local
-  // gallery is empty — that would wipe images the user manages elsewhere.
+  // Make the listing match the local gallery, then point the local row at
+  // Shopify's hosted copies (CDN URLs). Never delete when the local gallery
+  // is empty — that would wipe images the user manages elsewhere.
   const localRefs = [...new Set([...(local.images ?? []), local.image].filter(Boolean) as string[])]
-  if (localRefs.length > 0) {
-    const localAlts = new Set(
-      localRefs
-        .filter((ref) => /^\/?uploads\//i.test(ref) || /^\/?images\//i.test(ref))
-        .map((ref) => path.basename(ref)),
-    )
-    const localPathnames = new Set<string>()
-    for (const ref of localRefs) {
-      if (/^https?:\/\//i.test(ref)) {
-        try { localPathnames.add(new URL(ref).pathname) } catch { /* skip unparsable */ }
-      }
+  await reconcileListingImages(id, localRefs, justAddedPathnames, (imgs) =>
+    writebackShopifyImageUrls(local.id, String(id), imgs),
+  )
+}
+
+/**
+ * Reconcile a Shopify listing's images with the local gallery after a push:
+ *
+ * - delete listing images that match no local ref — a *verified* DELETE with
+ *   429/5xx backoff (commit 0952017: fire-and-forget deletes let rate-limited
+ *   placeholder cards survive on the listing);
+ * - hand the write-back only the kept survivors (post-delete view), never the
+ *   pre-delete snapshot, so a poisoned local row can't re-add stale images;
+ * - wait briefly for Shopify's async image processing so just-added images are
+ *   visible before writing back (commit 78fe34f: racing the processor left the
+ *   local row on the old local path).
+ *
+ * No-op when the local gallery is empty. Best-effort: never throws.
+ * Exported so the image write-back regressions are covered by tests.
+ */
+export async function reconcileListingImages(
+  productId: number,
+  localRefsInput: string[],
+  justAddedPathnames: Set<string>,
+  writeback: (imgs?: Array<{ src?: string }>) => Promise<void>,
+): Promise<{ kept: Array<{ src?: string }>; deleted: number }> {
+  let kept: Array<{ src?: string }> = []
+  let deleted = 0
+  const localRefs = [...new Set(localRefsInput.filter(Boolean))]
+  if (localRefs.length === 0) return { kept, deleted }
+
+  const url = new URL(apiPath(config.apiVersion, `products/${productId}`))
+  const localAlts = new Set(
+    localRefs
+      .filter((ref) => /^\/?uploads\//i.test(ref) || /^\/?images\//i.test(ref))
+      .map((ref) => path.basename(ref)),
+  )
+  const localPathnames = new Set<string>()
+  for (const ref of localRefs) {
+    if (/^https?:\/\//i.test(ref)) {
+      try { localPathnames.add(new URL(ref).pathname) } catch { /* skip unparsable */ }
     }
-    try {
-      const get = await fetch(url, {
-        headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
-      })
-      if (get.ok) {
-        const json = (await get.json()) as { product?: { images?: Array<{ id?: number; alt?: string | null; src?: string }> } }
-        const listedImages = json.product?.images ?? []
-        const keptImages: Array<{ src?: string }> = []
-        for (const img of listedImages) {
-          if (!img.id || !img.src) continue
-          let pathname = img.src
-          try { pathname = new URL(img.src).pathname } catch { /* use raw */ }
-          const keep =
-            justAddedPathnames.has(pathname) ||
-            (img.alt != null && localAlts.has(img.alt)) ||
-            localPathnames.has(pathname)
-          // Build the post-delete view: only images we keep are written back
-          // locally, so a stale listing image (old placeholder card) can never
-          // be mirrored into the local row again.
-          if (keep) { keptImages.push({ src: img.src }); continue }
-          // Stale listing image — delete it with a status check and 429/5xx
-          // backoff. This used to be fire-and-forget: a rate-limited DELETE
-          // failed silently while the write-back still recorded the image.
-          await deleteShopifyImageWithRetry(id, img.id)
-        }
-        // Point the local row at Shopify's hosted copies (CDN URLs) so the
-        // product's image refs are the Shopify image URL itself — image bytes
-        // live only on Shopify/disk, never in the database. Pass keptImages
-        // (post-cleanup), not the pre-delete listing snapshot.
-        // Shopify processes image uploads asynchronously: the just-added image
-        // may not appear on the listing for a few seconds, which previously
-        // made keptImages empty/stale and skipped the write-back. Wait briefly
-        // and re-fetch until the listing reflects what we just added.
-        let finalImgs = keptImages
-        if (justAddedPathnames.size > 0) {
-          const has = (imgs: Array<{ src?: string }>) =>
-            imgs.filter((i) => {
-              if (!i.src) return false
-              try { return justAddedPathnames.has(new URL(i.src).pathname) } catch { return false }
-            }).length
-          for (let r = 0; r < 4 && has(finalImgs) < justAddedPathnames.size; r++) {
-            await new Promise((res) => setTimeout(res, 1500))
-            try {
-              const g2 = await fetch(url, { headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' } })
-              if (g2.ok) {
-                const j2 = (await g2.json()) as { product?: { images?: Array<{ src?: string }> } }
-                finalImgs = j2.product?.images ?? []
-              }
-            } catch { /* retry */ }
-          }
-        }
-        await writebackShopifyImageUrls(local.id, String(id), finalImgs.length > 0 ? finalImgs : undefined)
-      }
-    } catch { /* best-effort image cleanup + write-back */ }
   }
+  try {
+    const get = await fetch(url, {
+      headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
+    })
+    if (get.ok) {
+      const json = (await get.json()) as { product?: { images?: Array<{ id?: number; alt?: string | null; src?: string }> } }
+      const listedImages = json.product?.images ?? []
+      const keptImages: Array<{ src?: string }> = []
+      for (const img of listedImages) {
+        if (!img.id || !img.src) continue
+        let pathname = img.src
+        try { pathname = new URL(img.src).pathname } catch { /* use raw */ }
+        const keep =
+          justAddedPathnames.has(pathname) ||
+          (img.alt != null && localAlts.has(img.alt)) ||
+          localPathnames.has(pathname)
+        // Build the post-delete view: only images we keep are written back
+        // locally, so a stale listing image (old placeholder card) can never
+        // be mirrored into the local row again.
+        if (keep) { keptImages.push({ src: img.src }); continue }
+        // Stale listing image — delete it with a status check and 429/5xx
+        // backoff. This used to be fire-and-forget: a rate-limited DELETE
+        // failed silently while the write-back still recorded the image.
+        if (await deleteShopifyImageWithRetry(productId, img.id)) deleted++
+      }
+      // Point the local row at Shopify's hosted copies (CDN URLs). Pass
+      // keptImages (post-cleanup), not the pre-delete listing snapshot.
+      // Shopify processes image uploads asynchronously: the just-added image
+      // may not appear on the listing for a few seconds, which previously
+      // made keptImages empty/stale and skipped the write-back. Wait briefly
+      // and re-fetch until the listing reflects what we just added.
+      let finalImgs = keptImages
+      if (justAddedPathnames.size > 0) {
+        const has = (imgs: Array<{ src?: string }>) =>
+          imgs.filter((i) => {
+            if (!i.src) return false
+            try { return justAddedPathnames.has(new URL(i.src).pathname) } catch { return false }
+          }).length
+        for (let r = 0; r < 4 && has(finalImgs) < justAddedPathnames.size; r++) {
+          await new Promise((res) => setTimeout(res, 1500))
+          try {
+            const g2 = await fetch(url, { headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' } })
+            if (g2.ok) {
+              const j2 = (await g2.json()) as { product?: { images?: Array<{ src?: string }> } }
+              finalImgs = j2.product?.images ?? []
+            }
+          } catch { /* retry */ }
+        }
+      }
+      kept = finalImgs
+      await writeback(finalImgs.length > 0 ? finalImgs : undefined)
+    }
+  } catch { /* best-effort image cleanup + write-back */ }
+  return { kept, deleted }
 }
 
 /**

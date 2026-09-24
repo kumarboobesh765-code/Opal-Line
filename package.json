@@ -20,6 +20,7 @@
     "build:all": "npm run build -w frontend",
     "lint": "npm run lint -w frontend",
     "typecheck": "npm run typecheck -w backend",
+    "test": "npm run test -w backend",
     "db:push": "npm run db:push -w backend",
     "db:generate": "npm run db:generate -w backend",
     "db:seed": "npm run db:seed -w backend",
