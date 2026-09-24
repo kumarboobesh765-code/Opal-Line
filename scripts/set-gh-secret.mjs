@@ -35,7 +35,7 @@ const headers = {
   'User-Agent': 'opal-line-tools',
 }
 
-const pubRes = await fetch(`https://api.github.com/repos/${REPO}/actions/public-key`, { headers })
+const pubRes = await fetch(`https://api.github.com/repos/${REPO}/actions/secrets/public-key`, { headers })
 if (!pubRes.ok) {
   console.error(`public-key fetch failed: HTTP ${pubRes.status} ${await pubRes.text()}`)
   process.exit(1)
