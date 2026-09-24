@@ -58,11 +58,6 @@ backend/uploads/
 # Desktop build output
 dist-electron-app/
 
-# Ad-hoc local test scripts (contain environment-specific paths)
-full-e2e-test.mjs
-dashboard-test.mjs
-tmp-trace.mjs
-
 # Local dev convenience
 start-server.cmd
 opencode.json
