@@ -46,6 +46,9 @@ import type {
   ReorderSuggestion,
   Shipment,
   NotificationLogEntry,
+  SystemLogFileInfo,
+  SystemLogTail,
+  SystemStatusInfo,
 } from '@/types'
 export type { SyncCompareRow } from '@/types/shopify'
 import type {
@@ -812,6 +815,12 @@ export const envConfigApi = {
       method: 'POST',
       body: JSON.stringify({ values }),
     }),
+}
+
+export const systemApi = {
+  status: () => request<SystemStatusInfo>('/system/status'),
+  logFiles: () => request<{ directory: string; files: SystemLogFileInfo[] }>('/system/log-files'),
+  logs: (file: string, lines = 200) => request<SystemLogTail>(`/system/logs?file=${encodeURIComponent(file)}&lines=${lines}`),
 }
 
 export const backupApi = {

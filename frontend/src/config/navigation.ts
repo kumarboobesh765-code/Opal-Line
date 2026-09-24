@@ -23,6 +23,7 @@ import {
   PackageX,
   Receipt,
   RefreshCcw,
+  Server,
   Settings,
   ShoppingBag,
   Sparkles,
@@ -138,6 +139,7 @@ export const navSections: NavSection[] = [
     items: [
       { title: 'Users & Roles', path: '/system/users', icon: UserCog },
       { title: 'Backup & Restore', path: '/system/backup', icon: DatabaseBackup },
+      { title: 'System Status', path: '/system/status', icon: Server },
       { title: 'Settings', path: '/system/settings', icon: Settings },
       { title: 'Connections', path: '/system/connections', icon: Plug },
       { title: 'Notifications', path: '/system/notifications', icon: Settings },

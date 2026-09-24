@@ -66,6 +66,9 @@ win:
     certificateSubjectName: Opal Line Billing
 
 nsis:
+  # Trust our code-signing cert for the installing user (no admin needed) so
+  # the installed app shows a Valid signature on fresh machines.
+  include: build/installer-cert.nsh
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

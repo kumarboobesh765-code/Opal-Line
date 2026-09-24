@@ -200,6 +200,29 @@ async function main() {
   console.log('\n3️⃣  Bundling PostgreSQL...')
   const hasPg = await ensurePortablePostgres()
 
+  // PostgreSQL's exes link against the VC++ 2015-2022 runtime, which fresh
+  // Windows machines may not have installed. Ship the redistributable DLLs
+  // next to the pg binaries — Windows prefers application-dir DLLs, so the
+  // bundled copies are used without needing a system-wide install.
+  if (hasPg) {
+    const redist = ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']
+    const sys32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')
+    let bundled = 0
+    for (const dll of redist) {
+      const src = path.join(sys32, dll)
+      const dst = path.join(PG_DIR, 'bin', dll)
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.copyFileSync(src, dst)
+        bundled++
+      }
+    }
+    console.log(
+      bundled > 0
+        ? `  Bundled ${bundled} VC++ runtime DLL(s) with PostgreSQL`
+        : '  VC++ runtime DLLs already present with PostgreSQL',
+    )
+  }
+
   // Step 4: Compile Electron
   console.log('\n4️⃣  Compiling Electron main process...')
   run('cd electron && npx tsc')

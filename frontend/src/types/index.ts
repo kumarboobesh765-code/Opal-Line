@@ -693,3 +693,48 @@ export interface NotificationLogEntry {
   error: string | null
   createdAt: string | null
 }
+
+export interface SystemStatusInfo {
+  ok: boolean
+  app: { name: string; version: string }
+  runtime: { node: string; platform: string; arch: string; env: string | null }
+  server: {
+    port: number
+    uptimeSec: number
+    rssMb: number
+    heapMb: number
+    sessions: { active: number; totalCreated: number }
+  }
+  database: {
+    configured: boolean
+    healthy: boolean
+    latencyMs: number | null
+    stats: { totalConnections: number; idleConnections: number; waitingCount: number } | null
+  }
+  integrations: { shopify: boolean; emailIngest: boolean }
+  paths: { logs: string; env: string | null }
+}
+
+export interface SystemLogFileInfo {
+  key: string
+  name: string
+  sizeKb: number
+  modifiedAt: string | null
+}
+
+export interface SystemLogTail {
+  file: string
+  directory: string
+  lines: string[]
+}
+
+export interface UpdateStatusInfo {
+  phase: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'
+  current: string
+  latest: string | null
+  progress: number
+  assetName: string | null
+  assetSize: number | null
+  filePath: string | null
+  error: string | null
+}

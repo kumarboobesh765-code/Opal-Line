@@ -1,9 +1,10 @@
-import { app, BrowserWindow, shell, dialog } from 'electron'
+import { app, BrowserWindow, shell, dialog, ipcMain } from 'electron'
 import { join, resolve } from 'node:path'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, openSync, closeSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, openSync, closeSync, readSync, statSync, createWriteStream, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
+import * as https from 'node:https'
 
 let mainWindow: BrowserWindow | null = null
 let backendProcess: ChildProcess | null = null
@@ -274,7 +275,7 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
       args = ['tsx', entry]
       backendProcess = spawn(cmd, args, {
         cwd,
-        env: { ...process.env, PORT: String(BACKEND_PORT), DOTENV_CONFIG_PATH: envPath },
+        env: { ...process.env, PORT: String(BACKEND_PORT), DOTENV_CONFIG_PATH: envPath, APP_VERSION: app.getVersion(), LOG_DIR },
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: true,
       })
@@ -291,6 +292,8 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
         NODE_ENV: 'production',
         DOTENV_CONFIG_PATH: envPath,
         APP_DATA_DIR: DATA_DIR,
+        LOG_DIR,
+        APP_VERSION: app.getVersion(),
         NODE_PATH: join(backendRoot, 'dist', 'node_modules'),
       }
       if (managedDbUrl) backendEnv.DATABASE_URL = managedDbUrl
@@ -388,6 +391,264 @@ function stopPostgres(): void {
   localPostgresStarted = false
 }
 
+// ── Auto-update ──────────────────────────────────────────────────────────
+// Packaged builds poll GitHub Releases for a newer v* tag, download the signed
+// NSIS installer, verify its SHA-256 (release asset digest) and Authenticode
+// signer subject, then relaunch it silently after the app quits. The renderer
+// drives it through the preload bridge (System Status page).
+const UPDATE_REPO = 'kumarboobesh765-code/Opal-Line'
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'
+
+interface UpdateState {
+  phase: UpdatePhase
+  latest: string | null
+  progress: number
+  assetName: string | null
+  assetSize: number | null
+  filePath: string | null
+  error: string | null
+}
+
+let updateState: UpdateState = { phase: 'idle', latest: null, progress: 0, assetName: null, assetSize: null, filePath: null, error: null }
+let updateDownloadUrl: string | null = null
+let updateExpectedSha256: string | null = null
+let updateDialogOpen = false
+
+function publicUpdateState(): UpdateState & { current: string } {
+  return { ...updateState, current: app.isPackaged ? app.getVersion() : 'dev' }
+}
+
+function httpsGetBody(url: string, headers: Record<string, string>, timeoutMs: number, redirects = 0): Promise<{ status: number; body: string }> {
+  return new Promise((resolvePromise, rejectP) => {
+    const req = https.get(url, { headers, timeout: timeoutMs }, (resp) => {
+      const location = resp.headers.location
+      if (resp.statusCode && resp.statusCode >= 300 && resp.statusCode < 400 && location) {
+        resp.resume()
+        if (redirects >= 5) { rejectP(new Error('Too many redirects')); return }
+        httpsGetBody(location, headers, timeoutMs, redirects + 1).then(resolvePromise, rejectP)
+        return
+      }
+      let data = ''
+      resp.setEncoding('utf8')
+      resp.on('data', (chunk: string) => { data += chunk })
+      resp.on('end', () => resolvePromise({ status: resp.statusCode ?? 0, body: data }))
+    })
+    req.on('timeout', () => req.destroy(new Error('Request timed out')))
+    req.on('error', rejectP)
+  })
+}
+
+function httpsDownload(url: string, dest: string, totalBytes: number, onProgress: (pct: number) => void, redirects = 0): Promise<void> {
+  return new Promise((resolvePromise, rejectP) => {
+    const req = https.get(url, { timeout: 60000 }, (resp) => {
+      const location = resp.headers.location
+      if (resp.statusCode && resp.statusCode >= 300 && resp.statusCode < 400 && location) {
+        resp.resume()
+        if (redirects >= 5) { rejectP(new Error('Too many redirects')); return }
+        httpsDownload(location, dest, totalBytes, onProgress, redirects + 1).then(resolvePromise, rejectP)
+        return
+      }
+      if (resp.statusCode !== 200) {
+        resp.resume()
+        rejectP(new Error(`Download failed (HTTP ${resp.statusCode})`))
+        return
+      }
+      const file = createWriteStream(dest)
+      let received = 0
+      let lastPct = -1
+      resp.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        if (totalBytes > 0) {
+          const pct = Math.min(99, Math.floor((received / totalBytes) * 100))
+          if (pct !== lastPct) { lastPct = pct; onProgress(pct) }
+        }
+      })
+      resp.pipe(file)
+      file.on('finish', () => {
+        file.close(() => {
+          if (totalBytes > 0 && received !== totalBytes) {
+            rejectP(new Error(`Download truncated (${received}/${totalBytes} bytes)`))
+            return
+          }
+          onProgress(100)
+          resolvePromise()
+        })
+      })
+      file.on('error', rejectP)
+      resp.on('error', rejectP)
+    })
+    req.on('timeout', () => req.destroy(new Error('Download timed out')))
+    req.on('error', rejectP)
+  })
+}
+
+function sha256File(file: string): string {
+  const hash = createHash('sha256')
+  const fd = openSync(file, 'r')
+  try {
+    const size = statSync(file).size
+    const buf = Buffer.alloc(1024 * 1024)
+    let pos = 0
+    while (pos < size) {
+      const read = readSync(fd, buf, 0, buf.length, pos)
+      if (read <= 0) break
+      hash.update(buf.subarray(0, read))
+      pos += read
+    }
+  } finally {
+    closeSync(fd)
+  }
+  return hash.digest('hex')
+}
+
+function verifyInstallerSignature(file: string): void {
+  const escaped = file.replace(/'/g, "''")
+  const script = [
+    `$s = Get-AuthenticodeSignature -LiteralPath '${escaped}'`,
+    'if (-not $s.SignerCertificate) { exit 2 }',
+    "if ($s.Status -eq 'HashMismatch' -or $s.Status -eq 'NotSigned') { exit 3 }",
+    "if ($s.SignerCertificate.Subject -notlike '*Opal Line Billing*') { exit 4 }",
+    'exit 0',
+  ].join('; ')
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: 'ignore', timeout: 60000 })
+}
+
+function isNewerVersion(current: string, latest: string): boolean {
+  const pa = current.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const pb = latest.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0)
+  for (let i = 0; i < 3; i++) {
+    const diff = (pb[i] ?? 0) - (pa[i] ?? 0)
+    if (diff !== 0) return diff > 0
+  }
+  return false
+}
+
+async function checkForUpdates(opts: { announce: boolean }): Promise<UpdateState & { current: string }> {
+  if (!app.isPackaged) {
+    updateState = { ...updateState, phase: 'up-to-date' }
+    return publicUpdateState()
+  }
+  if (updateState.phase === 'checking' || updateState.phase === 'downloading') return publicUpdateState()
+  updateState = { ...updateState, phase: 'checking', error: null }
+  try {
+    const { status, body } = await httpsGetBody(
+      `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`,
+      { 'User-Agent': 'opal-line-updater', Accept: 'application/vnd.github+json' },
+      20000,
+    )
+    if (status !== 200) throw new Error(`GitHub API returned HTTP ${status}`)
+    const release = JSON.parse(body) as {
+      tag_name?: string
+      assets?: Array<{ name: string; browser_download_url: string; size: number; digest?: string }>
+    }
+    const latest = (release.tag_name ?? '').trim().replace(/^v/, '')
+    if (!/^\d+\.\d+\.\d+/.test(latest)) throw new Error('Latest release has no usable version tag')
+    const current = app.getVersion()
+    if (!isNewerVersion(current, latest)) {
+      updateState = { ...updateState, phase: 'up-to-date', latest }
+      return publicUpdateState()
+    }
+    const assets = release.assets ?? []
+    const asset = assets.find((a) => /-Setup-.*\.exe$/i.test(a.name)) ?? assets.find((a) => a.name.endsWith('.exe'))
+    if (!asset) throw new Error('Newer release has no installer asset')
+    updateDownloadUrl = asset.browser_download_url
+    updateExpectedSha256 = asset.digest && asset.digest.toLowerCase().startsWith('sha256:') ? asset.digest.slice(6) : null
+    updateState = { ...updateState, phase: 'available', latest, assetName: asset.name, assetSize: asset.size, error: null }
+    logLine('update', `version ${latest} available (installed ${current})`)
+    if (opts.announce && !updateDialogOpen) {
+      updateDialogOpen = true
+      dialog.showMessageBox({
+        type: 'info',
+        title: 'Opal Line Billing — Update available',
+        message: `Version ${latest} is available.`,
+        detail: `You have ${current}. The update will be downloaded and verified, then the app will restart to install it.`,
+        buttons: ['Download & install', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+        .then((r) => { updateDialogOpen = false; if (r.response === 0) void downloadUpdateAndOfferInstall() })
+        .catch(() => { updateDialogOpen = false })
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    updateState = { ...updateState, phase: 'error', error: message }
+    logLine('update', `check failed: ${message}`)
+  }
+  return publicUpdateState()
+}
+
+async function downloadUpdateAndOfferInstall(): Promise<UpdateState & { current: string }> {
+  if (!updateDownloadUrl || !updateState.latest || !updateState.assetName) return publicUpdateState()
+  if (updateState.phase === 'downloading' || updateState.phase === 'ready') return publicUpdateState()
+  const dest = join(app.getPath('temp'), `OpalLine-Setup-${updateState.latest}.exe`)
+  updateState = { ...updateState, phase: 'downloading', progress: 0, error: null }
+  logLine('update', `downloading ${updateState.assetName}…`)
+  try {
+    await httpsDownload(updateDownloadUrl, dest, updateState.assetSize ?? 0, (pct) => {
+      updateState = { ...updateState, progress: pct }
+      if (pct % 25 === 0) logLine('update', `download ${pct}%`)
+    })
+    if (updateExpectedSha256) {
+      const actual = sha256File(dest)
+      if (actual !== updateExpectedSha256) throw new Error('Downloaded installer failed SHA-256 verification')
+    }
+    try {
+      verifyInstallerSignature(dest)
+    } catch {
+      throw new Error('Downloaded installer failed signature verification')
+    }
+    updateState = { ...updateState, phase: 'ready', progress: 100, filePath: dest }
+    logLine('update', `verified update ${updateState.latest} at ${dest}`)
+    if (!updateDialogOpen) {
+      updateDialogOpen = true
+      dialog.showMessageBox({
+        type: 'info',
+        title: 'Update ready',
+        message: `Version ${updateState.latest} is downloaded and verified.`,
+        detail: 'The app will restart to finish the update.',
+        buttons: ['Restart now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+        .then((r) => { updateDialogOpen = false; if (r.response === 0) installUpdateAndRestart() })
+        .catch(() => { updateDialogOpen = false })
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    updateState = { ...updateState, phase: 'error', error: message }
+    logLine('update', `download failed: ${message}`)
+    try { rmSync(dest, { force: true }) } catch { /* ignore */ }
+  }
+  return publicUpdateState()
+}
+
+function installUpdateAndRestart(): void {
+  if (!updateState.filePath) return
+  const setup = updateState.filePath
+  logLine('update', `restarting into installer ${setup}`)
+  const ps = `Start-Sleep -Seconds 4; Start-Process -FilePath '${setup.replace(/'/g, "''")}' -ArgumentList '/S'`
+  const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+  app.quit()
+}
+
+ipcMain.handle('updates:status', () => publicUpdateState())
+ipcMain.handle('updates:check', () => checkForUpdates({ announce: false }))
+ipcMain.handle('updates:download', () => downloadUpdateAndOfferInstall())
+ipcMain.handle('updates:install', () => {
+  if (updateState.phase === 'ready') {
+    installUpdateAndRestart()
+    return true
+  }
+  return false
+})
+
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 app.on('before-quit', () => {
@@ -405,6 +666,11 @@ async function main() {
     await startBackend(envPath, managedUrl || null)
     console.log('[electron] Backend started, creating window…')
     createWindow()
+    // Auto-update: first check shortly after launch, then every 6 hours.
+    if (app.isPackaged) {
+      setTimeout(() => { void checkForUpdates({ announce: true }) }, 60 * 1000)
+      setInterval(() => { void checkForUpdates({ announce: true }) }, UPDATE_CHECK_INTERVAL_MS)
+    }
     // On first run, show credentials dialog after a short delay
     if (isFirstRun) {
       setTimeout(() => {
