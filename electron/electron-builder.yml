@@ -8,6 +8,11 @@ directories:
   # `node scripts/build-icon.mjs`)
   buildResources: build
 
+# Never let electron-builder publish on its own — it otherwise infers a GitHub
+# release publish (needs a PAT) and fails the build. The release workflow
+# attaches the installer to the GitHub Release itself.
+publish: null
+
 files:
   - electron/dist/**/*
   - "!**/node_modules/**"
