@@ -64,7 +64,14 @@ jobs:
             Write-Error "Unexpected certificate subject: $($cert.Subject) (expected CN=Opal Line Billing)"
             exit 1
           }
-          Write-Host "Imported $($cert.Subject) thumbprint=$($cert.Thumbprint) expires=$($cert.NotAfter)"
+          # Self-signed certs only report Get-AuthenticodeSignature 'Valid'
+          # once the root is trusted — CurrentUser stores need no admin.
+          $cer = Join-Path $env:RUNNER_TEMP 'signing-cert.cer'
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
+          Remove-Item $cer -Force
+          Write-Host "Imported $($cert.Subject) thumbprint=$($cert.Thumbprint) expires=$($cert.NotAfter) and trusted it for the current user"
 
       - name: Lint, typecheck and test
         run: |
