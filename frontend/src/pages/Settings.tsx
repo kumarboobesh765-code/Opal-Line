@@ -74,7 +74,7 @@ function SettingsContent() {
       const saved = await dbApi.updateSettings(settings)
       setSettings((s) => ({ ...s, ...saved }))
       setStatus('saved')
-    } catch (e) {
+    } catch {
       setError('Failed to save settings')
       setStatus('error')
     } finally {

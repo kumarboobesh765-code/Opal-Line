@@ -110,7 +110,7 @@ export default function LedgerPage() {
     }
   }
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = useCallback(async (id: string) => {
     if (!(await confirmDialog({ title: 'Delete this ledger entry?', danger: true, confirmLabel: 'Delete' }))) return
     const snapshot = entries.find((e) => e.id === id)
     try {
@@ -131,7 +131,7 @@ export default function LedgerPage() {
     } catch {
       toast.error('Failed to delete entry')
     }
-  }
+  }, [entries, load])
 
   const columns = useMemo<ColumnDef<LedgerEntry>[]>(
     () => [
@@ -188,7 +188,7 @@ export default function LedgerPage() {
         ),
       },
     ],
-    [load]
+    [handleDelete]
   )
 
   return (

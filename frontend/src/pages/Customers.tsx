@@ -1,5 +1,5 @@
 import { toast, promptDialog } from '@/components/ui/confirm'
-﻿import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import { Download, FileText, MoreHorizontal, Plus, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
@@ -281,7 +281,7 @@ export default function CustomersPage() {
         },
       },
     ],
-    [],
+    [navigate],
   )
 
   return (

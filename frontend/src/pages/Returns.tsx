@@ -1,5 +1,5 @@
 import { toast } from '@/components/ui/confirm'
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import { Ban, CheckCircle2, FileDown, Search, Undo2, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'

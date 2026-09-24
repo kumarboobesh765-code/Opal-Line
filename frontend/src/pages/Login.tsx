@@ -27,7 +27,7 @@ export default function LoginPage() {
     try {
       await login(identifier.trim(), password)
       navigate('/', { replace: true })
-    } catch (e) {
+    } catch {
       setError('Invalid username or password')
       setSigningIn(false)
     }

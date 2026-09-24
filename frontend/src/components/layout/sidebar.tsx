@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { ChevronRight, LogOut, Gem, ShieldCheck } from 'lucide-react'
 import { navSections } from '@/config/navigation'
@@ -31,10 +31,13 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
     [hasPermission],
   )
 
-  const isPathActive = (path: string) =>
-    path === '/'
-      ? location.pathname === '/'
-      : location.pathname === path || location.pathname.startsWith(`${path}/`)
+  const isPathActive = useCallback(
+    (path: string) =>
+      path === '/'
+        ? location.pathname === '/'
+        : location.pathname === path || location.pathname.startsWith(`${path}/`),
+    [location.pathname],
+  )
 
   useEffect(() => {
     const section = visibleSections.find((s) =>
@@ -43,7 +46,7 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
     if (section) {
       setExpanded((prev) => ({ ...prev, [section.label]: true }))
     }
-  }, [location.pathname, visibleSections])
+  }, [location.pathname, visibleSections, isPathActive])
 
   const isActive = isPathActive
 

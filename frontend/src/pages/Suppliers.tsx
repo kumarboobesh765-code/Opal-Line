@@ -87,14 +87,14 @@ export default function SuppliersPage() {
     }
   }
 
-  const deactivate = async (supplier: Supplier) => {
+  const deactivate = useCallback(async (supplier: Supplier) => {
     try {
       await dbApi.update('suppliers', supplier.id, { status: 'inactive' })
       load()
     } catch {
       toast.error('Failed to deactivate supplier')
     }
-  }
+  }, [load])
 
   const columns = useMemo<ColumnDef<Supplier>[]>(
     () => [
@@ -211,7 +211,7 @@ export default function SuppliersPage() {
         ),
       },
     ],
-    [load],
+    [load, deactivate, navigate],
   )
 
   return (

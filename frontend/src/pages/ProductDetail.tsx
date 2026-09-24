@@ -1,5 +1,5 @@
 import { toast } from '@/components/ui/confirm'
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ChevronRight,
@@ -23,7 +23,7 @@ import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ProductDialog } from '@/components/product-dialog'
-import { productImageGallery } from './Products'
+import { productImageGallery } from '@/lib/product-image'
 import { dbApi, shopifyApi } from '@/lib/api'
 import type { Product, SilverRate } from '@/types'
 import { formatCurrency, formatDate, formatWeight } from '@/lib/format'

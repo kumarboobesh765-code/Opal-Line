@@ -383,7 +383,7 @@ export default function SalesOrdersPage() {
     })
   }, [orders, query, status])
 
-  const startEdit = (o: SalesOrder) => {
+  const startEdit = useCallback((o: SalesOrder) => {
     setEditing(o)
     setFormError('')
     setCreated(null)
@@ -407,10 +407,10 @@ export default function SalesOrdersPage() {
         : [emptyLine()],
     )
     setDialogOpen(true)
-  }
+  }, [customers])
 
   /** Clone a past order into a fresh draft — same customer/items, today's date, nothing synced. */
-  const duplicateOrder = (o: SalesOrder) => {
+  const duplicateOrder = useCallback((o: SalesOrder) => {
     setEditing(null)
     setFormError('')
     setCreated(null)
@@ -434,7 +434,7 @@ export default function SalesOrdersPage() {
         : [emptyLine()],
     )
     setDialogOpen(true)
-  }
+  }, [customers])
 
   const columns = useMemo<ColumnDef<SalesOrder>[]>(
     () => [
@@ -585,7 +585,7 @@ export default function SalesOrdersPage() {
         ),
       },
     ],
-    [navigate, cancelOrder, createInvoiceFor, viewOnShopify, refreshFromShopify, invoiceSavingId, startEdit],
+    [navigate, cancelOrder, createInvoiceFor, viewOnShopify, refreshFromShopify, invoiceSavingId, startEdit, duplicateOrder],
   )
 
   const openDialog = () => {

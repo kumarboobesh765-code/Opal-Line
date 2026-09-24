@@ -41,7 +41,7 @@ export default function DispatchPage() {
     }
   }, [])
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load() }, [load])
 
   const dispatchable = useMemo(
     () => orders.filter((o) => o.status !== 'cancelled' && !['delivered'].includes(shipments.find((sh) => sh.orderId === o.id)?.status ?? '')),
@@ -49,14 +49,14 @@ export default function DispatchPage() {
   )
   const shipmentByOrder = useMemo(() => new Map(shipments.map((sh) => [sh.orderId, sh])), [shipments])
 
-  const openDispatch = (o: SalesOrder) => {
+  const openDispatch = useCallback((o: SalesOrder) => {
     const existing = shipmentByOrder.get(o.id)
     setCourier(existing?.courier && COURIERS.includes(existing.courier) ? existing.courier : 'BlueDart')
     setCustomCourier(existing && !COURIERS.includes(existing.courier ?? '') ? existing.courier ?? '' : '')
     setTracking(existing?.trackingNumber ?? '')
     setExpected(existing?.expectedDelivery?.slice(0, 10) ?? '')
     setDispatchFor(o)
-  }
+  }, [shipmentByOrder])
 
   const saveDispatch = async () => {
     if (!dispatchFor) return
@@ -76,14 +76,14 @@ export default function DispatchPage() {
     }
   }
 
-  const confirmDelivered = async (sh: Shipment) => {
+  const confirmDelivered = useCallback(async (sh: Shipment) => {
     try {
       await dbApi.confirmDelivery(sh.id)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to confirm delivery')
     }
-  }
+  }, [load])
 
   const columns = useMemo<Array<ColumnDef<SalesOrder>>>(() => [
     { accessorKey: 'customer', header: 'Customer', cell: ({ row }) => <span className="font-medium">{row.original.customer || 'Walk-in'}</span> },
@@ -119,7 +119,7 @@ export default function DispatchPage() {
         </div>
       )
     } },
-  ], [shipmentByOrder])
+  ], [shipmentByOrder, openDispatch, confirmDelivered])
 
   const dispatched = shipments.filter((sh) => sh.status === 'dispatched').length
   const delivered = shipments.filter((sh) => sh.status === 'delivered').length

@@ -85,16 +85,16 @@ export default function PaymentsPage() {
 
   useEffect(load, [load])
 
-  const setReconciled = async (payment: Payment, reconciled: boolean) => {
+  const setReconciled = useCallback(async (payment: Payment, reconciled: boolean) => {
     try {
       await dbApi.update('payments', payment.id, { reconciled })
       load()
     } catch {
       toast.error('Failed to update reconciliation status')
     }
-  }
+  }, [load])
 
-  const handleRefund = async (payment: Payment) => {
+  const handleRefund = useCallback(async (payment: Payment) => {
     if (!(await confirmDialog({ title: `Create refund for payment ${payment.ref}?`, confirmLabel: 'Refund' }))) return
     try {
       await dbApi.create('payments', {
@@ -112,9 +112,9 @@ export default function PaymentsPage() {
     } catch {
       toast.error('Failed to create refund')
     }
-  }
+  }, [load])
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = useCallback(async (id: string) => {
     if (!(await confirmDialog({ title: 'Delete this payment record?', danger: true, confirmLabel: 'Delete' }))) return
     const snapshot = payments.find((p) => p.id === id)
     try {
@@ -135,7 +135,7 @@ export default function PaymentsPage() {
     } catch {
       toast.error('Failed to delete payment')
     }
-  }
+  }, [payments, load])
 
   const openDialog = () => {
     setForm({ ref: `PAY-${Date.now()}`, invoice: '', customer: '', amount: '', method: 'UPI', gateway: 'Manual', status: 'settled' })
@@ -291,7 +291,7 @@ export default function PaymentsPage() {
         ),
       },
     ],
-    [setReconciled, load]
+    [setReconciled, handleRefund, handleDelete]
   )
 
   return (

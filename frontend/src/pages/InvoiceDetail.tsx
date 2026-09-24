@@ -1,5 +1,5 @@
 import { confirmDialog, toast } from '@/components/ui/confirm'
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -36,6 +36,7 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true)
   const [refunding, setRefunding] = useState(false)
   const [waSending, setWaSending] = useState(false)
+  const [emailSending, setEmailSending] = useState(false)
   // Return-dialog state must live above the early returns (Rules of Hooks)
   const [returnOpen, setReturnOpen] = useState(false)
   const [returnQty, setReturnQty] = useState<Record<string, number>>({})
@@ -206,8 +207,6 @@ export default function InvoiceDetailPage() {
     </body></html>`)
     w.document.close()
   }
-
-  const [emailSending, setEmailSending] = useState(false)
 
   const emailInvoice = async () => {
     setEmailSending(true)

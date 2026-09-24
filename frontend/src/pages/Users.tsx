@@ -142,7 +142,7 @@ export default function UsersPage() {
     setSaving(true)
     setError('')
     try {
-      const { id, permissions, ...rest } = editUser
+      const { id, permissions: _permissions, ...rest } = editUser
       const patch: Record<string, unknown> = { ...rest }
       if (newPassword) {
         if (newPassword.length < 8) {
@@ -163,14 +163,14 @@ export default function UsersPage() {
     }
   }
 
-  const setStatus = async (user: User, status: User['status']) => {
+  const setStatus = useCallback(async (user: User, status: User['status']) => {
     try {
       await dbApi.update('users', user.id, { status })
       load()
     } catch {
       toast.error('Failed to update user status')
     }
-  }
+  }, [load])
 
   const openResetPassword = (user: User) => {
     setResetUser(user)
@@ -398,7 +398,7 @@ export default function UsersPage() {
         ),
       },
     ],
-    [canEdit],
+    [canEdit, setStatus],
   )
 
   return (

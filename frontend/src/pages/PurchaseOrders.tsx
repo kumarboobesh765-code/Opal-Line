@@ -93,10 +93,10 @@ export default function PurchaseOrdersPage() {
     }
   }
 
-  const setStatus = async (order: PurchaseOrder, status: PurchaseOrder['status']) => {
+  const setStatus = useCallback(async (order: PurchaseOrder, status: PurchaseOrder['status']) => {
     await dbApi.update('purchase-orders', order.id, { status })
     load()
-  }
+  }, [load])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -220,7 +220,7 @@ export default function PurchaseOrdersPage() {
         ),
       },
     ],
-    [load, setStatus],
+    [setStatus, navigate],
   )
 
   return (

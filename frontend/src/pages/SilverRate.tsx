@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -79,16 +79,16 @@ export default function SilverRatePage() {
   const [syncingProducts, setSyncingProducts] = useState(false)
   const [syncResult, setSyncResult] = useState<{ ok: boolean; synced: number; created: number; updated: number; removed: number; errors: string[] } | null>(null)
 
-  const loadAll = () => {
+  const loadAll = useCallback(() => {
     refreshSilverRate()
     dbApi.getSilverRate().then(setCurrentRate).catch(() => {})
     dbApi.getProducts().then(setProducts).catch(() => setProducts([]))
     dbApi.getSilverRateHistory().then(setHistory).catch(() => {})
-  }
+  }, [refreshSilverRate])
 
   useEffect(() => {
     loadAll()
-  }, [])
+  }, [loadAll])
 
   const syncProducts = async () => {
     setSyncingProducts(true)

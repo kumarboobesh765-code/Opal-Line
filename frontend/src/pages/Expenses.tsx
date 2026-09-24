@@ -88,16 +88,16 @@ export default function ExpensesPage() {
     }
   }
 
-  const approve = async (expense: Expense) => {
+  const approve = useCallback(async (expense: Expense) => {
     try {
       await dbApi.update('expenses', expense.id, { status: 'approved' })
       load()
     } catch {
       toast.error('Failed to approve expense')
     }
-  }
+  }, [load])
 
-  const remove = async (expense: Expense) => {
+  const remove = useCallback(async (expense: Expense) => {
     if (!(await confirmDialog({ title: `Delete this expense (${expense.category}, ${formatCurrency(expense.amount)})?`, danger: true, confirmLabel: 'Delete' }))) return
     try {
       await dbApi.remove('expenses', expense.id)
@@ -115,7 +115,7 @@ export default function ExpensesPage() {
     } catch {
       toast.error('Failed to delete expense')
     }
-  }
+  }, [load])
 
   const categories = useMemo(() => [...new Set(expenses.map((e) => e.category))], [expenses])
 

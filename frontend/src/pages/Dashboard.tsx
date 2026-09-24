@@ -115,7 +115,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>('week')
   const [customRange, setCustomRange] = useState<DateRange>(() => defaultRange())
-  const customRangeKey = `${customRange.start}|${customRange.end}`
 
   useEffect(() => {
     let cancelled = false
@@ -165,7 +164,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [period, customRangeKey])
+  }, [period, customRange])
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-4 sm:py-6 lg:px-6">

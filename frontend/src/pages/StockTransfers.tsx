@@ -1,5 +1,5 @@
 import { toast } from '@/components/ui/confirm'
-﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
 import {
   ArrowDownToLine,
@@ -130,14 +130,14 @@ export default function StockTransfersPage() {
     }
   }
 
-  const updateStatus = async (id: string, status: TransferStatus) => {
+  const updateStatus = useCallback(async (id: string, status: TransferStatus) => {
     try {
       await dbApi.update('inventory/transfers', id, { status })
       load()
     } catch {
       toast.error('Failed to update transfer status')
     }
-  }
+  }, [load])
 
   const selectedProduct = products.find((p) => p.id === form.product)
 
@@ -243,7 +243,7 @@ export default function StockTransfersPage() {
         ),
       },
     ],
-    [],
+    [updateStatus],
   )
 
   return (

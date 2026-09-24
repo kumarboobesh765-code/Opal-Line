@@ -1,5 +1,5 @@
 import { confirmDialog, toast } from '@/components/ui/confirm'
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import { Copy, Download, Eye, FileText, Loader2, MessageCircle, MoreHorizontal, Plus, Printer, Search, Undo2, X } from 'lucide-react'
@@ -231,7 +231,7 @@ export default function SalesInvoicesPage() {
         ),
       },
     ],
-    [],
+    [navigate, duplicatingId],
   )
 
   return (
