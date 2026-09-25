@@ -732,8 +732,34 @@ function installUpdateAndRestart(): void {
   if (!updateState.filePath) return
   const setup = updateState.filePath
   logLine('update', `restarting into installer ${setup}`)
-  const ps = `Start-Sleep -Seconds 4; Start-Process -FilePath '${setup.replace(/'/g, "''")}' -ArgumentList '/S'`
-  const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps], {
+  // Spawned installers used to die silently: NSIS aborts when the quitting app
+  // still holds its exe/image locks (seen live on the 1.0.2 → 1.0.3 cycle).
+  // Wait for this process to actually disappear, then run /S with retries and
+  // log every step back into app.log so zero-click cycles are observable.
+  // -EncodedCommand avoids any quoting pitfalls in the embedded script.
+  const appLog = join(LOG_DIR, 'app.log').replace(/'/g, "''")
+  const setupEsc = setup.replace(/'/g, "''")
+  const script = [
+    `$ErrorActionPreference = 'SilentlyContinue'`,
+    `$log = '${appLog}'`,
+    `function Note($m) { try { Add-Content -LiteralPath $log -Value ("[" + (Get-Date).ToUniversalTime().ToString("o") + "] [installer] " + $m) } catch {} }`,
+    `Note 'waiting for the app to exit before starting the installer'`,
+    `$deadline = (Get-Date).AddSeconds(30)`,
+    `while ((Get-Date) -lt $deadline) {`,
+    `  if (-not (Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue)) { break }`,
+    `  Start-Sleep -Milliseconds 500`,
+    `}`,
+    `Note 'app exited (or the wait timed out) - starting the silent install'`,
+    `$done = $false`,
+    `for ($i = 1; $i -le 3 -and -not $done; $i++) {`,
+    `  try { Start-Process -FilePath '${setupEsc}' -ArgumentList '/S' -Wait } catch { Note ('attempt ' + $i + ' failed to start: ' + $_.Exception.Message) }`,
+    `  Start-Sleep -Seconds 2`,
+    `  if (Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue) { $done = $true; Note 'installer finished and relaunched the app' }`,
+    `  else { Note ('attempt ' + $i + ' did not relaunch the app (installer likely hit a lock) - retrying'); Start-Sleep -Seconds 3 }`,
+    `}`,
+    `if (-not $done) { Note 'could not apply the update automatically - run the downloaded installer manually' }`,
+  ].join('; ')
+  const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
