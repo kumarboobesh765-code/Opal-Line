@@ -76,3 +76,8 @@ release
 *.rpm
 backend/pgsql/
 *.flag
+
+# history-scrub artifacts (keep local only)
+.pre-scrub-backup.bundle
+refs-before-scrub.txt
+rules.txt
