@@ -779,7 +779,13 @@ function installUpdateAndRestart(): void {
     `}`,
     `if ($done) { Start-Process -FilePath $exe } else { Note 'could not apply the update automatically - run the downloaded installer manually'; Start-Process -FilePath $exe }`,
   ].join('; ')
-  const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+  // Detach cmd.exe, NOT powershell.exe: a detached powershell.exe child never
+  // actually starts in this environment (verified — it exits without running a
+  // single line), so the whole handoff silently died. A detached cmd.exe both
+  // survives app.quit() and, in turn, runs this PowerShell as a foreground
+  // child that always executes. Base64 has no spaces/quotes, so /c needs no quoting.
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  const child = spawn('cmd.exe', ['/c', 'powershell.exe', '-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
