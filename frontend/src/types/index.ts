@@ -728,6 +728,12 @@ export interface SystemLogTail {
   lines: string[]
 }
 
+export interface UpdateFailureInfo {
+  /** ISO timestamp of the failed attempt, when known. */
+  at: string
+  reason: string
+}
+
 export interface UpdateStatusInfo {
   phase: 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error'
   current: string
@@ -737,6 +743,8 @@ export interface UpdateStatusInfo {
   assetSize: number | null
   filePath: string | null
   error: string | null
+  /** Set when the last automatic install gave up; the app is still on the old version. */
+  lastFailure: UpdateFailureInfo | null
 }
 
 export interface UpdatePrefsInfo {

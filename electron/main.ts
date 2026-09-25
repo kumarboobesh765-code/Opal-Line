@@ -509,9 +509,35 @@ ipcMain.handle('updates:set-prefs', (_e, patch: Partial<UpdatePrefs>) => {
 
 ipcMain.handle('updates:status', () => publicUpdateState())
 
-function publicUpdateState(): UpdateState & { current: string } {
-  return { ...updateState, current: app.isPackaged ? app.getVersion() : 'dev' }
+/**
+ * The silent install runs in a detached helper, so a failure there is invisible
+ * to the app that spawned it. The helper drops this marker instead; we read it
+ * on the next launch so the user is told the update did NOT apply rather than
+ * silently staying on the old version.
+ */
+function updateFailureFile(): string {
+  return join(DATA_DIR, 'update-failure.json')
 }
+
+function readUpdateFailure(): { at: string; reason: string } | null {
+  try {
+    if (!existsSync(updateFailureFile())) return null
+    // PowerShell 5.1 `Set-Content -Encoding UTF8` writes a BOM, which breaks JSON.parse.
+    const raw = readFileSync(updateFailureFile(), 'utf8').replace(/^\uFEFF/, '')
+    const parsed = JSON.parse(raw) as { at?: string; reason?: string }
+    if (!parsed.reason) return null
+    return { at: parsed.at ?? '', reason: parsed.reason }
+  } catch { return null }
+}
+
+function publicUpdateState(): UpdateState & { current: string; lastFailure: { at: string; reason: string } | null } {
+  return { ...updateState, current: app.isPackaged ? app.getVersion() : 'dev', lastFailure: readUpdateFailure() }
+}
+
+ipcMain.handle('updates:clear-failure', () => {
+  try { rmSync(updateFailureFile(), { force: true }) } catch { /* best effort */ }
+  return publicUpdateState()
+})
 
 function httpsGetBody(url: string, headers: Record<string, string>, timeoutMs: number, redirects = 0): Promise<{ status: number; body: string }> {
   return new Promise((resolvePromise, rejectP) => {
@@ -738,6 +764,7 @@ function installUpdateAndRestart(): void {
   // log every step back into app.log so zero-click cycles are observable.
   // -EncodedCommand avoids any quoting pitfalls in the embedded script.
   const appLog = join(LOG_DIR, 'app.log').replace(/'/g, "''")
+  const failFile = updateFailureFile().replace(/'/g, "''")
   const setupEsc = setup.replace(/'/g, "''")
   const exePath = process.execPath.replace(/'/g, "''")
   const script = [
@@ -746,6 +773,8 @@ function installUpdateAndRestart(): void {
     `$exe = '${exePath}'`,
     `function Note($m) { try { Add-Content -LiteralPath $log -Value ("[" + (Get-Date).ToUniversalTime().ToString("o") + "] [installer] " + $m) } catch {} }`,
     `function Ver { try { return (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion } catch { return 'unknown' } }`,
+    `$failFile = '${failFile}'`,
+    `Remove-Item -LiteralPath $failFile -Force -ErrorAction SilentlyContinue`,
     `Note 'waiting for the app to exit before starting the installer'`,
     `$before = Ver`,
     `$deadline = (Get-Date).AddSeconds(30)`,
@@ -777,7 +806,7 @@ function installUpdateAndRestart(): void {
     `  if ($after -ne $before -and $after -ne 'unknown') { $done = $true; Note ('installed version is now ' + $after + ' - relaunching the app') }`,
     `  else { Note ('attempt ' + $i + ' left the version at ' + $after + ' (installer likely hit a lock or a foreign install) - retrying'); Start-Sleep -Seconds 3 }`,
     `}`,
-    `if ($done) { Start-Process -FilePath $exe } else { Note 'could not apply the update automatically - run the downloaded installer manually'; Start-Process -FilePath $exe }`,
+    `if ($done) { Start-Process -FilePath $exe } else { Note 'could not apply the update automatically - run the downloaded installer manually'; $f = [ordered]@{ at = (Get-Date).ToUniversalTime().ToString('o'); reason = 'The update could not be installed automatically after 3 attempts. The app is still on the previous version.' } | ConvertTo-Json -Compress; try { Set-Content -LiteralPath $failFile -Value $f -Encoding UTF8 } catch {}; Start-Process -FilePath $exe }`,
   ].join('; ')
   // Detach cmd.exe, NOT powershell.exe: a detached powershell.exe child never
   // actually starts in this environment (verified — it exits without running a
@@ -828,6 +857,22 @@ async function main() {
     // Auto-update: first check shortly after launch, then every 6 hours.
     if (app.isPackaged) {
       loadUpdatePrefs()
+      // Tell the user straight away if the last automatic install gave up.
+      const failure = readUpdateFailure()
+      if (failure) {
+        logLine('update', `showing failed-update notice from ${failure.at || 'an earlier run'}`)
+        setTimeout(() => {
+          dialog.showMessageBox({
+            type: 'warning',
+            title: 'Update not installed',
+            message: `The app is still on version ${app.getVersion()}.`,
+            detail: `${failure.reason}\n\nOpen System \u2192 App Updates to retry, or run the downloaded installer manually.`,
+            buttons: ['OK'],
+            defaultId: 0,
+          })
+            .catch(() => undefined)
+        }, 8000)
+      }
       setTimeout(() => { void checkForUpdates({ announce: true }) }, 60 * 1000)
       setInterval(() => { void checkForUpdates({ announce: true }) }, UPDATE_CHECK_INTERVAL_MS)
     }

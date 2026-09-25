@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { CheckCircle2, Download, Info, Loader2, RefreshCw, RefreshCcw, Rocket, Settings2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Download, Info, Loader2, RefreshCw, RefreshCcw, Rocket, Settings2 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,6 +14,7 @@ interface DesktopBridge {
   installUpdate?: () => Promise<boolean>
   getUpdatePrefs?: () => Promise<UpdatePrefs>
   setUpdatePrefs?: (prefs: Partial<UpdatePrefs>) => Promise<UpdatePrefs>
+  clearUpdateFailure?: () => Promise<UpdateStatusInfo>
 }
 
 export interface UpdatePrefs {
@@ -86,6 +87,11 @@ export default function UpdatesPage() {
     }
   }, [])
 
+  const handleDismissFailure = useCallback(async () => {
+    const next = await desktop?.clearUpdateFailure?.().catch(() => null)
+    if (next) setUpdate(next)
+  }, [])
+
   const handleInstall = useCallback(async () => {
     if (!desktop?.installUpdate) return
     setBusy('install')
@@ -124,6 +130,38 @@ export default function UpdatesPage() {
         </Card>
       ) : (
         <>
+          {/* A failed automatic install is otherwise invisible - the app just
+              stays on the old version with no explanation. */}
+          {update?.lastFailure && (
+            <Card className="border-red-300 dark:border-red-900">
+              <CardContent className="p-5">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-red-700 dark:text-red-300">
+                      The last update was not installed
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">{update.lastFailure.reason}</p>
+                    {update.lastFailure.at && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Attempted {new Date(update.lastFailure.at).toLocaleString()}
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button size="sm" onClick={handleCheck} disabled={busy !== null}>
+                        <RefreshCw className={busy === 'check' ? 'mr-2 h-4 w-4 animate-spin' : 'mr-2 h-4 w-4'} />
+                        Check again
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={handleDismissFailure}>
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Current state */}
           <Card>
             <CardContent className="p-5">

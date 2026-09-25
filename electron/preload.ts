@@ -9,6 +9,8 @@ export interface UpdateStatusDto {
   assetSize: number | null
   filePath: string | null
   error: string | null
+  /** Set when the last automatic install gave up (app still on the old version). */
+  lastFailure: { at: string; reason: string } | null
 }
 
 export interface UpdatePrefsDto {
@@ -31,4 +33,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getUpdatePrefs: (): Promise<UpdatePrefsDto> => ipcRenderer.invoke('updates:get-prefs'),
   setUpdatePrefs: (prefs: Partial<UpdatePrefsDto>): Promise<UpdatePrefsDto> =>
     ipcRenderer.invoke('updates:set-prefs', prefs),
+  clearUpdateFailure: (): Promise<UpdateStatusDto> => ipcRenderer.invoke('updates:clear-failure'),
 })
