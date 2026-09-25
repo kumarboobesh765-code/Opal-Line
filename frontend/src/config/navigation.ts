@@ -140,6 +140,7 @@ export const navSections: NavSection[] = [
       { title: 'Users & Roles', path: '/system/users', icon: UserCog },
       { title: 'Backup & Restore', path: '/system/backup', icon: DatabaseBackup },
       { title: 'System Status', path: '/system/status', icon: Server },
+      { title: 'App Updates', path: '/system/updates', icon: RefreshCcw },
       { title: 'Settings', path: '/system/settings', icon: Settings },
       { title: 'Connections', path: '/system/connections', icon: Plug },
       { title: 'Notifications', path: '/system/notifications', icon: Settings },

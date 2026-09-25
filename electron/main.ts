@@ -468,6 +468,47 @@ let updateDownloadUrl: string | null = null
 let updateExpectedSha256: string | null = null
 let updateDialogOpen = false
 
+// ─── Update preferences (set from the sidebar Updates page) ─────────
+
+interface UpdatePrefs {
+  /** Download updates in the background as soon as they are found. */
+  autoDownload: boolean
+  /** Restart and install without asking once verified. */
+  autoInstall: boolean
+  /** Show the amber in-app banner while an update is available/ready. */
+  showBanner: boolean
+}
+
+const DEFAULT_UPDATE_PREFS: UpdatePrefs = { autoDownload: true, autoInstall: false, showBanner: true }
+let updatePrefs: UpdatePrefs = { ...DEFAULT_UPDATE_PREFS }
+
+function updatePrefsFile(): string {
+  return join(DATA_DIR, 'update-prefs.json')
+}
+
+function loadUpdatePrefs(): void {
+  try {
+    const raw = readFileSync(updatePrefsFile(), 'utf8')
+    updatePrefs = { ...DEFAULT_UPDATE_PREFS, ...JSON.parse(raw) }
+  } catch { /* first run or unreadable — keep defaults */ }
+}
+
+function saveUpdatePrefs(): void {
+  try {
+    writeFileSync(updatePrefsFile(), JSON.stringify(updatePrefs, null, 2), 'utf8')
+  } catch { /* best effort */ }
+}
+
+ipcMain.handle('updates:get-prefs', () => updatePrefs)
+ipcMain.handle('updates:set-prefs', (_e, patch: Partial<UpdatePrefs>) => {
+  updatePrefs = { ...updatePrefs, ...patch }
+  saveUpdatePrefs()
+  logLine('update', `preferences updated: autoDownload=${updatePrefs.autoDownload} autoInstall=${updatePrefs.autoInstall} showBanner=${updatePrefs.showBanner}`)
+  return updatePrefs
+})
+
+ipcMain.handle('updates:status', () => publicUpdateState())
+
 function publicUpdateState(): UpdateState & { current: string } {
   return { ...updateState, current: app.isPackaged ? app.getVersion() : 'dev' }
 }
@@ -610,6 +651,11 @@ async function checkForUpdates(opts: { announce: boolean }): Promise<UpdateState
     updateExpectedSha256 = asset.digest && asset.digest.toLowerCase().startsWith('sha256:') ? asset.digest.slice('sha256:'.length) : null
     updateState = { ...updateState, phase: 'available', latest, assetName: asset.name, assetSize: asset.size, error: null }
     logLine('update', `version ${latest} available (installed ${current})`)
+    if (updatePrefs.autoDownload) {
+      logLine('update', 'auto-download enabled — fetching in the background')
+      void downloadUpdateAndOfferInstall()
+      return publicUpdateState()
+    }
     if (opts.announce && !updateDialogOpen) {
       updateDialogOpen = true
       dialog.showMessageBox({
@@ -654,6 +700,11 @@ async function downloadUpdateAndOfferInstall(): Promise<UpdateState & { current:
     }
     updateState = { ...updateState, phase: 'ready', progress: 100, filePath: dest }
     logLine('update', `verified update ${updateState.latest} at ${dest}`)
+    if (updatePrefs.autoInstall) {
+      logLine('update', 'auto-install enabled — restarting to apply')
+      installUpdateAndRestart()
+      return publicUpdateState()
+    }
     if (!updateDialogOpen) {
       updateDialogOpen = true
       dialog.showMessageBox({
@@ -691,7 +742,6 @@ function installUpdateAndRestart(): void {
   app.quit()
 }
 
-ipcMain.handle('updates:status', () => publicUpdateState())
 ipcMain.handle('updates:check', () => checkForUpdates({ announce: false }))
 ipcMain.handle('updates:download', () => downloadUpdateAndOfferInstall())
 ipcMain.handle('updates:install', () => {
@@ -725,6 +775,7 @@ async function main() {
     createWindow()
     // Auto-update: first check shortly after launch, then every 6 hours.
     if (app.isPackaged) {
+      loadUpdatePrefs()
       setTimeout(() => { void checkForUpdates({ announce: true }) }, 60 * 1000)
       setInterval(() => { void checkForUpdates({ announce: true }) }, UPDATE_CHECK_INTERVAL_MS)
     }

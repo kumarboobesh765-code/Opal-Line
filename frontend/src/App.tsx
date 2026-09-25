@@ -67,6 +67,7 @@ const BackupRestorePage = lazy(() => import('@/pages/BackupRestore'))
 const AuditLogsPage = lazy(() => import('@/pages/AuditLogs'))
 const ActivityLogsPage = lazy(() => import('@/pages/ActivityLogs'))
 const SystemStatusPage = lazy(() => import('@/pages/SystemStatus'))
+const UpdatesPage = lazy(() => import('@/pages/Updates'))
 
 function NotFound() {
   return (
@@ -167,6 +168,7 @@ function App() {
             <Route path="/system/backup" element={guarded('system', <BackupRestorePage />)} />
             <Route path="/system/settings" element={guarded('system', <SettingsPage />)} />
             <Route path="/system/status" element={guarded('system', <SystemStatusPage />)} />
+            <Route path="/system/updates" element={guarded('system', <UpdatesPage />)} />
             <Route path="/system/connections" element={guarded('system', <ConnectionsPage />)} />
             <Route path="/system/notifications" element={guarded('system', <NotificationSettingsPage />)} />
             <Route path="/system/notification-log" element={guarded('system', <NotificationLogPage />)} />

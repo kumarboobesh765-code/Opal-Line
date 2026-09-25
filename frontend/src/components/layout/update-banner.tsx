@@ -3,10 +3,17 @@ import { ArrowDownToLine, RefreshCw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { UpdateStatusInfo } from '@/types'
 
+interface UpdatePrefs {
+  autoDownload: boolean
+  autoInstall: boolean
+  showBanner: boolean
+}
+
 interface DesktopBridge {
   getUpdateStatus?: () => Promise<UpdateStatusInfo>
   downloadUpdate?: () => Promise<UpdateStatusInfo>
   installUpdate?: () => Promise<boolean>
+  getUpdatePrefs?: () => Promise<UpdatePrefs>
 }
 
 const desktop: DesktopBridge | undefined = (window as unknown as { electronAPI?: DesktopBridge }).electronAPI
@@ -37,9 +44,11 @@ export function UpdateBanner() {
   const [update, setUpdate] = useState<UpdateStatusInfo | null>(null)
   const [dismissed, setDismissed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [showBanner, setShowBanner] = useState(true)
 
   useEffect(() => {
     desktop?.getUpdateStatus?.().then(setUpdate).catch(() => undefined)
+    desktop?.getUpdatePrefs?.().then((p) => setShowBanner(p.showBanner)).catch(() => undefined)
   }, [])
 
   // While a download runs, poll the updater state so the progress bar moves.
@@ -51,7 +60,7 @@ export function UpdateBanner() {
     return () => clearInterval(t)
   }, [update?.phase])
 
-  if (!desktop || dismissed || !update) return null
+  if (!desktop || dismissed || !showBanner || !update) return null
 
   if (update.phase === 'available') {
     return (

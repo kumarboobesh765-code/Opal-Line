@@ -738,3 +738,9 @@ export interface UpdateStatusInfo {
   filePath: string | null
   error: string | null
 }
+
+export interface UpdatePrefsInfo {
+  autoDownload: boolean
+  autoInstall: boolean
+  showBanner: boolean
+}

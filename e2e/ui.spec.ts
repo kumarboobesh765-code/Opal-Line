@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test'
 const PAGES = [
   '/',
   '/system/status',
+  '/system/updates',
   '/system/users',
   '/system/backup',
   '/system/settings',

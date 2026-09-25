@@ -11,15 +11,24 @@ export interface UpdateStatusDto {
   error: string | null
 }
 
+export interface UpdatePrefsDto {
+  autoDownload: boolean
+  autoInstall: boolean
+  showBanner: boolean
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   isElectron: true,
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
-  // Auto-update bridge — System Status page
+  // Auto-update bridge — System Status page, Updates page, banner
   getUpdateStatus: (): Promise<UpdateStatusDto> => ipcRenderer.invoke('updates:status'),
   checkForUpdates: (): Promise<UpdateStatusDto> => ipcRenderer.invoke('updates:check'),
   downloadUpdate: (): Promise<UpdateStatusDto> => ipcRenderer.invoke('updates:download'),
   installUpdate: (): Promise<boolean> => ipcRenderer.invoke('updates:install'),
+  getUpdatePrefs: (): Promise<UpdatePrefsDto> => ipcRenderer.invoke('updates:get-prefs'),
+  setUpdatePrefs: (prefs: Partial<UpdatePrefsDto>): Promise<UpdatePrefsDto> =>
+    ipcRenderer.invoke('updates:set-prefs', prefs),
 })
