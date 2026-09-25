@@ -4,6 +4,7 @@ import { Sidebar } from './sidebar'
 import { Header } from './header'
 import { SearchCommand } from './search-command'
 import { ShortcutsHelp } from './shortcuts-help'
+import { UpdateBanner } from './update-banner'
 import { SHORTCUT_PATHS } from '@/lib/shortcuts'
 import { useMediaQuery } from '@/hooks/use-media-query'
 
@@ -98,6 +99,7 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Header onToggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} />
+        <UpdateBanner />
         <main className="flex-1 overflow-y-auto">
           <Outlet />
         </main>
