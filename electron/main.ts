@@ -548,6 +548,7 @@ async function checkForUpdates(opts: { announce: boolean }): Promise<UpdateState
     const current = app.getVersion()
     if (!isNewerVersion(current, latest)) {
       updateState = { ...updateState, phase: 'up-to-date', latest }
+      logLine('update', `up to date: installed ${current}, latest ${latest}`)
       return publicUpdateState()
     }
     const assets = release.assets ?? []

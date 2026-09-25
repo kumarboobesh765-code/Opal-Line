@@ -2,6 +2,7 @@ import { Router, type Response } from 'express'
 import { and, desc, eq, ne, sql, type AnyColumn } from 'drizzle-orm'
 import { db, schema } from '../db/client'
 import { CONSTANTS } from '../constants'
+import { computeInputGst, netPayable } from '../gst'
 
 export const dashboardRouter = Router()
 
@@ -1040,6 +1041,15 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
     const invoices = await loadInvoices()
     const active = invoices.filter((i) => String(i.date ?? '').startsWith(prefix) && String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
 
+    // Input GST: sum the `tax` column of this month's purchase invoices,
+    // excluding cancelled ones (mirrors the output-side filters above).
+    const purchaseRows = await db!
+      .select({ tax: schema.purchaseInvoices.tax, status: schema.purchaseInvoices.status, date: schema.purchaseInvoices.date })
+      .from(schema.purchaseInvoices)
+      .where(sql`${schema.purchaseInvoices.date}::text like ${prefix + '%'}`)
+      .limit(10000)
+    const inputGst = computeInputGst(purchaseRows)
+
     let outputGst = 0
     let b2bTaxable = 0
     let b2cTaxable = 0
@@ -1073,8 +1083,8 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
 
     res.json({
       outputGst: round2(outputGst),
-      inputGst: 0, // TODO: purchase invoice GST tracking
-      netPayable: round2(outputGst),
+      inputGst: round2(inputGst),
+      netPayable: round2(netPayable(outputGst, inputGst)),
       b2bTaxable: round2(b2bTaxable),
       b2cTaxable: round2(b2cTaxable),
       mismatches,
