@@ -243,6 +243,68 @@ All user actions are logged in `activity_logs`:
 | Backup restore fails | Ensure backup file is valid JSON, check disk space |
 | Silver rate not updating | Set `SILVER_RATE_API_URL` in `.env` |
 
+## 13. Windows Desktop Releases (signed installer)
+
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed
+to the **Opal-Line** repo:
+
+```bash
+git tag -a v1.0.2 -m "Release v1.0.2"
+git push origin v1.0.2
+```
+
+The workflow lints/tests, imports the code-signing cert, builds the NSIS
+installer (frontend + bundled backend + portable PostgreSQL), verifies the
+Authenticode signature, and attaches `Opal.Line.Billing-Setup-<ver>.exe` +
+`.blockmap` to a GitHub Release. Builds take ~20-25 min.
+
+### One-time setup: signing certificate
+
+The installer must be signed with a cert whose subject contains
+`Opal Line Billing` (enforced by `signtoolOptions` in
+`electron/electron-builder.yml`; a missing cert fails the build). From the
+machine that has the cert:
+
+```powershell
+Export-PfxCertificate -Cert Cert:\CurrentUser\My\<thumbprint> `
+  -FilePath code-signing.pfx -Password (ConvertTo-SecureString '' -AsPlainText -Force)
+# Set the repo secret (uses scripts/set-gh-secret.mjs when gh CLI is absent):
+GH_TOKEN=<token> node scripts/set-gh-secret.mjs WIN_SIGNING_PFX_B64 \
+  <(base64 -w0 code-signing.pfx)
+```
+
+### Hard-won gotchas
+
+- **Never import the cert into `Cert:\CurrentUser\Root` on the runner.** Both
+  `Import-Certificate` and `certutil -user -addstore Root` raise a
+  confirmation dialog that nobody can click on a headless runner — the job
+  hangs silently. The workflow uses the **machine** Root/TrustedPublisher
+  stores (`certutil -f -addstore`), which never prompt because GH runners are
+  elevated.
+- The job has `timeout-minutes: 90` so any hang fails fast instead of
+  burning GitHub's 6-hour default.
+- `publish: null` in electron-builder.yml stops electron-builder from trying
+  to auto-publish (it fails without a `GH_TOKEN`); the workflow attaches
+  assets to the Release itself.
+
+### Verify a release locally
+
+```powershell
+# Download the asset from the GitHub Release, then:
+Get-AuthenticodeSignature .\Opal.Line.Billing-Setup-1.0.1.exe
+# Status should be Valid (or NotTrusted with our thumbprint — intact signature)
+
+# Full smoke test (silent install + boot check of PostgreSQL & API):
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/smoke-test-install.ps1 -SetupPath .\Opal.Line.Billing-Setup-1.0.1.exe
+```
+
+### Local installer build (no CI)
+
+```bash
+npm run electron:build   # outputs dist-electron/*Setup-*.exe
+```
+
 ## Architecture
 
 ```
