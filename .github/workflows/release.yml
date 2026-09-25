@@ -13,10 +13,13 @@ permissions:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
   release:
     runs-on: windows-latest
+    # Fail fast if a step hangs (e.g. a headless UI prompt); the GitHub
+    # default of 360 minutes silently burns 6 hours before cancelling.
+    timeout-minutes: 90
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,10 +69,13 @@ jobs:
           }
           # Self-signed certs only report Get-AuthenticodeSignature 'Valid'
           # once the root is trusted — CurrentUser stores need no admin.
+          # certutil, not Import-Certificate: importing into the Root store
+          # with the cmdlet raises a confirmation dialog that no one can
+          # click on a headless runner, hanging the job until the timeout.
           $cer = Join-Path $env:RUNNER_TEMP 'signing-cert.cer'
           Export-Certificate -Cert $cert -FilePath $cer | Out-Null
-          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
-          Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
+          certutil -user -f -addstore Root $cer
+          certutil -user -f -addstore TrustedPublisher $cer
           Remove-Item $cer -Force
           Write-Host "Imported $($cert.Subject) thumbprint=$($cert.Thumbprint) expires=$($cert.NotAfter) and trusted it for the current user"
 
