@@ -147,6 +147,34 @@ export function tokenFromRequest(req: Request): string | undefined {
   return req.cookies?.[COOKIE_NAME] as string | undefined
 }
 
+/**
+ * Endpoints a user with a pending forced password change may still reach. Anything
+ * else is refused until they rotate, but these three keep them from being locked
+ * out of their own account.
+ */
+const PASSWORD_CHANGE_ALLOWLIST = new Set([
+  '/api/v1/auth/change-password',
+  '/api/v1/auth/logout',
+  '/api/v1/auth/me',
+])
+
+export const PASSWORD_CHANGE_REQUIRED = 'Password change required'
+
+async function userMustChangePassword(userId: string): Promise<boolean> {
+  try {
+    const { db, schema } = await import('./db/client')
+    if (!db) return false
+    const rows = await db
+      .select({ flag: schema.users.requirePasswordChange })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1)
+    return rows[0]?.flag === true
+  } catch {
+    return false
+  }
+}
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   const token = tokenFromRequest(req)
   const { userId, dbError } = await getSessionUserId(token)
@@ -156,6 +184,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   }
   if (!userId) {
     res.status(401).json({ error: 'Not authenticated' })
+    return
+  }
+  // Enforce the flag the bootstrap/seed set. It used to be written but never
+  // read, so accounts kept working indefinitely on their initial password.
+  const path = (req.originalUrl || req.url).split('?')[0]
+  if (!PASSWORD_CHANGE_ALLOWLIST.has(path) && (await userMustChangePassword(userId))) {
+    res.status(403).json({ error: PASSWORD_CHANGE_REQUIRED, code: 'PASSWORD_CHANGE_REQUIRED' })
     return
   }
   req.userId = userId

@@ -27,6 +27,11 @@ export const config = {
   // 47191 belongs to Opal Line's dedicated port block (47191-47198) so the
   // software never collides with other apps' default ports on end-user PCs.
   port: Number(process.env.PORT ?? 47191),
+  // Bind to loopback by default. The desktop app only ever loads the UI from
+  // http://localhost:<port>, so listening on every interface just exposed the
+  // whole authenticated API (including /auth/login) to the local network.
+  // Container deployments that publish the port must opt in with HOST=0.0.0.0.
+  host: (process.env.HOST ?? '127.0.0.1').trim() || '127.0.0.1',
 }
 
 const envShop = config.shop

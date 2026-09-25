@@ -6,7 +6,7 @@ import { db, schema } from '../db/client'
 import { computeUserPermissions } from '../rbac'
 import { recordActivity } from '../activity'
 import { createSession, destroySession, destroyUserSessions, requireAuth, tokenFromRequest, setSessionCookie, clearSessionCookie } from '../sessions'
-import { validate, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema } from '../validation'
+import { validate, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema, changePasswordSchema } from '../validation'
 import { parseDbTimestamp } from '../lib/dbtime'
 
 export const authRouter = Router()
@@ -226,6 +226,61 @@ authRouter.post('/forgot-password', validate(forgotPasswordSchema), async (req, 
     })
 
     res.json({ ok: true, message: 'If the email exists, a reset link has been sent' })
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// Self-service rotation. This is what makes the forced password change on a
+// freshly bootstrapped account actionable instead of a dead end, and it clears
+// the requirePasswordChange flag that requireAuth enforces.
+authRouter.post('/change-password', requireAuth, validate(changePasswordSchema), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const userId = req.userId
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' })
+    const [user] = await db!.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1)
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    if (!user.passwordHash) return res.status(400).json({ error: 'Account has no password set' })
+
+    const { currentPassword, newPassword } = req.body
+    if (!(await argon2.verify(user.passwordHash, currentPassword))) {
+      void recordActivity({
+        action: 'Password Change Rejected',
+        module: 'system',
+        entity: user.name,
+        userId: user.id,
+        ip: req.ip ?? null,
+        details: 'Current password did not match',
+      })
+      return res.status(400).json({ error: 'Current password is incorrect' })
+    }
+    if (await argon2.verify(user.passwordHash, newPassword)) {
+      return res.status(400).json({ error: 'New password must be different from the current one' })
+    }
+
+    const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id })
+    await db!.update(schema.users)
+      .set({ passwordHash, requirePasswordChange: false })
+      .where(eq(schema.users.id, user.id))
+
+    void recordActivity({
+      action: 'Password Changed',
+      module: 'system',
+      entity: user.name,
+      userId: user.id,
+      ip: req.ip ?? null,
+      details: 'User changed their own password',
+    })
+
+    // Other sessions are invalidated; the caller keeps working with its cookie.
+    const token = tokenFromRequest(req)
+    await destroyUserSessions(user.id)
+    if (token) {
+      await createSession(user.id).then((t) => setSessionCookie(res, t)).catch(() => undefined)
+    }
+
+    res.json({ ok: true, message: 'Password updated' })
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' })
   }

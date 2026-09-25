@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/auth-context'
+import ChangePasswordPage from '@/pages/ChangePassword'
 
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const { currentUser, loading } = useAuth()
@@ -21,6 +22,11 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   }
   if (!currentUser) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  }
+  // The server refuses every other endpoint until the initial password is
+  // rotated, so show that screen instead of an app that 403s on every call.
+  if (currentUser.requirePasswordChange) {
+    return <ChangePasswordPage />
   }
   return <>{children}</>
 }

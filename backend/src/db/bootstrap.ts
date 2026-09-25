@@ -6,6 +6,8 @@ import * as schema from './schema'
 import { defaultRolePermissions } from '../rbac'
 import { roleNames } from './seedData'
 import { randomBytes, createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import argon2 from 'argon2'
 import { logger } from '../logger'
 
@@ -737,7 +739,7 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
   })
 }
 
-async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<void> {
+async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<{ adminPassword?: string }> {
   // Default roles
   for (const [i, name] of roleNames.entries()) {
     const existing = await db.select().from(schema.roles).where(eq(schema.roles.name, name)).limit(1)
@@ -755,16 +757,20 @@ async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<void> {
 
   // Initial admin user (only when no users exist at all)
   const users = await db.select({ id: schema.users.id }).from(schema.users).limit(1)
+  let generatedAdminPassword: string | undefined
   if (users.length === 0) {
-    // Generate a random 12-character password for the initial admin
+    // Generate a random 12-character password for the initial admin.
+    // This used to be thrown away in favour of a hardcoded "Opal@2026", which
+    // made every fresh install share a password that is published in this
+    // repository. The generated one is now used and surfaced once to the user.
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%&*'
     const bytes = randomBytes(12)
     let randomPassword = ''
     for (let i = 0; i < 12; i++) {
       randomPassword += chars[bytes[i] % chars.length]
     }
-    // Still set Opal@2026 as the initial default, but force change on next login
-    const tempPassword = 'Opal@2026'
+    generatedAdminPassword = randomPassword
+    const tempPassword = randomPassword
     const passwordHash = await argon2.hash(tempPassword)
     await db.insert(schema.users).values({
       id: randomBytes(8).toString('hex'),
@@ -782,9 +788,24 @@ async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<void> {
     console.log('  Initial admin account created:')
     console.log('    Username: admin')
     console.log(`    Password: ${tempPassword}`)
-    console.log(`    Generated: ${randomPassword}`)
-    console.log('  You MUST change this password after first login.')
+    console.log('  Store this now — it is not shown again.')
     console.log('══════════════════════════════════════════════════════\n')
+    // Hand the one-time credential to the desktop app so it can show the real
+    // password in its first-run dialog instead of a hardcoded placeholder.
+    // The desktop shell deletes this file as soon as it has displayed it.
+    const dataDir = process.env.APP_DATA_DIR?.trim()
+    if (dataDir) {
+      try {
+        mkdirSync(dataDir, { recursive: true })
+        writeFileSync(
+          join(dataDir, 'first-run-credentials.json'),
+          JSON.stringify({ username: 'admin', password: tempPassword, createdAt: new Date().toISOString() }, null, 2),
+          { encoding: 'utf8', mode: 0o600 },
+        )
+      } catch (err) {
+        logger.warn({ err: (err as Error)?.message }, 'Bootstrap: could not write first-run credentials file')
+      }
+    }
   }
 
   // Settings row
@@ -840,13 +861,14 @@ async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<void> {
     }
     logger.info('Bootstrap: seeded default chart of accounts')
   }
+  return { adminPassword: generatedAdminPassword }
 }
 
 /**
  * Run bootstrap when the database is fresh (no users table). Idempotent and
  * safe on every start; upgrades add missing columns/tables for existing DBs.
  */
-export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated: boolean }> {
+export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated: boolean; adminPassword?: string }> {
   if (bootstrapped) return { ran: false, tablesCreated: false }
   bootstrapped = true
   if (!process.env.DATABASE_URL) return { ran: false, tablesCreated: false }
@@ -858,8 +880,8 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
       logger.info('Bootstrap: fresh database detected — creating schema')
       await createSchema(sql)
       const drizzleDb = drizzle(sql, { schema })
-      await seedDefaults(drizzleDb)
-      return { ran: true, tablesCreated: true }
+      const seeded = await seedDefaults(drizzleDb)
+      return { ran: true, tablesCreated: true, adminPassword: seeded.adminPassword }
     }
 
     // Existing DB: apply idempotent additions for upgrades
