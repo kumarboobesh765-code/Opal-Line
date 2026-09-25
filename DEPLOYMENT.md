@@ -287,6 +287,32 @@ GH_TOKEN=<token> node scripts/set-gh-secret.mjs WIN_SIGNING_PFX_B64 \
   to auto-publish (it fails without a `GH_TOKEN`); the workflow attaches
   assets to the Release itself.
 
+### Auto-update handoff gotchas
+
+The in-app updater (`installUpdateAndRestart` in `electron/main.ts`) quits the
+app and runs the verified NSIS installer silently. Two environment quirks made
+every automatic update fail until they were understood:
+
+- **Pin the install directory with `/D`.** A bare `installer.exe /S` installs
+  wherever NSIS defaults (or wherever a stale registration points), which can be
+  `C:\Program Files` even when the app runs from a per-user path. The running
+  copy then never changes and a second copy appears. Always pass
+  `/D=<dir of the running exe>`, built as a raw argument line (`ProcessStartInfo`
+  with `Arguments = '/S /D=' + $dir`) because NSIS requires `/D` to be the last,
+  unquoted argument. The handoff also confirms the installed version actually
+  changed before relaunching.
+- **Detach `cmd.exe`, never `powershell.exe`.** A detached `powershell.exe`
+  child never actually starts in this environment — it exits without running a
+  line, so the handoff silently dies. A detached `cmd.exe` both survives
+  `app.quit()` and runs a foreground PowerShell child that always executes. The
+  fix is to spawn `cmd.exe /c powershell -EncodedCommand <base64>` detached.
+- **Bootstrapping:** the first release that contains an updater fix must be
+  installed **once manually** (`installer.exe /S`). A broken updater cannot
+  upgrade itself, because the *running* app is what executes the handoff. Only
+  after a fixed version is installed are subsequent updates truly zero-click.
+- Installer steps are appended to `app.log` as `[installer]` lines; check there
+  first when an update appears to do nothing.
+
 ### Verify a release locally
 
 ```powershell
