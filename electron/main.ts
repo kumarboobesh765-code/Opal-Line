@@ -879,13 +879,24 @@ async function main() {
     // On first run, show credentials dialog after a short delay
     if (isFirstRun) {
       setTimeout(() => {
+        // The backend writes the generated admin password here; show that real
+        // credential once, then delete the file. Never fall back to a hardcoded
+        // password — that is what made every install share a public credential.
+        const credFile = join(DATA_DIR, 'first-run-credentials.json')
+        let detail = 'The admin account was created. Sign in with the username "admin".'
+        try {
+          const creds = JSON.parse(readFileSync(credFile, 'utf8')) as { username?: string; password?: string }
+          if (creds.password) {
+            detail = `Username: ${creds.username ?? 'admin'}\nPassword: ${creds.password}\n\nStore this now — it is shown only once.`
+          }
+        } catch { /* no credentials file (existing install) */ }
         dialog.showMessageBox({
           type: 'info',
           title: 'Opal Line Billing — First Run',
           message: 'Admin account created!',
-          detail: 'Username: admin\nPassword: Opal@2026\n\nYou MUST change this password after first login.',
+          detail,
           buttons: ['OK'],
-        })
+        }).finally(() => { try { rmSync(credFile, { force: true }) } catch { /* best effort */ } })
       }, 3000)
     }
   } catch (err) {

@@ -29,6 +29,9 @@ services:
       - "47196:4000"
     environment:
       PORT: 4000
+      # The backend defaults to loopback for safety; containers must opt in to
+      # 0.0.0.0 or the published port (47196) would never reach the process.
+      HOST: 0.0.0.0
       DATABASE_URL: postgresql://postgres:${PGPASSWORD:?Set PGPASSWORD in .env}@db:5432/opal_line
       PGHOST: db
       PGPORT: 5432

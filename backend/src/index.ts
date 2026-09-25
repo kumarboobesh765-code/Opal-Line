@@ -1933,8 +1933,8 @@ async function startServer() {
     logger.error({ err }, 'Database bootstrap failed — continuing with startup')
   }
 
-  const server = app.listen(config.port, async () => {
-    logger.info({ port: config.port, shopifyConfigured: isConfigured(), frontendOrigin: FRONTEND_ORIGIN }, 'Server started')
+  const server = app.listen(config.port, config.host, async () => {
+    logger.info({ port: config.port, host: config.host, shopifyConfigured: isConfigured(), frontendOrigin: FRONTEND_ORIGIN }, 'Server started')
     await loadSecretsFromDb()
     // Schedule the daily automated backup (7:00 PM local time).
     startAutoBackup()

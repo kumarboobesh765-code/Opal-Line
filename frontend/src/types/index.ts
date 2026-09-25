@@ -578,6 +578,8 @@ export interface User {
   status: 'active' | 'inactive' | 'invited'
   avatarColor: string
   permissions?: Permissions | null
+  /** Server refuses every other endpoint until this is cleared. */
+  requirePasswordChange?: boolean
 }
 
 export interface ModulePermission {

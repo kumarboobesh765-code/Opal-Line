@@ -378,6 +378,11 @@ export const authApi = {
     }),
   getMe: () => request<User>('/auth/me'),
   logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean; message?: string }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 }
 
 export const rbacApi = {

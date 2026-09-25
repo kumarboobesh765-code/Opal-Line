@@ -91,6 +91,10 @@ async function prepareUserBody(body: Record<string, unknown>, isUpdate = false):
     const pwd = String(password)
     assertStrongPassword(pwd)
     cleaned.passwordHash = await argon2.hash(pwd, { type: argon2.argon2id })
+    // An admin setting a password has chosen it for the user, so the forced
+    // rotation requirement is satisfied — otherwise requireAuth would keep
+    // locking that account out of the API with no way to recover.
+    cleaned.requirePasswordChange = false
   }
   if (isUpdate && password == null) delete cleaned.passwordHash
   delete cleaned.password

@@ -175,6 +175,11 @@ export const resetPasswordSchema = z.object({
   password: strongPassword,
 })
 
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: strongPassword,
+})
+
 export const verifyEmailSchema = z.object({
   token: z.string().min(1, 'Verification token is required'),
 })

@@ -115,7 +115,10 @@ async function main() {
   await db.insert(schema.users).values(userSeed.map((u, i) => ({ 
     ...u, 
     passwordHash: i === 0 ? defaultPasswordHash : tempPasswordHash,
-    requirePasswordChange: true,
+    // Demo accounts are seeded with known passwords on purpose, so do not
+    // force a rotation: requireAuth would lock every seeded user out of the API
+    // and there is no way for them to complete a change they cannot start.
+    requirePasswordChange: false,
   })))
   await db.insert(schema.settings).values(settingsSeed)
 
