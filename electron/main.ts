@@ -607,7 +607,7 @@ async function checkForUpdates(opts: { announce: boolean }): Promise<UpdateState
     const asset = assets.find((a) => /-Setup-.*\.exe$/i.test(a.name)) ?? assets.find((a) => a.name.endsWith('.exe'))
     if (!asset) throw new Error('Newer release has no installer asset')
     updateDownloadUrl = asset.browser_download_url
-    updateExpectedSha256 = asset.digest && asset.digest.toLowerCase().startsWith('sha256:') ? asset.digest.slice(6) : null
+    updateExpectedSha256 = asset.digest && asset.digest.toLowerCase().startsWith('sha256:') ? asset.digest.slice('sha256:'.length) : null
     updateState = { ...updateState, phase: 'available', latest, assetName: asset.name, assetSize: asset.size, error: null }
     logLine('update', `version ${latest} available (installed ${current})`)
     if (opts.announce && !updateDialogOpen) {
