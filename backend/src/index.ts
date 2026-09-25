@@ -36,7 +36,7 @@ const app = express()
 app.disable('x-powered-by')
 app.set('trust proxy', 1)
 
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5197'
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:47195'
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -1917,9 +1917,8 @@ for (const key of requiredEnvVars) {
     logger.warn(`Missing required env var: ${key}. Some features may not work.`)
   }
 }
-if (!config.port || config.port < 1 || config.port > 65535) {
-  logger.error({ port: config.port }, 'Invalid PORT, defaulting to 4197')
-  config.port = 4197
+if (!config.port || config.port < 1 || config.port > 65535) {   logger.error({ port: config.port }, 'Invalid PORT, defaulting to 47191')
+  config.port = 47191
 }
 
 // First-run database bootstrap: creates schema + seeds roles/admin on a fresh

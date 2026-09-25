@@ -8,7 +8,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const BASE = 'http://localhost:4197'
+const BASE = 'http://localhost:47191'
 const APP_DATA = process.env.APPDATA
   ? join(process.env.APPDATA, 'Opal Line Billing', 'data')
   : null

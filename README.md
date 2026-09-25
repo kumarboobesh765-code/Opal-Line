@@ -13,7 +13,7 @@ backend/    Express + Drizzle + PostgreSQL API, Shopify sync, silver rate pricin
 
 ```bash
 npm install          # installs both workspaces (hoisted to root node_modules)
-npm run dev          # starts backend (port 4000) + frontend (port 5173) together
+npm run dev          # starts backend (port 47191) + frontend (port 47195) together
 ```
 
 Or run them separately:

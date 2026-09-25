@@ -15,7 +15,7 @@ Copy `backend/.env.example` to `backend/.env` and fill in:
 
 ```env
 # Server
-PORT=4000
+PORT=47191
 
 # Database
 DATABASE_URL=postgresql://postgres:REDACTED@localhost:5432/opal_line
@@ -44,7 +44,7 @@ SILVER_RATE_API_KEY=
 ### Frontend `.env`
 
 ```env
-VITE_API_BASE=http://localhost:4000/api/v1
+VITE_API_BASE=http://localhost:47196/api/v1
 ```
 
 ## 2. Database Setup
@@ -72,8 +72,8 @@ npx tsx src/db/seed.ts
 npm run dev
 
 # Or separately:
-cd backend && npm run dev   # :4000
-cd frontend && npm run dev  # :5173
+cd backend && npm run dev   # :47191
+cd frontend && npm run dev  # :47195
 ```
 
 ## 4. Production Build
@@ -113,7 +113,7 @@ server {
 
     # Backend API proxy
     location /api/ {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://127.0.0.1:47191;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -168,10 +168,10 @@ Runs daily at **7:00 PM IST** (configurable in `backend/src/autoBackup.ts`):
 Via API:
 ```bash
 # Export full backup
-curl -H "Cookie: session=xxx" http://localhost:4000/api/v1/backup/export?type=full
+curl -H "Cookie: session=xxx" http://localhost:47191/api/v1/backup/export?type=full
 
 # Export encrypted
-curl -H "Cookie: session=xxx" http://localhost:4000/api/v1/backup/export-encrypted?type=full
+curl -H "Cookie: session=xxx" http://localhost:47191/api/v1/backup/export-encrypted?type=full
 ```
 
 Via UI: **Settings → Backup & Restore → Full Backup**
@@ -200,7 +200,7 @@ Requires a [Resend](https://resend.com) account (free tier: 100 emails/day):
 ### Health Check
 
 ```bash
-curl http://localhost:4000/api/v1/health
+curl http://localhost:47191/api/v1/health
 ```
 
 ### Logs
@@ -237,7 +237,7 @@ All user actions are logged in `activity_logs`:
 | Issue | Solution |
 |---|---|
 | `password authentication failed` | Check `DATABASE_URL` password matches PostgreSQL |
-| `EADDRINUSE: port 4000` | Kill existing process: `taskkill /PID <pid> /F` |
+| `EADDRINUSE: port 47191` | Kill existing process: `taskkill /PID <pid> /F` |
 | Shopify sync fails | Check `SHOPIFY_ACCESS_TOKEN` and store URL |
 | Email not sending | Verify `RESEND_API_KEY` and check spam folder |
 | Backup restore fails | Ensure backup file is valid JSON, check disk space |
@@ -304,6 +304,29 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```bash
 npm run electron:build   # outputs dist-electron/*Setup-*.exe
 ```
+
+## Port Allocation
+
+Opal Line uses a dedicated port block so it never collides with common
+software (databases, dev servers, other ERPs) on end-user machines:
+
+| Port | Used by |
+|---|---|
+| **47191** | Backend API — development (`backend/.env` `PORT`) |
+| **47192** | Backend API — installed desktop app (Electron child process) |
+| **47193** | Bundled portable PostgreSQL — installed app only |
+| **47195** | Vite dev server (`npm run dev:web`) |
+| **47196** | Docker host mapping → backend container (:4000) |
+| **47197** | Docker host mapping → nginx frontend container (:80) |
+| **47198** | Docker host mapping → postgres container (:5432) |
+
+Notes:
+- The installed app and dev backend can run **simultaneously** (47192 vs
+  47191); they must not share a database unless pointed at different names.
+- Docker host mappings avoid the standard 5432/80 so `docker compose up`
+  cannot clash with a locally installed PostgreSQL or IIS/nginx.
+- The container-internal ports stay standard (4000, 80, 5432) — only the
+  host-side mappings above changed.
 
 ## Architecture
 

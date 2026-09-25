@@ -14,7 +14,7 @@
  *   - requires NO pre-installed Node.js (backend runs via ELECTRON_RUN_AS_NODE)
  *   - requires NO pre-installed PostgreSQL (portable PG is initialized into
  *     %APPDATA%\Opal Line Billing\pgdata on first launch and started
- *     automatically on port 5433)
+ *     automatically on port 47193)
  *   - performs first-run DB schema bootstrap + admin seeding automatically
  */
 

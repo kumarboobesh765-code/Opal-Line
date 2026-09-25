@@ -24,7 +24,9 @@ export const config = {
   shop: asCredential(normalizeShopDomain(decryptSecret(process.env.SHOPIFY_STORE_URL ?? ''))),
   accessToken: asCredential(decryptSecret((process.env.SHOPIFY_ACCESS_TOKEN ?? '').trim())),
   apiVersion: (process.env.SHOPIFY_API_VERSION ?? '2025-10').trim(),
-  port: Number(process.env.PORT ?? 4197),
+  // 47191 belongs to Opal Line's dedicated port block (47191-47198) so the
+  // software never collides with other apps' default ports on end-user PCs.
+  port: Number(process.env.PORT ?? 47191),
 }
 
 const envShop = config.shop

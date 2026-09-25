@@ -6,7 +6,7 @@
   (app.asar, backend bundle, frontend, PostgreSQL incl. the share/timezone
   data and VC++ runtime DLLs), checks the Authenticode signature and
   uninstall entry, then launches the app and verifies that PostgreSQL
-  (127.0.0.1:5433) and the backend API (127.0.0.1:4198/api/v1/health) boot.
+  (127.0.0.1:47193) and the backend API (127.0.0.1:47192/api/v1/health) boot.
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1
@@ -59,7 +59,7 @@ function Stop-AppStack {
   Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue | ForEach-Object {
     try { $_.Kill(); $_.WaitForExit(5000) | Out-Null } catch {}
   }
-  foreach ($port in 4198, 5433) {
+  foreach ($port in 47192, 47193) {
     Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
       try { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } catch {}
     }
@@ -154,22 +154,22 @@ Report 'Uninstall registry entry present' ($null -ne $uninst)
 $launch = Start-Process -FilePath $appExe -PassThru
 Report 'App process started' (-not $launch.HasExited) "PID $($launch.Id)"
 
-$pgUp = Wait-Port 5433 $BootTimeoutSec
-Report 'PostgreSQL listening on 5433' $pgUp
+$pgUp = Wait-Port 47193 $BootTimeoutSec
+Report 'PostgreSQL listening on 47193' $pgUp
 
 $apiUp = $false
 $healthOk = $false
 $deadline = (Get-Date).AddSeconds([Math]::Min(60, $BootTimeoutSec))
 while ((Get-Date) -lt $deadline -and -not $apiUp) {
   try {
-    $r = Invoke-WebRequest -Uri 'http://127.0.0.1:4198/api/v1/health' -UseBasicParsing -TimeoutSec 5
+    $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47192/api/v1/health' -UseBasicParsing -TimeoutSec 5
     $apiUp = $true
     $healthOk = ($r.StatusCode -eq 200 -and $r.Content -match '"ok"\s*:\s*true')
   } catch {
     Start-Sleep -Milliseconds 1500
   }
 }
-Report 'Backend health endpoint responds' $apiUp 'http://127.0.0.1:4198/api/v1/health'
+Report 'Backend health endpoint responds' $apiUp 'http://127.0.0.1:47192/api/v1/health'
 Report 'Health payload ok=true' $healthOk
 
 if (-not ($pgUp -and $healthOk)) {

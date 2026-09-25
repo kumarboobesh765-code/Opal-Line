@@ -4,7 +4,7 @@
 //   3. product detail renders the hero image (CDN src, visible) + name
 import { chromium } from 'playwright'
 
-const BASE = process.env.BASE ?? 'http://localhost:4197'
+const BASE = process.env.BASE ?? 'http://localhost:47191'
 
 function mergeJar(jar, setCookies) {
   const map = new Map()

@@ -11,14 +11,14 @@
 // Images live only as files in backend/uploads (gitignored) + CDN URLs in the
 // DB — never as bytes in the database, never in git.
 //
-// Usage: node scripts/add-stock-photos.mjs [--api http://localhost:4197] [--push] [--verify]
+// Usage: node scripts/add-stock-photos.mjs [--api http://localhost:47191] [--push] [--verify]
 import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 
 const arg = (name, def) => {
   const i = process.argv.indexOf(`--${name}`)
   return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : def
 }
-const API = arg('api', 'http://localhost:4197')
+const API = arg('api', 'http://localhost:47191')
 const DO_PUSH = process.argv.includes('--push')
 const DO_VERIFY = process.argv.includes('--verify')
 const SKUS = (() => {

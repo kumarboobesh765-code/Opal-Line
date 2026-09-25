@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const BASE = process.env.BASE ?? 'http://localhost:4197'
+const BASE = process.env.BASE ?? 'http://localhost:47191'
 
 function mergeJar(jar, setCookies) {
   const map = new Map()

@@ -1,7 +1,7 @@
 // Generates placeholder product images (rendered via Playwright) for every
 // product that has none, attaches them through /db/products/bulk-images
 // (SKU-matched filenames), then pushes products to Shopify in chunks.
-// Usage: cd frontend && node ../scripts/add-product-images.mjs [--api http://localhost:4197]
+// Usage: cd frontend && node ../scripts/add-product-images.mjs [--api http://localhost:47191]
 import { chromium } from 'playwright'
 
 const arg = (name, def) => {
@@ -9,7 +9,7 @@ const arg = (name, def) => {
   return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : def
 }
 const DRY = process.argv.includes('--dry-run')
-const API = arg('api', 'http://localhost:4197')
+const API = arg('api', 'http://localhost:47191')
 
 const jar = new Map()
 function mergeJar(setCookies) {

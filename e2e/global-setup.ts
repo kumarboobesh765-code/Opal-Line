@@ -1,7 +1,7 @@
 import { request } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 
-const BASE_URL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:4198'
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:47192'
 export const E2E_USER = process.env.E2E_USER ?? 'admin'
 export const E2E_PASSWORD = process.env.E2E_PASSWORD ?? 'Opal@2026'
 

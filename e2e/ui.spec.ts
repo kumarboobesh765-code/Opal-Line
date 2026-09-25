@@ -46,7 +46,7 @@ test('system status page shows live server info, updates and logs', async ({ pag
   await page.goto('/system/status')
   await expect(page.getByRole('heading', { name: 'System Status' })).toBeVisible()
   // live data from the new /api/v1/system/status endpoint
-  await expect(page.getByText('Port 4198')).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('Port 47192')).toBeVisible({ timeout: 15000 })
   await expect(page.getByText('Healthy')).toBeVisible()
   // update card (desktop bridge may be absent in a plain browser — the card
   // must render either way)

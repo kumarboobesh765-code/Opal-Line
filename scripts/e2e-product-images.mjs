@@ -9,7 +9,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const BASE = 'http://localhost:4197'
+const BASE = 'http://localhost:47191'
 const results = []
 const check = (name, ok, detail = '') => {
   results.push({ name, ok, detail })
