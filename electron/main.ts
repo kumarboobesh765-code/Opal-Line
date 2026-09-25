@@ -15,7 +15,6 @@ let localPostgresStarted = false
 // collisions with common software on any machine. The installed app uses
 // 47192/47193, distinct from the dev backend (47191), so the dev server and
 // the installed desktop app can run at the same time.
-// time without ever fighting over a port.
 const BACKEND_PORT = 47192
 const PG_PORT = 47193
 const isDev = !app.isPackaged
@@ -219,6 +218,56 @@ function waitForPostgres(port: number, tries = 30): void {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
   }
   console.warn('[postgres] Did not become ready in time — continuing')
+}
+
+function processNameForPid(pid: string): string {
+  try {
+    const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', shell: 'cmd.exe' })
+    const first = out.split('\n').find((l) => l.trim().startsWith('"'))
+    return first ? first.split('","')[0].replace(/^"/, '') : 'unknown process'
+  } catch { return 'unknown process' }
+}
+
+function pidListeningOn(port: number): string | null {
+  try {
+    const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', shell: 'cmd.exe' })
+    const line = out.split('\n').find((l) => l.trim().length > 0)
+    if (!line) return null
+    const pid = line.trim().split(/\s+/).pop() ?? ''
+    return /^\d+$/.test(pid) ? pid : null
+  } catch { return null }
+}
+
+/**
+ * Fail fast — with a human-readable reason — when the dedicated ports are
+ * taken before we try to bind them. Otherwise the user only sees a long
+ * startup stall or a generic EADDRINUSE crash from the backend child.
+ */
+function preflightPorts(): boolean {
+  for (const [port, label] of [[BACKEND_PORT, 'application server'] as const, [PG_PORT, 'bundled database'] as const]) {
+    const pid = pidListeningOn(port)
+    if (!pid) continue
+    const name = processNameForPid(pid)
+    if (/opal line billing/i.test(name)) {
+      logLine('startup', `port ${port} held by another Opal Line instance (pid ${pid})`)
+      dialog.showMessageBox({
+        type: 'info',
+        title: 'Opal Line Billing is already running',
+        message: 'Opal Line Billing is already running.',
+        detail: `Another instance holds the ${label} port (${port}). Check the system tray or taskbar and switch to the open window.`,
+        buttons: ['OK'],
+      })
+    } else {
+      logLine('startup', `port ${port} held by ${name} (pid ${pid})`)
+      dialog.showErrorBox(
+        'Port already in use',
+        `The ${label} port (${port}) is used by:\n\n${name} (PID ${pid})\n\n` +
+        `Close that program or change the port in:\n${join(DATA_DIR, '.env')}`,
+      )
+    }
+    return false
+  }
+  return true
 }
 
 function ensureEnvFile(databaseUrl: string): { path: string; isFirstRun: boolean } {
@@ -663,6 +712,10 @@ app.on('before-quit', () => {
 async function main() {
   try {
     ensureDirs()
+    if (!preflightPorts()) {
+      app.quit()
+      return
+    }
     console.log('[electron] Ensuring PostgreSQL…')
     const managedUrl = await ensurePostgres()
     const { path: envPath, isFirstRun } = ensureEnvFile(managedUrl)
