@@ -739,25 +739,45 @@ function installUpdateAndRestart(): void {
   // -EncodedCommand avoids any quoting pitfalls in the embedded script.
   const appLog = join(LOG_DIR, 'app.log').replace(/'/g, "''")
   const setupEsc = setup.replace(/'/g, "''")
+  const exePath = process.execPath.replace(/'/g, "''")
   const script = [
     `$ErrorActionPreference = 'SilentlyContinue'`,
     `$log = '${appLog}'`,
+    `$exe = '${exePath}'`,
     `function Note($m) { try { Add-Content -LiteralPath $log -Value ("[" + (Get-Date).ToUniversalTime().ToString("o") + "] [installer] " + $m) } catch {} }`,
+    `function Ver { try { return (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion } catch { return 'unknown' } }`,
     `Note 'waiting for the app to exit before starting the installer'`,
+    `$before = Ver`,
     `$deadline = (Get-Date).AddSeconds(30)`,
     `while ((Get-Date) -lt $deadline) {`,
     `  if (-not (Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue)) { break }`,
     `  Start-Sleep -Milliseconds 500`,
     `}`,
-    `Note 'app exited (or the wait timed out) - starting the silent install'`,
+    `Note ('app exited (or the wait timed out) - installed version before install: ' + $before)`,
+    `$dir = Split-Path -Parent $exe`,
     `$done = $false`,
     `for ($i = 1; $i -le 3 -and -not $done; $i++) {`,
-    `  try { Start-Process -FilePath '${setupEsc}' -ArgumentList '/S' -Wait } catch { Note ('attempt ' + $i + ' failed to start: ' + $_.Exception.Message) }`,
+    `  try {`,
+    // Pin $INSTDIR to where this app actually runs. Without /D, NSIS falls back
+    // to its compiled default or a stale registration and can drop a second copy
+    // in Program Files while the real install stays on the old version (seen on
+    // the 1.0.3 -> 1.0.4 cycle). NSIS wants /D last and unquoted, so build the raw
+    // command line with ProcessStartInfo instead of Start-Process quoting it.
+    `    $psi = New-Object System.Diagnostics.ProcessStartInfo`,
+    `    $psi.FileName = '${setupEsc}'`,
+    `    $psi.Arguments = '/S /D=' + $dir`,
+    `    $psi.UseShellExecute = $false`,
+    `    $psi.WindowStyle = 'Hidden'`,
+    `    $proc = [System.Diagnostics.Process]::Start($psi)`,
+    `    $proc.WaitForExit()`,
+    `    Note ('attempt ' + $i + ' installer exit code: ' + $proc.ExitCode)`,
+    `  } catch { Note ('attempt ' + $i + ' failed to start: ' + $_.Exception.Message) }`,
     `  Start-Sleep -Seconds 2`,
-    `  if (Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue) { $done = $true; Note 'installer finished and relaunched the app' }`,
-    `  else { Note ('attempt ' + $i + ' did not relaunch the app (installer likely hit a lock) - retrying'); Start-Sleep -Seconds 3 }`,
+    `  $after = Ver`,
+    `  if ($after -ne $before -and $after -ne 'unknown') { $done = $true; Note ('installed version is now ' + $after + ' - relaunching the app') }`,
+    `  else { Note ('attempt ' + $i + ' left the version at ' + $after + ' (installer likely hit a lock or a foreign install) - retrying'); Start-Sleep -Seconds 3 }`,
     `}`,
-    `if (-not $done) { Note 'could not apply the update automatically - run the downloaded installer manually' }`,
+    `if ($done) { Start-Process -FilePath $exe } else { Note 'could not apply the update automatically - run the downloaded installer manually'; Start-Process -FilePath $exe }`,
   ].join('; ')
   const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     detached: true,

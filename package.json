@@ -1,7 +1,7 @@
 {
   "name": "opal-line-project",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "main": "electron/dist/main.js",
   "description": "Opal Line Billing Software — Shopify-integrated billing with silver rate pricing",
   "author": "Opal Line Jewels LLP",
