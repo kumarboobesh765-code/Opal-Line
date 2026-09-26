@@ -22,20 +22,36 @@ const MAX_LOGO_DATAURL_BYTES = 300 * 1024
 
 export interface PrintDesignerConfig {
   accent: string
-  headerStyle: 'banner' | 'minimal' | 'boxed'
+  accent2: string
+  headerStyle: 'banner' | 'minimal' | 'boxed' | 'modern'
+  font: 'inter' | 'georgia' | 'arial'
   fontScale: number
   pageSize: 'a4' | 'letter'
   margins: { top: number; right: number; bottom: number; left: number }
+  cornerRadius: number
+  paperTint: 'white' | 'cream'
+  tableHeaderStyle: 'dark' | 'accent' | 'light'
+  borderStyle: 'rows' | 'full' | 'none'
+  tableZebra: boolean
   showLogo: boolean
+  logoAlign: 'left' | 'center'
   logoDataUrl: string | null
+  showTagline: boolean
   showGSTIN: boolean
+  showContactBoxes: boolean
+  showPayment: boolean
+  showQr: boolean
+  qrDataUrl: string | null
+  qrCaption: string
   showAmountWords: boolean
   showSignature: boolean
   showDeclaration: boolean
   showHsn: boolean
   showWeight: boolean
   showRate: boolean
-  tableZebra: boolean
+  showTax: boolean
+  signatoryName: string
+  bankDetails: string
   footerNote: string
   thankYouNote: string
   declaration: string
@@ -45,20 +61,36 @@ export interface PrintDesignerConfig {
 export function defaultPrintConfig(_docType: PrintDocType): PrintDesignerConfig {
   return {
     accent: '#c8a951',
+    accent2: '#1a1a2e',
     headerStyle: 'banner',
+    font: 'inter',
     fontScale: 1,
     pageSize: 'a4',
     margins: { top: 12, right: 12, bottom: 12, left: 12 },
+    cornerRadius: 6,
+    paperTint: 'white',
+    tableHeaderStyle: 'dark',
+    borderStyle: 'rows',
+    tableZebra: true,
     showLogo: false,
+    logoAlign: 'left',
     logoDataUrl: null,
+    showTagline: true,
     showGSTIN: true,
+    showContactBoxes: true,
+    showPayment: true,
+    showQr: false,
+    qrDataUrl: null,
+    qrCaption: 'Scan to pay',
     showAmountWords: true,
     showSignature: true,
     showDeclaration: true,
     showHsn: true,
     showWeight: true,
     showRate: true,
-    tableZebra: true,
+    showTax: true,
+    signatoryName: '',
+    bankDetails: '',
     footerNote: '',
     thankYouNote: 'Thank you for your business!',
     declaration:
@@ -87,9 +119,15 @@ export function sanitizePrintConfig(input: unknown): { config: PrintDesignerConf
     typeof v === 'string' ? v.slice(0, maxLen) : fallback
 
   const margins = (typeof raw.margins === 'object' && raw.margins !== null ? raw.margins : {}) as Record<string, unknown>
+  const imageOr = (v: unknown): string | null =>
+    typeof v === 'string' && v.startsWith('data:image/') && v.length <= MAX_LOGO_DATAURL_BYTES ? v : null
   const config: PrintDesignerConfig = {
     accent: typeof raw.accent === 'string' && HEX_RE.test(raw.accent.trim()) ? raw.accent.trim() : d.accent,
-    headerStyle: raw.headerStyle === 'minimal' || raw.headerStyle === 'boxed' ? raw.headerStyle : 'banner',
+    accent2: typeof raw.accent2 === 'string' && HEX_RE.test(raw.accent2.trim()) ? raw.accent2.trim() : d.accent2,
+    headerStyle: ['minimal', 'boxed', 'modern'].includes(String(raw.headerStyle))
+      ? (raw.headerStyle as PrintDesignerConfig['headerStyle'])
+      : 'banner',
+    font: ['georgia', 'arial'].includes(String(raw.font)) ? (raw.font as PrintDesignerConfig['font']) : 'inter',
     fontScale: clampNum(raw.fontScale, 0.8, 1.3, 1),
     pageSize: raw.pageSize === 'letter' ? 'letter' : 'a4',
     margins: {
@@ -98,19 +136,33 @@ export function sanitizePrintConfig(input: unknown): { config: PrintDesignerConf
       bottom: clampNum(margins.bottom, 0, 40, 12),
       left: clampNum(margins.left, 0, 40, 12),
     },
-    showLogo: raw.showLogo === true,
-    logoDataUrl:
-      typeof raw.logoDataUrl === 'string' && raw.logoDataUrl.startsWith('data:image/') && raw.logoDataUrl.length <= MAX_LOGO_DATAURL_BYTES
-        ? raw.logoDataUrl
-        : null,
+    cornerRadius: clampNum(raw.cornerRadius, 0, 16, 6),
+    paperTint: raw.paperTint === 'cream' ? 'cream' : 'white',
+    tableHeaderStyle:
+      raw.tableHeaderStyle === 'accent' || raw.tableHeaderStyle === 'light'
+        ? (raw.tableHeaderStyle as PrintDesignerConfig['tableHeaderStyle'])
+        : 'dark',
+    borderStyle: raw.borderStyle === 'full' || raw.borderStyle === 'none' ? (raw.borderStyle as PrintDesignerConfig['borderStyle']) : 'rows',
+    tableZebra: raw.tableZebra !== false,
+    showLogo: raw.showLogo === true && imageOr(raw.logoDataUrl) !== null,
+    logoAlign: raw.logoAlign === 'center' ? 'center' : 'left',
+    logoDataUrl: imageOr(raw.logoDataUrl),
+    showTagline: raw.showTagline !== false,
     showGSTIN: raw.showGSTIN !== false,
+    showContactBoxes: raw.showContactBoxes !== false,
+    showPayment: raw.showPayment !== false,
+    showQr: raw.showQr === true && imageOr(raw.qrDataUrl) !== null,
+    qrDataUrl: imageOr(raw.qrDataUrl),
+    qrCaption: clampStr(raw.qrCaption, 120, d.qrCaption),
     showAmountWords: raw.showAmountWords !== false,
     showSignature: raw.showSignature !== false,
     showDeclaration: raw.showDeclaration !== false,
     showHsn: raw.showHsn !== false,
     showWeight: raw.showWeight !== false,
     showRate: raw.showRate !== false,
-    tableZebra: raw.tableZebra !== false,
+    showTax: raw.showTax !== false,
+    signatoryName: clampStr(raw.signatoryName, 120, ''),
+    bankDetails: clampStr(raw.bankDetails, 600, ''),
     footerNote: clampStr(raw.footerNote, 500, ''),
     thankYouNote: clampStr(raw.thankYouNote, 300, d.thankYouNote),
     declaration: clampStr(raw.declaration, 1000, d.declaration),

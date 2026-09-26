@@ -57,6 +57,51 @@ describe('sanitizePrintConfig (print designer)', () => {
     assert.ok(config.footerNote.length <= 500)
     assert.ok(config.thankYouNote.length <= 300)
   })
+
+  test('accepts the extended design options', () => {
+    const { config, error } = sanitizePrintConfig({
+      headerStyle: 'modern',
+      font: 'georgia',
+      accent2: '#112233',
+      cornerRadius: 12,
+      paperTint: 'cream',
+      tableHeaderStyle: 'accent',
+      borderStyle: 'full',
+      logoAlign: 'center',
+      showTax: false,
+      signatoryName: 'Ajith Kumar',
+      bankDetails: 'A/C 1234 · IFSC SBIN0001234',
+      showQr: true,
+      qrDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+      qrCaption: 'Scan to pay (UPI)',
+    })
+    assert.equal(error, undefined)
+    assert.equal(config.headerStyle, 'modern')
+    assert.equal(config.font, 'georgia')
+    assert.equal(config.accent2, '#112233')
+    assert.equal(config.cornerRadius, 12)
+    assert.equal(config.paperTint, 'cream')
+    assert.equal(config.tableHeaderStyle, 'accent')
+    assert.equal(config.borderStyle, 'full')
+    assert.equal(config.logoAlign, 'center')
+    assert.equal(config.showTax, false)
+    assert.equal(config.signatoryName, 'Ajith Kumar')
+    assert.equal(config.bankDetails, 'A/C 1234 · IFSC SBIN0001234')
+    assert.equal(config.showQr, true)
+    assert.equal(config.qrCaption, 'Scan to pay (UPI)')
+  })
+
+  test('QR toggle is ignored without a valid image', () => {
+    const { config } = sanitizePrintConfig({ showQr: true, qrDataUrl: 'data:text/html,x' })
+    assert.equal(config.showQr, false)
+    assert.equal(config.qrDataUrl, null)
+  })
+
+  test('bank details and signatory are length-capped', () => {
+    const { config } = sanitizePrintConfig({ bankDetails: 'b'.repeat(2000), signatoryName: 's'.repeat(500) })
+    assert.ok(config.bankDetails.length <= 600)
+    assert.ok(config.signatoryName.length <= 120)
+  })
 })
 
 describe('sampleDocument (designer preview)', () => {
