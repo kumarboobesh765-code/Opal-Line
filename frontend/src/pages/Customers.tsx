@@ -1,8 +1,8 @@
 import { toast, promptDialog } from '@/components/ui/confirm'
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Download, FileText, MoreHorizontal, Plus, RefreshCcw, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
+import { AlertTriangle, Download, FileText, MoreHorizontal, Plus, RefreshCcw, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
@@ -40,6 +40,11 @@ export default function CustomersPage() {
   const [query, setQuery] = useState('')
   const [importing, setImporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [piiGap, setPiiGap] = useState(0)
+
+  const refreshPiiGap = useCallback(() => {
+    shopifyApi.piiGap().then((r) => setPiiGap(r.missing)).catch(() => {})
+  }, [])
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
   const [addName, setAddName] = useState('')
@@ -101,7 +106,8 @@ export default function CustomersPage() {
       setCustomers(d)
       setLoading(false)
     }).catch(() => setLoading(false))
-  }, [])
+    refreshPiiGap()
+  }, [refreshPiiGap])
 
   const toggleStatus = async (c: Customer) => {
     const next = c.status === 'inactive' ? 'active' : 'inactive'
@@ -166,6 +172,7 @@ export default function CustomersPage() {
       if (res.attachmentsFound > 0) {
         toast.success(`Customer CSV imported — ${res.updated} customers updated, ${res.imported} added${res.errors.length ? `, ${res.errors.length} skipped` : ''}`)
         await dbApi.getCustomers().then(setCustomers)
+        refreshPiiGap()
       } else if (res.errors.length > 0) {
         toast.error(res.errors[0])
       } else {
@@ -344,6 +351,15 @@ export default function CustomersPage() {
           </>
         }
       />
+
+      {piiGap > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-warning-200 bg-warning-50 px-4 py-2.5 text-sm text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-200">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <b>{piiGap}</b> customer{piiGap === 1 ? '' : 's'} still missing contact details (redacted by Shopify). Use <b>Sync Customers</b> to fill them.
+          </span>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryTile icon={Users} label="Total Customers" value={String(customers.length)} sub={`${customers.filter((c) => c.status === 'active').length} active`} tint="bg-primary-50 text-primary-700 dark:bg-primary-50/60 dark:text-primary-300" />

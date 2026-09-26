@@ -609,6 +609,17 @@ app.post('/api/v1/shopify/email-ingest/poll', requirePermission('shopify', 'crea
 // Customer-export CSV watcher: finds the CSV Shopify emails after a
 // "Export customers" click and imports it with Shopify customer IDs where
 // they can be resolved. Runs alongside the order-email poll.
+// PII-gap count for the Customers page banner: how many customer rows are
+// still redacted placeholders (no email AND no phone).
+app.get('/api/v1/shopify/pii-gap', requirePermission('shopify', 'view'), async (_req, res) => {
+  try {
+    const { missingPiiCustomerCount } = await import('./shopifyDataEnhance')
+    res.json({ missing: await missingPiiCustomerCount() })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'pii-gap failed' })
+  }
+})
+
 app.post('/api/v1/shopify/customer-export/poll', requirePermission('shopify', 'create'), async (req, res) => {
   try {
     const { pollCustomerExport } = await import('./orderEmailIngest')
