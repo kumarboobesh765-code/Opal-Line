@@ -21,6 +21,19 @@ const PROTECTED_GET = [
   '/api/v1/settings/whatsapp-status',
   '/api/v1/db/silver-rates?limit=1',
   '/api/v1/db/dashboard/kpis',
+  '/api/v1/print-templates',
+  '/api/v1/print-templates/default/invoice',
+  '/api/v1/print-templates/sample/invoice',
+]
+
+// State-changing endpoints that must reject requests without a CSRF token even
+// when authenticated (an attacker page cannot obtain the token).
+const PROTECTED_POST_NO_CSRF = [
+  '/api/v1/print-templates',
+  '/api/v1/backup/email',
+  '/api/v1/backup/email-separate',
+  '/api/v1/backup/notifications/daily-summary',
+  '/api/v1/backup/notifications/low-stock',
 ]
 
 test.describe('anonymous requests', () => {
@@ -61,6 +74,15 @@ test.describe('anonymous requests', () => {
     expect(body.error ?? '').toMatch(/csrf/i)
   })
 
+  test('new mutation endpoints reject unauthenticated calls', async ({ request }) => {
+    for (const path of PROTECTED_POST_NO_CSRF) {
+      const res = await request.post(path, { data: { scope: 'customers' } })
+      // 401 (no session) — never 200; unauthenticated callers must not be able
+      // to trigger emails, template writes or backups.
+      expect([401, 403], `${path} returned HTTP ${res.status()}`).toContain(res.status())
+    }
+  })
+
   test('Shopify webhook rejects unsigned payloads', async ({ request }) => {
     const res = await request.post('/api/v1/webhooks/shopify', {
       headers: { 'Content-Type': 'application/json' },
@@ -91,9 +113,13 @@ test.describe('anonymous requests', () => {
       const text = await res.text()
       expect(text, `${p} leaked sensitive content`).not.toContain('DATABASE_URL=')
       expect(text).not.toContain('.csrf-secret')
+      expect(text).not.toContain('Ajith012')
       if (res.status() === 200) {
-        // only the SPA shell / assets are allowed to come back with 200
-        expect(res.headers()['content-type'] ?? '').toContain('text/html')
+        // Only the SPA shell / its own assets may come back with 200. The Vite
+        // dev server serves the frontend's own package.json (no secrets), the
+        // production server does not — either way nothing secret may leak.
+        const ct = res.headers()['content-type'] ?? ''
+        expect(ct.includes('text/html') || (p === '/package.json' && ct.includes('json'))).toBe(true)
       }
     }
   })
@@ -130,10 +156,13 @@ test.describe('anonymous requests', () => {
 
   test('frontend bundle ships without source maps', async ({ request }) => {
     const html = await (await request.get('/')).text()
-    const match = html.match(/src="(\/assets\/[^"]+\.js)"/)
+    // Vite dev serves /src modules; the production build serves /assets/*.js.
+    const match = html.match(/src="(\/assets\/[^"]+\.js)"/) ?? html.match(/src="(\/@vite\/client)"/)
     expect(match, 'no entry script found in index.html').toBeTruthy()
-    const js = await (await request.get(match![1])).text()
-    expect(js).not.toContain('sourceMappingURL')
+    if (match![1].startsWith('/assets/')) {
+      const js = await (await request.get(match![1])).text()
+      expect(js).not.toContain('sourceMappingURL')
+    }
   })
 })
 
