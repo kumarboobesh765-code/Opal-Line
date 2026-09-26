@@ -3,8 +3,8 @@ import { escapeHtml, numberToIndianWords } from '@/lib/utils'
 /**
  * Shared print-template builder — one source of truth for printable documents.
  * The Print Designer page renders live previews with it AND the real print
- * flows (invoice detail, quotations) build their printouts with it, so a saved
- * design instantly applies to every document of that type.
+ * flows (invoice detail, quotations, sales orders) build their printouts with
+ * it, so a saved design instantly applies to every document of that type.
  *
  * Keep the defaults in sync with backend/src/routes/printTemplates.ts
  * (defaultPrintConfig + sanitizePrintConfig); the backend clamps and stores
@@ -13,20 +13,36 @@ import { escapeHtml, numberToIndianWords } from '@/lib/utils'
 
 export interface PrintDesignerConfig {
   accent: string
-  headerStyle: 'banner' | 'minimal' | 'boxed'
+  accent2: string
+  headerStyle: 'banner' | 'minimal' | 'boxed' | 'modern'
+  font: 'inter' | 'georgia' | 'arial'
   fontScale: number
   pageSize: 'a4' | 'letter'
   margins: { top: number; right: number; bottom: number; left: number }
+  cornerRadius: number
+  paperTint: 'white' | 'cream'
+  tableHeaderStyle: 'dark' | 'accent' | 'light'
+  borderStyle: 'rows' | 'full' | 'none'
+  tableZebra: boolean
   showLogo: boolean
+  logoAlign: 'left' | 'center'
   logoDataUrl: string | null
+  showTagline: boolean
   showGSTIN: boolean
+  showContactBoxes: boolean
+  showPayment: boolean
+  showQr: boolean
+  qrDataUrl: string | null
+  qrCaption: string
   showAmountWords: boolean
   showSignature: boolean
   showDeclaration: boolean
   showHsn: boolean
   showWeight: boolean
   showRate: boolean
-  tableZebra: boolean
+  showTax: boolean
+  signatoryName: string
+  bankDetails: string
   footerNote: string
   thankYouNote: string
   declaration: string
@@ -35,25 +51,47 @@ export interface PrintDesignerConfig {
 
 export const DEFAULT_PRINT_CONFIG: PrintDesignerConfig = {
   accent: '#c8a951',
+  accent2: '#1a1a2e',
   headerStyle: 'banner',
+  font: 'inter',
   fontScale: 1,
   pageSize: 'a4',
   margins: { top: 12, right: 12, bottom: 12, left: 12 },
+  cornerRadius: 6,
+  paperTint: 'white',
+  tableHeaderStyle: 'dark',
+  borderStyle: 'rows',
+  tableZebra: true,
   showLogo: false,
+  logoAlign: 'left',
   logoDataUrl: null,
+  showTagline: true,
   showGSTIN: true,
+  showContactBoxes: true,
+  showPayment: true,
+  showQr: false,
+  qrDataUrl: null,
+  qrCaption: 'Scan to pay',
   showAmountWords: true,
   showSignature: true,
   showDeclaration: true,
   showHsn: true,
   showWeight: true,
   showRate: true,
-  tableZebra: true,
+  showTax: true,
+  signatoryName: '',
+  bankDetails: '',
   footerNote: '',
   thankYouNote: 'Thank you for your business!',
   declaration:
     'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct. Goods once sold will only be exchanged as per store policy. This is a computer-generated invoice.',
   watermark: null,
+}
+
+const IMAGE_DATAURL = 'data:image/'
+
+function mergeImage(v: unknown): string | null {
+  return typeof v === 'string' && v.startsWith(IMAGE_DATAURL) ? v : null
 }
 
 /** Merge a stored config over the defaults so new options never break old saves. */
@@ -64,10 +102,13 @@ export function mergePrintConfig(saved: unknown): PrintDesignerConfig {
     const n = Number(v)
     return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fb
   }
+  const hex = (v: unknown, fb: string) => (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fb)
   const m = (typeof s.margins === 'object' && s.margins !== null ? s.margins : {}) as Record<string, unknown>
   return {
-    accent: typeof s.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.accent) ? s.accent : d.accent,
-    headerStyle: s.headerStyle === 'minimal' || s.headerStyle === 'boxed' ? s.headerStyle : 'banner',
+    accent: hex(s.accent, d.accent),
+    accent2: hex(s.accent2, d.accent2),
+    headerStyle: ['minimal', 'boxed', 'modern'].includes(String(s.headerStyle)) ? (s.headerStyle as PrintDesignerConfig['headerStyle']) : 'banner',
+    font: ['georgia', 'arial'].includes(String(s.font)) ? (s.font as PrintDesignerConfig['font']) : 'inter',
     fontScale: num(s.fontScale, 0.8, 1.3, 1),
     pageSize: s.pageSize === 'letter' ? 'letter' : 'a4',
     margins: {
@@ -76,16 +117,30 @@ export function mergePrintConfig(saved: unknown): PrintDesignerConfig {
       bottom: num(m.bottom, 0, 40, 12),
       left: num(m.left, 0, 40, 12),
     },
-    showLogo: s.showLogo === true && typeof s.logoDataUrl === 'string' && s.logoDataUrl.startsWith('data:image/'),
-    logoDataUrl: typeof s.logoDataUrl === 'string' && s.logoDataUrl.startsWith('data:image/') ? s.logoDataUrl : null,
+    cornerRadius: num(s.cornerRadius, 0, 16, 6),
+    paperTint: s.paperTint === 'cream' ? 'cream' : 'white',
+    tableHeaderStyle: s.tableHeaderStyle === 'accent' || s.tableHeaderStyle === 'light' ? (s.tableHeaderStyle as PrintDesignerConfig['tableHeaderStyle']) : 'dark',
+    borderStyle: s.borderStyle === 'full' || s.borderStyle === 'none' ? (s.borderStyle as PrintDesignerConfig['borderStyle']) : 'rows',
+    tableZebra: s.tableZebra !== false,
+    showLogo: s.showLogo === true && mergeImage(s.logoDataUrl) !== null,
+    logoAlign: s.logoAlign === 'center' ? 'center' : 'left',
+    logoDataUrl: mergeImage(s.logoDataUrl),
+    showTagline: s.showTagline !== false,
     showGSTIN: s.showGSTIN !== false,
+    showContactBoxes: s.showContactBoxes !== false,
+    showPayment: s.showPayment !== false,
+    showQr: s.showQr === true && mergeImage(s.qrDataUrl) !== null,
+    qrDataUrl: mergeImage(s.qrDataUrl),
+    qrCaption: typeof s.qrCaption === 'string' ? s.qrCaption.slice(0, 120) : d.qrCaption,
     showAmountWords: s.showAmountWords !== false,
     showSignature: s.showSignature !== false,
     showDeclaration: s.showDeclaration !== false,
     showHsn: s.showHsn !== false,
     showWeight: s.showWeight !== false,
     showRate: s.showRate !== false,
-    tableZebra: s.tableZebra !== false,
+    showTax: s.showTax !== false,
+    signatoryName: typeof s.signatoryName === 'string' ? s.signatoryName.slice(0, 120) : '',
+    bankDetails: typeof s.bankDetails === 'string' ? s.bankDetails.slice(0, 600) : '',
     footerNote: typeof s.footerNote === 'string' ? s.footerNote : '',
     thankYouNote: typeof s.thankYouNote === 'string' ? s.thankYouNote : d.thankYouNote,
     declaration: typeof s.declaration === 'string' ? s.declaration : d.declaration,
@@ -136,6 +191,12 @@ export interface PrintDocExtras {
   terms?: string
 }
 
+const FONTS: Record<PrintDesignerConfig['font'], string> = {
+  inter: "'Inter', 'Segoe UI', Arial, sans-serif",
+  georgia: "Georgia, 'Times New Roman', serif",
+  arial: "Arial, Helvetica, sans-serif",
+}
+
 const fmt = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtDate = (iso: string) => {
   try {
@@ -143,6 +204,15 @@ const fmtDate = (iso: string) => {
   } catch {
     return iso
   }
+}
+
+const lighten = (hex: string, amount: number): string => {
+  const n = hex.replace('#', '')
+  const r = parseInt(n.slice(0, 2), 16)
+  const g = parseInt(n.slice(2, 4), 16)
+  const b = parseInt(n.slice(4, 6), 16)
+  const mix = (c: number) => Math.round(c + (255 - c) * amount).toString(16).padStart(2, '0')
+  return `#${mix(r)}${mix(g)}${mix(b)}`
 }
 
 /**
@@ -160,19 +230,30 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
   const hsnDisplay = hsnCodes.length > 0 ? hsnCodes.join(', ') : '7113'
   const totalWeight = items.reduce((a, i) => a + (Number(i.weight) || 0), 0)
   const totalQty = items.reduce((a, i) => a + (Number(i.qty) || 0), 0)
+  const accentSoft = lighten(c.accent, 0.82)
+  const accentSoft2 = lighten(c.accent, 0.93)
+  const radius = `${c.cornerRadius}px`
   const pageWidth = c.pageSize === 'letter' ? '216mm' : '210mm'
+  const docLabel = extras.docType === 'quotation' ? 'QUOTATION' : extras.docType === 'order' ? 'SALES ORDER' : 'TAX INVOICE'
+  const docNumberLabel = extras.docType === 'quotation' ? 'Quotation No' : extras.docType === 'order' ? 'Order No' : 'Invoice No'
+  const tagline = extras.tagline || '92.5 Sterling Silver Jewellery'
+
+  const cellBorder =
+    c.borderStyle === 'full' ? 'border:1px solid #e5e7eb;' : c.borderStyle === 'rows' ? 'border-bottom:1px solid #e5e7eb;' : ''
+  const headBg =
+    c.tableHeaderStyle === 'dark' ? `background:#1a1a2e;color:#fff;` : c.tableHeaderStyle === 'accent' ? `background:${c.accent};color:#1a1a2e;` : `background:${accentSoft2};color:#374151;border-bottom:2px solid ${c.accent};`
+  const zebra = (idx: number) => (c.tableZebra && idx % 2 === 0 ? `background:#fafafa;` : '')
 
   const itemRows = items
     .map((i, idx) => {
-      const zebra = c.tableZebra && idx % 2 === 0 ? 'background:#f8f9fa;' : ''
-      return `<tr style="${zebra}">
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;">${escapeHtml(String(i.product ?? ''))}<br/><span style="color:#6b728b;font-size:9px;">${escapeHtml(String(i.sku ?? ''))}</span></td>
-          ${c.showHsn ? `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${escapeHtml(String(i.hsn ?? hsnDisplay))}</td>` : ''}
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">${Number(i.qty) || 0}</td>
-          ${c.showWeight ? `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">${(Number(i.weight) || 0).toFixed(2)}</td>` : ''}
-          ${c.showRate ? `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">₹${fmt(Number(i.silverRate) || 0)}</td><td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">₹${fmt(Number(i.makingCharge) || 0)}</td>` : ''}
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">${Number(i.tax) || 0}%</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;font-weight:600;">₹${fmt(Number(i.amount) || 0)}</td>
+      return `<tr style="${zebra(idx)}">
+          <td style="padding:9px 10px;${cellBorder}font-size:11px;">${escapeHtml(String(i.product ?? ''))}<br/><span style="color:#8a8fa3;font-size:9px;">${escapeHtml(String(i.sku ?? ''))}</span></td>
+          ${c.showHsn ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:center;">${escapeHtml(String(i.hsn ?? hsnDisplay))}</td>` : ''}
+          <td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${Number(i.qty) || 0}</td>
+          ${c.showWeight ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${(Number(i.weight) || 0).toFixed(2)}</td>` : ''}
+          ${c.showRate ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">₹${fmt(Number(i.silverRate) || 0)}</td><td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">₹${fmt(Number(i.makingCharge) || 0)}</td>` : ''}
+          ${c.showTax ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${Number(i.tax) || 0}%</td>` : ''}
+          <td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;font-weight:600;">₹${fmt(Number(i.amount) || 0)}</td>
         </tr>`
     })
     .join('')
@@ -183,46 +264,73 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
     `<th style="text-align:right;">Qty</th>` +
     (c.showWeight ? `<th style="text-align:right;">Weight (g)</th>` : '') +
     (c.showRate ? `<th style="text-align:right;">Rate (₹/g)</th><th style="text-align:right;">Making (₹)</th>` : '') +
-    `<th style="text-align:right;">GST</th><th style="text-align:right;">Amount (₹)</th>`
+    (c.showTax ? `<th style="text-align:right;">GST</th>` : '') +
+    `<th style="text-align:right;">Amount (₹)</th>`
   const footSpans =
-    `<td colspan="${c.showHsn ? 2 : 1}" style="padding:8px 10px;border-top:2px solid ${c.accent};font-size:10px;">Total: ${totalQty} item(s)</td>` +
-    `<td style="padding:8px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:10px;">${totalQty}</td>` +
-    (c.showWeight ? `<td style="padding:8px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:10px;">${totalWeight.toFixed(2)} g</td>` : '') +
+    `<td colspan="${c.showHsn ? 2 : 1}" style="padding:9px 10px;border-top:2px solid ${c.accent};font-size:10px;">Total: ${totalQty} item(s)</td>` +
+    `<td style="padding:9px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:10px;">${totalQty}</td>` +
+    (c.showWeight ? `<td style="padding:9px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:10px;">${totalWeight.toFixed(2)} g</td>` : '') +
     (c.showRate ? `<td colspan="2"></td>` : '') +
-    `<td style="padding:8px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:11px;">₹${fmt(doc.subtotal)}</td>`
+    (c.showTax ? `<td></td>` : '') +
+    `<td style="padding:9px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:11px;">₹${fmt(doc.subtotal)}</td>`
+
+  const logoImg = c.showLogo && c.logoDataUrl ? `<img class="logo" src="${c.logoDataUrl}" alt="logo"/>` : ''
+  const logoLeft = c.logoAlign === 'left'
+
+  const businessLines = `
+          <h1>${escapeHtml(doc.businessName || 'OPAL LINE JEWELS LLP')}</h1>
+          ${c.showTagline ? `<div class="sub">${escapeHtml(tagline)}</div>` : ''}
+          ${c.showGSTIN && doc.businessGstin ? `<div class="sub">GSTIN: ${escapeHtml(doc.businessGstin)}</div>` : ''}
+          ${doc.businessAddress ? `<div class="sub">${escapeHtml(doc.businessAddress)}</div>` : ''}
+          ${doc.businessPhone || doc.businessEmail ? `<div class="sub">${[doc.businessPhone, doc.businessEmail].filter(Boolean).map((v) => escapeHtml(String(v))).join(' · ')}</div>` : ''}`
 
   const headerBlock =
     c.headerStyle === 'banner'
       ? `<div class="header-banner">
-        ${c.showLogo && c.logoDataUrl ? `<img class="logo" src="${c.logoDataUrl}" alt="logo"/>` : ''}
-        <div>
-          <h1>${escapeHtml(doc.businessName || 'OPAL LINE JEWELS LLP')}</h1>
-          <div class="sub">${escapeHtml(extras.tagline || '92.5 Sterling Silver Jewellery')}</div>
-          ${c.showGSTIN && doc.businessGstin ? `<div class="sub">GSTIN: ${escapeHtml(doc.businessGstin)}</div>` : ''}
-          ${doc.businessAddress ? `<div class="sub">${escapeHtml(doc.businessAddress)}</div>` : ''}
-          ${doc.businessPhone || doc.businessEmail ? `<div class="sub">${[doc.businessPhone, doc.businessEmail].filter(Boolean).map((v) => escapeHtml(String(v))).join(' · ')}</div>` : ''}
-          <div class="sub">${escapeHtml(extras.docType === 'quotation' ? 'Quotation' : extras.docType === 'order' ? 'Sales Order' : 'E-commerce sale via Shopify')}</div>
-        </div>
-        <div class="badge" style="background:${c.accent};">${escapeHtml(extras.docType === 'quotation' ? 'QUOTATION' : extras.docType === 'order' ? 'SALES ORDER' : 'TAX INVOICE')}</div>
+        ${logoLeft ? logoImg : ''}
+        <div style="flex:1;">${businessLines}</div>
+        ${!logoLeft ? logoImg : ''}
+        <div class="badge" style="background:${c.accent};">${docLabel}</div>
       </div>`
-      : c.headerStyle === 'minimal'
-        ? `<div class="header-minimal">
-        <div>
-          <h1>${escapeHtml(doc.businessName || 'OPAL LINE JEWELS LLP')}</h1>
-          <div class="sub">${escapeHtml(extras.tagline || '92.5 Sterling Silver Jewellery')}${c.showGSTIN && doc.businessGstin ? ` · GSTIN: ${escapeHtml(doc.businessGstin)}` : ''}</div>
+      : c.headerStyle === 'modern'
+        ? `<div class="header-modern">
+        <div class="modern-left" style="${logoLeft ? '' : 'flex-direction:row-reverse;'}">${logoImg}<div>${businessLines}</div></div>
+        <div style="text-align:right;">
+          <div class="modern-label" style="color:${c.accent};">${docLabel}</div>
+          <div class="modern-number">${escapeHtml(doc.number)}</div>
         </div>
-        <div class="minimal-badge" style="color:${c.accent};border-color:${c.accent};">${escapeHtml(extras.docType === 'quotation' ? 'QUOTATION' : extras.docType === 'order' ? 'SALES ORDER' : 'TAX INVOICE')}</div>
+      </div>
+      <div class="modern-rule" style="background:linear-gradient(90deg, ${c.accent}, ${c.accent2});"></div>`
+        : c.headerStyle === 'minimal'
+          ? `<div class="header-minimal">
+        <div style="display:flex;align-items:center;gap:12px;${logoLeft ? '' : 'flex-direction:row-reverse;'}">${logoImg}<div>${businessLines}</div></div>
+        <div class="minimal-badge" style="color:${c.accent};border-color:${c.accent};">${docLabel}</div>
       </div>`
-        : `<div class="header-boxed">
-        <div class="boxed-inner" style="border-color:${c.accent};">
-          ${c.showLogo && c.logoDataUrl ? `<img class="logo" src="${c.logoDataUrl}" alt="logo"/>` : ''}
-          <div>
-            <h1>${escapeHtml(doc.businessName || 'OPAL LINE JEWELS LLP')}</h1>
-            <div class="sub" style="color:#6b728b;">${escapeHtml(extras.tagline || '92.5 Sterling Silver Jewellery')}${c.showGSTIN && doc.businessGstin ? ` · GSTIN: ${escapeHtml(doc.businessGstin)}` : ''}</div>
+          : `<div class="header-boxed">
+        <div class="boxed-inner" style="border-color:${c.accent};border-radius:${radius};">
+          ${logoLeft ? logoImg : ''}
+          <div style="flex:1;">${businessLines}</div>
+          ${!logoLeft ? logoImg : ''}
+          <div class="boxed-badge" style="background:${c.accent};">${docLabel}</div>
+        </div>
+      </div>`
+
+  const infoBoxes = c.showContactBoxes
+    ? `<div class="header-row">
+        <div class="info-row">
+          <div class="info-box">
+            <div class="label">${docNumberLabel}</div>
+            <div class="value">${escapeHtml(doc.number)}</div>
           </div>
-          <div class="boxed-badge" style="background:${c.accent};">${escapeHtml(extras.docType === 'quotation' ? 'QUOTATION' : extras.docType === 'order' ? 'SALES ORDER' : 'TAX INVOICE')}</div>
+          <div class="info-box">
+            <div class="label">Date</div>
+            <div class="value">${escapeHtml(fmtDate(doc.date))}</div>
+          </div>
+          ${c.showPayment && doc.paymentMethod ? `<div class="info-box"><div class="label">Payment</div><div class="value">${escapeHtml(doc.paymentMethod)}</div><div class="detail">${escapeHtml(doc.paymentStatus ?? '')}</div></div>` : ''}
+          ${extras.extraBox ? `<div class="info-box"><div class="label">${escapeHtml(extras.extraBox.label)}</div><div class="value">${escapeHtml(extras.extraBox.value)}</div></div>` : ''}
         </div>
       </div>`
+    : ''
 
   const gstinLine =
     extras.docType !== 'order'
@@ -233,80 +341,95 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
     ? `<div class="watermark" style="color:${c.accent};">${escapeHtml(c.watermark)}</div>`
     : ''
 
+  const signatoryFor = c.signatoryName
+    ? `For ${escapeHtml(c.signatoryName)}<br/><span style="font-size:8px;">Authorised Signatory</span>`
+    : `For ${escapeHtml(doc.businessName || 'OPAL LINE JEWELS LLP')}<br/><span style="font-size:8px;">Authorised Signatory</span>`
+
+  const qrBlock =
+    c.showQr && c.qrDataUrl
+      ? `<div class="qr-block">
+          <img src="${c.qrDataUrl}" alt="QR" style="width:88px;height:88px;object-fit:contain;border:1px solid #e5e7eb;border-radius:${radius};padding:4px;background:#fff;"/>
+          ${c.qrCaption ? `<div class="qr-caption">${escapeHtml(c.qrCaption)}</div>` : ''}
+        </div>`
+      : ''
+
   return `<!doctype html><html><head><title>${escapeHtml(doc.number)}</title><style>
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
       *{margin:0;padding:0;box-sizing:border-box;}
-      body{font-family:'Inter',Arial,sans-serif;color:#1f2937;margin:0;padding:${c.margins.top}mm ${c.margins.right}mm ${c.margins.bottom}mm ${c.margins.left}mm;background:#fff;font-size:${(11 * c.fontScale).toFixed(1)}px;max-width:${pageWidth};}
-      .header-banner{background:#1a1a2e;color:#fff;padding:16px 20px;border-radius:6px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;}
-      .header-banner h1{font-size:${(20 * c.fontScale).toFixed(0)}px;font-weight:700;letter-spacing:0.5px;}
-      .header-banner .sub{color:#a0aec0;font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;}
-      .header-banner .logo{max-height:44px;max-width:120px;object-fit:contain;}
-      .badge{display:inline-block;padding:5px 16px;font-size:${(10 * c.fontScale).toFixed(0)}px;font-weight:700;letter-spacing:1.5px;border-radius:3px;color:#1a1a2e;white-space:nowrap;}
-      .header-minimal{display:flex;justify-content:space-between;align-items:center;padding:6px 0 14px;border-bottom:2px solid #1a1a2e;margin-bottom:16px;}
+      body{font-family:${FONTS[c.font]};color:#232733;margin:0;padding:${c.margins.top}mm ${c.margins.right}mm ${c.margins.bottom}mm ${c.margins.left}mm;background:${c.paperTint === 'cream' ? '#fdfbf5' : '#fff'};font-size:${(11 * c.fontScale).toFixed(1)}px;max-width:${pageWidth};}
+      .header-banner{background:linear-gradient(135deg, ${c.accent2} 0%, #2a2a45 100%);color:#fff;padding:18px 22px;border-radius:${radius};margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:12px;box-shadow:0 1px 3px rgba(15,23,42,.18);}
+      .header-banner h1{font-size:${(20 * c.fontScale).toFixed(0)}px;font-weight:800;letter-spacing:.4px;}
+      .header-banner .sub{color:#aab3c5;font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;}
+      .header-banner .logo{max-height:46px;max-width:120px;object-fit:contain;background:#fff;border-radius:4px;padding:3px;}
+      .badge{display:inline-block;padding:6px 16px;font-size:${(10 * c.fontScale).toFixed(0)}px;font-weight:800;letter-spacing:1.6px;border-radius:${radius};color:#1a1a2e;white-space:nowrap;box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);}
+      .header-modern{display:flex;justify-content:space-between;align-items:flex-start;padding:4px 2px 12px;}
+      .modern-left{display:flex;align-items:center;gap:14px;}
+      .header-modern h1{font-size:${(20 * c.fontScale).toFixed(0)}px;font-weight:800;color:#1a1a2e;}
+      .header-modern .sub{color:#6b7280;font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;}
+      .header-modern .logo{max-height:48px;max-width:130px;object-fit:contain;}
+      .modern-label{font-size:${(11 * c.fontScale).toFixed(0)}px;font-weight:800;letter-spacing:2.5px;}
+      .modern-number{font-size:${(13 * c.fontScale).toFixed(0)}px;font-weight:700;color:#374151;margin-top:3px;}
+      .modern-rule{height:3px;border-radius:2px;margin-bottom:18px;}
+      .header-minimal{display:flex;justify-content:space-between;align-items:center;padding:6px 0 14px;border-bottom:2px solid #1a1a2e;margin-bottom:18px;}
       .header-minimal h1{font-size:${(18 * c.fontScale).toFixed(0)}px;font-weight:700;color:#1a1a2e;}
-      .header-minimal .sub{color:#6b728b;font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;}
-      .minimal-badge{font-size:${(10 * c.fontScale).toFixed(0)}px;font-weight:700;letter-spacing:1.5px;border:2px solid;border-radius:3px;padding:4px 12px;white-space:nowrap;}
-      .header-boxed{margin-bottom:16px;}
-      .boxed-inner{display:flex;justify-content:space-between;align-items:center;gap:12px;border:2px solid;border-radius:8px;padding:14px 18px;}
+      .header-minimal .sub{color:#6b7280;font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;}
+      .header-minimal .logo{max-height:44px;max-width:120px;object-fit:contain;}
+      .minimal-badge{font-size:${(10 * c.fontScale).toFixed(0)}px;font-weight:700;letter-spacing:1.5px;border:2px solid;border-radius:${radius};padding:4px 12px;white-space:nowrap;}
+      .header-boxed{margin-bottom:18px;}
+      .boxed-inner{display:flex;justify-content:space-between;align-items:center;gap:12px;border:2px solid;border-radius:${radius};padding:15px 18px;}
       .header-boxed h1{font-size:${(18 * c.fontScale).toFixed(0)}px;font-weight:700;color:#1a1a2e;}
-      .header-boxed .sub{font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;}
-      .header-boxed .logo{max-height:40px;max-width:110px;object-fit:contain;margin-right:10px;}
-      .boxed-badge{color:#1a1a2e;font-size:${(10 * c.fontScale).toFixed(0)}px;font-weight:700;letter-spacing:1.5px;border-radius:3px;padding:5px 16px;white-space:nowrap;}
+      .header-boxed .sub{font-size:${(9 * c.fontScale).toFixed(0)}px;margin-top:2px;color:#6b7280;}
+      .header-boxed .logo{max-height:42px;max-width:115px;object-fit:contain;}
+      .boxed-badge{color:#1a1a2e;font-size:${(10 * c.fontScale).toFixed(0)}px;font-weight:800;letter-spacing:1.5px;border-radius:${radius};padding:6px 16px;white-space:nowrap;}
       .header-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
-      .info-row{display:flex;gap:8px;flex:1;margin-right:16px;}
-      .info-box{background:#f8f9fa;border-radius:4px;padding:12px 14px;flex:1;}
-      .info-box .label{font-size:8px;font-weight:600;color:#6b728b;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;}
-      .info-box .value{font-size:12px;font-weight:600;color:#1f2937;}
-      .info-box .detail{font-size:10px;color:#6b728b;margin-top:2px;}
+      .info-row{display:flex;gap:8px;flex:1;}
+      .info-box{background:${accentSoft2};border:1px solid ${accentSoft};border-radius:${radius};padding:11px 14px;flex:1;}
+      .info-box .label{font-size:7.5px;font-weight:700;color:#8a8fa3;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:4px;}
+      .info-box .value{font-size:12px;font-weight:700;color:#1f2937;}
+      .info-box .detail{font-size:10px;color:#6b7280;margin-top:2px;text-transform:capitalize;}
       .billto-row{display:flex;gap:12px;margin-bottom:14px;}
-      .billto-box{background:#f8f9fa;border-radius:4px;padding:12px 14px;flex:1;}
-      .billto-box .label{font-size:8px;font-weight:600;color:#6b728b;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+      .billto-box{background:${accentSoft2};border:1px solid ${accentSoft};border-radius:${radius};padding:12px 14px;flex:1;}
+      .billto-box .label{font-size:7.5px;font-weight:700;color:#8a8fa3;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:6px;}
       .billto-box .name{font-size:13px;font-weight:700;color:#1f2937;margin-bottom:3px;}
-      .billto-box .detail{font-size:10px;color:#6b728b;line-height:1.5;}
-      .meta-line{font-size:10px;color:#6b728b;margin-bottom:14px;}
-      table.items{width:100%;border-collapse:collapse;margin-bottom:16px;}
-      table.items thead th{background:#1a1a2e;color:#fff;padding:8px 10px;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;text-align:left;}
+      .billto-box .detail{font-size:10px;color:#6b7280;line-height:1.55;}
+      .meta-line{font-size:10px;color:#8a8fa3;margin-bottom:14px;}
+      table.items{width:100%;border-collapse:collapse;margin-bottom:16px;border-radius:${radius};overflow:hidden;}
+      ${c.borderStyle === 'full' ? `table.items{border:1px solid #e5e7eb;}` : ''}
+      table.items thead th{${headBg}padding:9px 10px;font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;text-align:left;}
       table.items thead th:last-child{text-align:right;}
-      table.items tbody td{padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:11px;}
-      .totals-box{float:right;width:260px;background:#f8f9fa;border-radius:4px;padding:14px;margin-bottom:16px;}
-      .totals-box .row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px;color:#374151;}
-      .totals-box .grand{display:flex;justify-content:space-between;padding-top:8px;font-size:14px;font-weight:700;color:#1a1a2e;border-top:2px solid ${c.accent};margin-top:6px;}
-      .amount-words{background:#fef3c7;border-radius:4px;padding:10px 14px;font-size:10px;color:#92400e;margin:16px 0;clear:both;}
+      table.items tbody td{padding:9px 10px;font-size:11px;}
+      table.items tfoot td{background:#f6f7f9;font-weight:600;}
+      .totals-wrap{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px;}
+      .totals-box{margin-left:auto;width:280px;background:${accentSoft2};border:1px solid ${accentSoft};border-radius:${radius};padding:15px 16px;}
+      .totals-box .row{display:flex;justify-content:space-between;padding:3.5px 0;font-size:11px;color:#374151;}
+      .totals-box .grand{display:flex;justify-content:space-between;padding-top:9px;font-size:14px;font-weight:800;color:#1a1a2e;border-top:2px solid ${c.accent};margin-top:7px;}
+      .amount-words{background:#fef7e0;border:1px solid #f3e3b3;border-radius:${radius};padding:10px 14px;font-size:10px;color:#92400e;margin:0 0 16px;}
       .amount-words b{color:#78350f;}
-      .terms{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:16px;font-size:9px;color:#6b728b;line-height:1.6;max-width:65%;clear:both;}
-      .footer{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:16px;clear:both;}
-      .declaration{font-size:9px;color:#6b728b;line-height:1.6;margin-bottom:${c.showSignature ? '16px' : '4px'};max-width:65%;}
-      .signatures{display:flex;justify-content:space-between;margin-top:20px;}
-      .sig-block{text-align:center;width:140px;}
-      .sig-line{border-top:1px solid #d1d5db;margin-top:40px;padding-top:4px;font-size:9px;color:#6b728b;}
+      .footer{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:4px;clear:both;}
+      .declaration{font-size:9px;color:#6b7280;line-height:1.65;margin-bottom:${c.showSignature ? '14px' : '4px'};max-width:65%;}
+      .signatures{display:flex;justify-content:space-between;margin-top:18px;}
+      .sig-block{text-align:center;width:150px;}
+      .sig-line{border-top:1px solid #d1d5db;margin-top:40px;padding-top:4px;font-size:9px;color:#6b7280;}
       .gen-footer{text-align:center;font-size:8px;color:#9ca3af;margin-top:16px;padding-top:8px;border-top:1px solid #f3f4f6;}
-      .footnote{font-size:9px;color:#6b728b;margin-top:10px;}
-      .thanks{font-size:11px;font-weight:600;color:${c.accent};margin-top:8px;}
-      .watermark{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:72px;font-weight:700;opacity:0.08;letter-spacing:8px;pointer-events:none;}
+      .footnote{font-size:9px;color:#6b7280;margin-top:10px;}
+      .bank{font-size:9.5px;color:#374151;background:${accentSoft2};border:1px solid ${accentSoft};border-radius:${radius};padding:9px 12px;margin-top:10px;white-space:pre-line;}
+      .thanks{font-size:11px;font-weight:700;color:${c.accent2};margin-top:8px;}
+      .qr-block{float:left;text-align:center;margin:4px 0 10px;}
+      .qr-caption{font-size:8.5px;color:#6b7280;margin-top:3px;}
+      .watermark{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:72px;font-weight:800;opacity:.08;letter-spacing:10px;pointer-events:none;white-space:nowrap;}
+      .terms{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:14px;font-size:9px;color:#6b7280;line-height:1.6;max-width:65%;clear:both;}
       @media print{
         body{font-size:10px;}
-        .header-banner,.boxed-inner{background:#1a1a2e !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-        table.items thead th{background:#1a1a2e !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+        .header-banner{background:linear-gradient(135deg, ${c.accent2} 0%, #2a2a45 100%) !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+        table.items thead th{${headBg} -webkit-print-color-adjust:exact;print-color-adjust:exact;}
         .badge,.boxed-badge{background:${c.accent} !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+        .info-box,.billto-box,.totals-box,.amount-words,.bank{background:${accentSoft2} !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
         .watermark{display:none;}
       }
     </style></head><body>
       ${watermark}
       ${headerBlock}
-      <div class="header-row">
-        <div class="info-row">
-          <div class="info-box">
-            <div class="label">${extras.docType === 'quotation' ? 'Quotation No' : extras.docType === 'order' ? 'Order No' : 'Invoice No'}</div>
-            <div class="value">${escapeHtml(doc.number)}</div>
-          </div>
-          <div class="info-box">
-            <div class="label">Date</div>
-            <div class="value">${escapeHtml(fmtDate(doc.date))}</div>
-          </div>
-          ${doc.paymentMethod ? `<div class="info-box"><div class="label">Payment</div><div class="value">${escapeHtml(doc.paymentMethod)}</div><div class="detail">${escapeHtml(doc.paymentStatus ?? '')}</div></div>` : ''}
-          ${extras.extraBox ? `<div class="info-box"><div class="label">${escapeHtml(extras.extraBox.label)}</div><div class="value">${escapeHtml(extras.extraBox.value)}</div></div>` : ''}
-        </div>
-      </div>
+      ${infoBoxes}
       <div class="billto-row">
         <div class="billto-box">
           <div class="label">${escapeHtml(extras.billToLabel ?? 'Bill To')}</div>
@@ -324,22 +447,26 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
       <table class="items">
         <thead><tr>${headCols}</tr></thead>
         <tbody>${itemRows}</tbody>
-        <tfoot><tr style="background:#f8f9fa;font-weight:600;">${footSpans}</tr></tfoot>
+        <tfoot><tr>${footSpans}</tr></tfoot>
       </table>
-      <div class="totals-box">
-        <div class="row"><span>Taxable Value</span><span>₹${fmt(taxable)}</span></div>
-        ${gstRate > 0 ? `<div class="row"><span>CGST @ ${gstRate / 2}%</span><span>₹${fmt(halfTax)}</span></div><div class="row"><span>SGST @ ${gstRate / 2}%</span><span>₹${fmt(halfTax)}</span></div><div class="row"><span>Total GST</span><span>₹${fmt(totalTax)}</span></div>` : ''}
-        ${Number(doc.discount) > 0 ? `<div class="row" style="color:#dc2626;"><span>Discount</span><span>- ₹${fmt(doc.discount)}</span></div>` : ''}
-        <div class="grand"><span>${escapeHtml(extras.totalLabel ?? 'GRAND TOTAL')}</span><span>₹${fmt(doc.grandTotal)}</span></div>
+      <div class="totals-wrap">
+        ${qrBlock}
+        <div class="totals-box">
+          <div class="row"><span>Taxable Value</span><span>₹${fmt(taxable)}</span></div>
+          ${gstRate > 0 ? `<div class="row"><span>CGST @ ${gstRate / 2}%</span><span>₹${fmt(halfTax)}</span></div><div class="row"><span>SGST @ ${gstRate / 2}%</span><span>₹${fmt(halfTax)}</span></div><div class="row"><span>Total GST</span><span>₹${fmt(totalTax)}</span></div>` : ''}
+          ${Number(doc.discount) > 0 ? `<div class="row" style="color:#dc2626;"><span>Discount</span><span>- ₹${fmt(doc.discount)}</span></div>` : ''}
+          <div class="grand"><span>${escapeHtml(extras.totalLabel ?? 'GRAND TOTAL')}</span><span>₹${fmt(doc.grandTotal)}</span></div>
+        </div>
       </div>
-      ${extras.terms ? `<div class="terms"><b>Terms &amp; Conditions:</b> ${escapeHtml(extras.terms)}</div>` : ''}
       ${c.showAmountWords ? `<div class="amount-words"><b>Amount in Words:</b> ${escapeHtml(numberToIndianWords(Number(doc.grandTotal) || 0))} Rupees Only</div>` : ''}
       <div class="footer">
         ${c.showDeclaration ? `<div class="declaration"><b>Declaration:</b> ${escapeHtml(c.declaration)}</div>` : ''}
+        ${extras.terms ? `<div class="terms"><b>Terms &amp; Conditions:</b> ${escapeHtml(extras.terms)}</div>` : ''}
+        ${c.bankDetails ? `<div class="bank"><b>Bank &amp; Payment Details:</b>\n${escapeHtml(c.bankDetails)}</div>` : ''}
         ${c.footerNote ? `<div class="footnote">${escapeHtml(c.footerNote)}</div>` : ''}
         ${c.showSignature ? `<div class="signatures">
           <div class="sig-block"><div class="sig-line">Customer Signature</div></div>
-          <div class="sig-block"><div class="sig-line">For ${escapeHtml(doc.businessName || 'OPAL LINE JEWELS LLP')}<br/><span style="font-size:8px;">Authorised Signatory</span></div></div>
+          <div class="sig-block"><div class="sig-line">${signatoryFor}</div></div>
         </div>` : ''}
         ${c.thankYouNote ? `<div class="thanks">${escapeHtml(c.thankYouNote)}</div>` : ''}
       </div>
