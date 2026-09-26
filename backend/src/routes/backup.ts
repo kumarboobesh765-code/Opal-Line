@@ -9,7 +9,7 @@ import { actorFromRequest, recordActivity } from '../activity'
 import { logger } from '../logger'
 import { pushRestoredDataToShopify } from '../shopify'
 import { getMasterKey } from '../lib/crypto'
-import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from '../notifications'
+import { notifyBackupComplete, notifyLowStock, notifyDailySummary, notifyBackupFiles } from '../notifications'
 import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateWhatsApp, sendLowStockWhatsApp, sendPaymentReminderWhatsApp, isWhatsAppConfigured } from '../whatsapp'
 
 export const backupRouter = Router()
@@ -1244,20 +1244,148 @@ backupRouter.post('/notifications/daily-summary', requirePermission('system', 'e
   const client = getRawClient()
   if (!client) return res.status(503).json({ error: 'DB unavailable' })
   try {
-    const today = new Date().toISOString().slice(0, 10)
-    const [salesResult] = await client.unsafe(`SELECT COALESCE(SUM(grand_total), 0) as total FROM sales_invoices WHERE date::text = $1`, [today])
-    const [ordersResult] = await client.unsafe(`SELECT count(*) as c FROM sales_orders WHERE date::text = $1`, [today])
-    const [pendingResult] = await client.unsafe(`SELECT count(*) as c FROM sales_invoices WHERE payment_status != 'paid'`)
-    const [lowStockResult] = await client.unsafe(`SELECT count(*) as c FROM products WHERE track_inventory != false AND stock IS NOT NULL AND reorder_level IS NOT NULL AND stock <= reorder_level`)
-    const sent = await notifyDailySummary(email, {
-      todaySales: Number(salesResult.total),
-      todayOrders: Number(ordersResult.c),
-      pendingPayments: Number(pendingResult.c),
-      lowStockCount: Number(lowStockResult.c),
-    })
+    const { sendDailySummaryEmail } = await import('../autoBackup')
+    const sent = await sendDailySummaryEmail(email)
     res.json({ ok: sent, email })
   } catch (err) {
     res.status(500).json({ error: 'Daily summary failed' })
+  }
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL BACKUP FILES: send full-DB or per-scope backup files as attachments
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_EMAIL_ATTACHMENT_BYTES = 20 * 1024 * 1024 // stay under the 25 MB Gmail limit
+
+backupRouter.post('/email', requirePermission('system', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  const email = typeof req.body?.email === 'string' && req.body.email.trim() ? req.body.email.trim() : process.env.NOTIFICATION_EMAIL?.trim()
+  if (!email) return res.status(400).json({ error: 'No email configured. Set NOTIFICATION_EMAIL in .env or provide an email in the request.' })
+  const scopeInput = typeof req.body?.scope === 'string' ? req.body.scope : 'full'
+  if (!SCOPE_BY_KEY.has(scopeInput)) return res.status(400).json({ error: `Unknown scope "${scopeInput}"` })
+  try {
+    const result = await exportScopeData(scopeInput)
+    if (!result.ok) return res.status(500).json({ error: result.error ?? 'Backup export failed' })
+    const exportedAt = new Date().toISOString()
+    const json = JSON.stringify({ _backup: { type: result.type, label: result.label, exportedAt }, data: result.data }, null, 2)
+    const buffer = Buffer.from(json, 'utf8')
+    const fileName = `${result.type}-backup-${istStamp(new Date(exportedAt))}.json`
+
+    if (buffer.length > MAX_EMAIL_ATTACHMENT_BYTES) {
+      return res.status(413).json({
+        error: `Backup is ${(buffer.length / (1024 * 1024)).toFixed(1)} MB — too large to email (20 MB limit). Use Download instead, or email a narrower scope.`,
+        sizeBytes: buffer.length,
+      })
+    }
+    const recordCount = Object.values(result.data).reduce((a, rows) => a + (Array.isArray(rows) ? rows.length : 0), 0)
+    const sent = await notifyBackupFiles(email, [{ fileName, content: buffer }], {
+      scopeLabel: result.label,
+      tableCount: Object.keys(result.data).length,
+      recordCount,
+    })
+    if (!sent) return res.status(502).json({ error: 'Email send failed — check notification settings' })
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Emailed Backup',
+      module: 'system',
+      entity: `Backup (${result.label})`,
+      details: `${result.label} · ${Object.keys(result.data).length} table(s) · ${fileName} → ${email}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, email, fileName, sizeBytes: buffer.length, tables: Object.keys(result.data).length, records: recordCount })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'Backup email failed')
+    res.status(500).json({ error: 'Backup email failed' })
+  }
+})
+
+// Email a set of separate per-scope backup files (products, customers, orders, …)
+backupRouter.post('/email-separate', requirePermission('system', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  const email = typeof req.body?.email === 'string' && req.body.email.trim() ? req.body.email.trim() : process.env.NOTIFICATION_EMAIL?.trim()
+  if (!email) return res.status(400).json({ error: 'No email configured. Set NOTIFICATION_EMAIL in .env or provide an email in the request.' })
+  try {
+    const scopeKeys = BACKUP_SCOPES.filter((s) => s.key !== 'full').map((s) => s.key)
+    const files: Array<{ fileName: string; content: Buffer; label: string; records: number }> = []
+    const exportedAt = new Date().toISOString()
+    let totalRecords = 0
+    let skipped: string[] = []
+    for (const key of scopeKeys) {
+      const result = await exportScopeData(key)
+      if (!result.ok) { skipped.push(`${result.label}: ${result.error ?? 'export failed'}`); continue }
+      const json = JSON.stringify({ _backup: { type: result.type, label: result.label, exportedAt }, data: result.data }, null, 2)
+      const buffer = Buffer.from(json, 'utf8')
+      if (buffer.length > MAX_EMAIL_ATTACHMENT_BYTES) { skipped.push(`${result.label}: file too large to email`); continue }
+      files.push({
+        fileName: `${result.type}-backup-${istStamp(new Date(exportedAt))}.json`,
+        content: buffer,
+        label: result.label,
+        records: Object.values(result.data).reduce((a, rows) => a + (Array.isArray(rows) ? rows.length : 0), 0),
+      })
+      totalRecords += files[files.length - 1].records
+    }
+    if (files.length === 0) return res.status(500).json({ error: 'No scope could be exported', skipped })
+    const totalBytes = files.reduce((a, f) => a + f.content.length, 0)
+    if (totalBytes > MAX_EMAIL_ATTACHMENT_BYTES) {
+      return res.status(413).json({ error: `All scopes together are ${(totalBytes / (1024 * 1024)).toFixed(1)} MB — too large for one email. Use Download instead.`, sizeBytes: totalBytes })
+    }
+    const sent = await notifyBackupFiles(
+      email,
+      files.map((f) => ({ fileName: f.fileName, content: f.content })),
+      { scopeLabel: 'All scopes (separate files)', tableCount: files.length, recordCount: totalRecords, note: skipped.length ? `Skipped: ${skipped.join('; ')}` : undefined },
+    )
+    if (!sent) return res.status(502).json({ error: 'Email send failed — check notification settings' })
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Emailed Backup',
+      module: 'system',
+      entity: 'Backup (all scopes, separate files)',
+      details: `${files.length} file(s) · ${totalRecords} record(s) → ${email}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, email, files: files.map((f) => f.fileName), totalBytes, skipped })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'Backup email (separate) failed')
+    res.status(500).json({ error: 'Backup email failed' })
+  }
+})
+
+// Email an existing backup file from disk (Backup & Restore history table action)
+backupRouter.post('/files/:name/email', requirePermission('system', 'edit'), async (req, res) => {
+  const email = typeof req.body?.email === 'string' && req.body.email.trim() ? req.body.email.trim() : process.env.NOTIFICATION_EMAIL?.trim()
+  if (!email) return res.status(400).json({ error: 'No email configured. Set NOTIFICATION_EMAIL in .env or provide an email in the request.' })
+  try {
+    const name = path.basename(String(req.params.name ?? ''))
+    const filePath = path.join(backupDirectory(), name)
+    if (!name.endsWith('.json') || !existsSync(filePath)) return res.status(404).json({ error: 'Backup file not found' })
+    const content = await readFile(filePath)
+    if (content.length > MAX_EMAIL_ATTACHMENT_BYTES) {
+      return res.status(413).json({ error: `File is ${(content.length / (1024 * 1024)).toFixed(1)} MB — too large to email (20 MB limit).`, sizeBytes: content.length })
+    }
+    const stat = statSync(filePath)
+    const sent = await notifyBackupFiles(email, [{ fileName: name, content }], {
+      scopeLabel: 'Saved backup file',
+      tableCount: 0,
+      recordCount: 0,
+      note: `File saved on ${stat.mtime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} · ${(stat.size / 1024).toFixed(0)} KB on disk.`,
+    })
+    if (!sent) return res.status(502).json({ error: 'Email send failed — check notification settings' })
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Emailed Backup',
+      module: 'system',
+      entity: `Backup file (${name})`,
+      details: `${name} → ${email}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, email, fileName: name, sizeBytes: content.length })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'Backup file email failed')
+    res.status(500).json({ error: 'Backup file email failed' })
   }
 })
 

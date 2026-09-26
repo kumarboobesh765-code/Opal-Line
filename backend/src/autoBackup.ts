@@ -1,11 +1,11 @@
 import { mkdir, writeFile, readdir, readFile, stat } from 'node:fs/promises'
 import { unlinkSync } from 'node:fs'
 import path from 'node:path'
-import { eq, gte, isNotNull, lte, ne, sql, and } from 'drizzle-orm'
+import { desc, eq, gte, isNotNull, lte, ne, sql, and } from 'drizzle-orm'
 import { exportScopeData, backupDirectory } from './routes/backup'
 import { logger } from './logger'
 import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from './notifications'
-import { db } from './db/client'
+import { db, getRawClient } from './db/client'
 import * as schema from './db/schema'
 import { escapeHtml } from './htmlEscape'
 
@@ -156,51 +156,150 @@ async function runDailySummary(): Promise<void> {
       logger.debug('Daily summary skipped — no NOTIFICATION_EMAIL or settings.email')
       return
     }
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const [salesRow] = await db
-      .select({ total: sql<number>`coalesce(sum(${schema.salesInvoices.grandTotal}), 0)::float` })
-      .from(schema.salesInvoices)
-      .where(gte(schema.salesInvoices.date, since))
-    const [ordersRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(schema.salesOrders)
-      .where(gte(schema.salesOrders.date, since))
-    const [pendingRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(schema.salesInvoices)
-      .where(ne(schema.salesInvoices.paymentStatus, 'paid'))
-    const [lowStockRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(schema.products)
-      .where(and(isNotNull(schema.products.stock), isNotNull(schema.products.reorderLevel), lte(schema.products.stock, schema.products.reorderLevel)))
-    // Dues statement: collect outstanding invoices and attach a PDF when any exist
-    let attachment: { filename: string; content: Buffer } | undefined
-    let duesTotal: number | undefined
-    let duesCustomers: number | undefined
-    try {
-      const { generateDuesStatementPDF } = await import('./statements')
-      const statement = await generateDuesStatementPDF()
-      if (statement) {
-        attachment = { filename: `dues-statement-${new Date().toISOString().slice(0, 10)}.pdf`, content: statement.buffer }
-        duesTotal = statement.totalDue
-        duesCustomers = statement.customerCount
-      }
-    } catch (err) {
-      logger.warn({ err }, 'Dues statement attachment skipped')
-    }
-    const sent = await notifyDailySummary(recipient, {
-      todaySales: Number(salesRow?.total ?? 0),
-      todayOrders: Number(ordersRow?.count ?? 0),
-      pendingPayments: Number(pendingRow?.count ?? 0),
-      lowStockCount: Number(lowStockRow?.count ?? 0),
-      duesTotal,
-      duesCustomers,
-      attachment,
-    })
+    const sent = await sendDailySummaryEmail(recipient)
     if (sent) logger.info({ recipient }, 'Daily summary email sent')
   } catch (err) {
     logger.error({ err }, 'Daily summary failed')
   }
+}
+
+/**
+ * Gather the full daily picture — sales, orders, new customers, silver rate,
+ * most-sold product (30d), top 5 products, low-stock detail, dues PDF — and
+ * email the rich summary. Shared by the 9 AM scheduler and the manual
+ * "Send now" action on the Notifications page.
+ */
+export async function sendDailySummaryEmail(recipient: string): Promise<boolean> {
+  if (!db) return false
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const dayAgo2 = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+
+  const [salesRow] = await db
+    .select({ total: sql<number>`coalesce(sum(${schema.salesInvoices.grandTotal}), 0)::float` })
+    .from(schema.salesInvoices)
+    .where(gte(schema.salesInvoices.date, since24h))
+  const [yesterdayRow] = await db
+    .select({ total: sql<number>`coalesce(sum(${schema.salesInvoices.grandTotal}), 0)::float` })
+    .from(schema.salesInvoices)
+    .where(and(gte(schema.salesInvoices.date, dayAgo2), sql`${schema.salesInvoices.date} < ${since24h}`))
+  const [ordersRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(schema.salesOrders)
+    .where(gte(schema.salesOrders.date, since24h))
+  const [pendingRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(schema.salesInvoices)
+    .where(ne(schema.salesInvoices.paymentStatus, 'paid'))
+  const [newCustRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(schema.customers)
+    .where(gte(schema.customers.joined, new Date().toISOString().slice(0, 10)))
+  const [lowStockRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(schema.products)
+    .where(and(isNotNull(schema.products.stock), isNotNull(schema.products.reorderLevel), lte(schema.products.stock, schema.products.reorderLevel)))
+
+  // Most-sold + top 5 products over the last 30 days from invoice line items.
+  let topProducts: Array<{ name: string; sku: string; qty: number; revenue: number; orders?: number }> = []
+  try {
+    const itemRows = await db
+      .select({
+        sku: schema.salesInvoiceItems.sku,
+        product: schema.salesInvoiceItems.product,
+        qty: schema.salesInvoiceItems.qty,
+        amount: schema.salesInvoiceItems.amount,
+        invoiceId: schema.salesInvoiceItems.invoiceId,
+      })
+      .from(schema.salesInvoiceItems)
+      .innerJoin(schema.salesInvoices, eq(schema.salesInvoiceItems.invoiceId, schema.salesInvoices.id))
+      .where(gte(schema.salesInvoices.date, since30d))
+    const agg = new Map<string, { name: string; sku: string; qty: number; revenue: number; orders: Set<string> }>()
+    for (const it of itemRows) {
+      const key = String(it.sku ?? it.product ?? '')
+      if (!key) continue
+      const entry = agg.get(key) ?? { name: String(it.product ?? key), sku: key, qty: 0, revenue: 0, orders: new Set<string>() }
+      entry.qty += Number(it.qty) || 0
+      entry.revenue += Number(it.amount) || 0
+      if (it.invoiceId) entry.orders.add(it.invoiceId)
+      agg.set(key, entry)
+    }
+    topProducts = [...agg.values()]
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 5)
+      .map((e) => ({ name: e.name, sku: e.sku, qty: e.qty, revenue: Math.round(e.revenue * 100) / 100, orders: e.orders.size }))
+  } catch (err) {
+    logger.warn({ err }, 'Daily summary: product ranking skipped')
+  }
+
+  // Low-stock detail rows with 30-day sales velocity for prioritisation.
+  let lowStockItems: Array<{ name: string; sku: string; stock: number; reorderLevel: number; qtySold30d?: number }> = []
+  try {
+    const client = getRawClient()
+    if (client) {
+      const rows = await client.unsafe(
+        `SELECT p.name, p.sku, p.stock, p.reorder_level,
+           COALESCE((SELECT SUM(ii.qty) FROM sales_invoice_items ii
+             JOIN sales_invoices si ON si.id = ii.invoice_id
+             WHERE ii.sku = p.sku AND si.date >= $1), 0) AS qty_sold_30d
+         FROM products p
+         WHERE p.track_inventory != false AND p.stock IS NOT NULL AND p.reorder_level IS NOT NULL AND p.stock <= p.reorder_level
+         ORDER BY p.stock ASC, qty_sold_30d DESC
+         LIMIT 25`,
+        [since30d],
+      )
+      lowStockItems = rows.map((r: any) => ({
+        name: String(r.name ?? ''),
+        sku: String(r.sku ?? ''),
+        stock: Number(r.stock ?? 0),
+        reorderLevel: Number(r.reorder_level ?? 0),
+        qtySold30d: Number(r.qty_sold_30d ?? 0),
+      }))
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Daily summary: low stock detail skipped')
+  }
+
+  // Latest silver rate for the header block.
+  let silverRate: { rate: number; change: number; updatedAt: string | null } | null = null
+  try {
+    const [latest] = await db.select().from(schema.silverRates).orderBy(desc(schema.silverRates.updatedAt)).limit(1)
+    if (latest) silverRate = { rate: Number(latest.rate), change: Number(latest.change ?? 0), updatedAt: latest.updatedAt ?? null }
+  } catch (err) {
+    logger.warn({ err }, 'Daily summary: silver rate skipped')
+  }
+
+  // Dues statement: collect outstanding invoices and attach a PDF when any exist
+  let attachment: { filename: string; content: Buffer } | undefined
+  let duesTotal: number | undefined
+  let duesCustomers: number | undefined
+  try {
+    const { generateDuesStatementPDF } = await import('./statements')
+    const statement = await generateDuesStatementPDF()
+    if (statement) {
+      attachment = { filename: `dues-statement-${new Date().toISOString().slice(0, 10)}.pdf`, content: statement.buffer }
+      duesTotal = statement.totalDue
+      duesCustomers = statement.customerCount
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Dues statement attachment skipped')
+  }
+
+  return notifyDailySummary(recipient, {
+    todaySales: Number(salesRow?.total ?? 0),
+    todayOrders: Number(ordersRow?.count ?? 0),
+    pendingPayments: Number(pendingRow?.count ?? 0),
+    lowStockCount: Number(lowStockRow?.count ?? 0),
+    yesterdaySales: Number(yesterdayRow?.total ?? 0),
+    newCustomers: Number(newCustRow?.count ?? 0),
+    lowStockItems,
+    topProducts,
+    mostSoldProduct: topProducts[0] ?? null,
+    silverRate,
+    duesTotal,
+    duesCustomers,
+    attachment,
+  })
 }
 
 function scheduleSummary(): void {

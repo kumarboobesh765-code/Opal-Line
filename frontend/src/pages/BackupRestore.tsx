@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Database, DatabaseBackup, Download, FileCheck, ListChecks, Loader2, Lock, RefreshCw, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
+import { Database, DatabaseBackup, Download, FileCheck, ListChecks, Loader2, Lock, Mail, RefreshCw, RotateCcw, ShieldCheck, Trash2, Upload } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -197,6 +197,30 @@ function BackupRestoreContent() {
     } finally { setZipBusy(false) }
   }
 
+  const emailBackup = async (scope: string | null) => {
+    const tag = scope === null ? 'email-separate' : `email-${scope}`
+    setBusy(tag); setMessage(null)
+    try {
+      if (scope === null) {
+        const r = await backupApi.emailBackupSeparate()
+        showMsg(true, `Emailed ${r.files.length} separate backup file(s) to ${r.email}${r.skipped.length ? ` (skipped: ${r.skipped.join('; ')})` : ''}.`)
+      } else {
+        const r = await backupApi.emailBackup(scope)
+        showMsg(true, `Backup emailed to ${r.email} — ${r.fileName} (${(r.sizeBytes / (1024 * 1024)).toFixed(2)} MB, ${r.records.toLocaleString('en-IN')} records).`)
+      }
+    } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Backup email failed') }
+    finally { setBusy(null) }
+  }
+
+  const emailBackupFile = async (fileName: string) => {
+    setBusy(`email-file-${fileName}`); setMessage(null)
+    try {
+      const r = await backupApi.emailBackupFile(fileName)
+      showMsg(true, `Backup file ${r.fileName} emailed to ${r.email}.`)
+    } catch (e) { showMsg(false, e instanceof Error ? e.message : 'Backup email failed') }
+    finally { setBusy(null) }
+  }
+
   const doRestore = async (fileName: string) => {
     setRestoreTarget(null); setPending(null); setPendingFile(null)
     const tag = `restore-${fileName}`
@@ -280,6 +304,14 @@ function BackupRestoreContent() {
             <Button variant="outline" onClick={downloadAllZip} disabled={zipBusy || everythingBusy || busy !== null}>
               {zipBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Download All (ZIP)
+            </Button>
+            <Button variant="outline" onClick={() => void emailBackup('full')} disabled={everythingBusy || busy !== null} title="Email the full database backup file to the notification address">
+              {busy === 'email-full' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Email Full Backup
+            </Button>
+            <Button variant="outline" onClick={() => void emailBackup(null)} disabled={everythingBusy || busy !== null} title="Email separate backup files per scope (products, customers, orders…)">
+              {busy === 'email-separate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Email Separate Files
             </Button>
             <Button variant="outline" onClick={() => void runBackupEverything(true)} disabled={everythingBusy || busy !== null}>
               {everythingBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
@@ -497,6 +529,10 @@ function BackupRestoreContent() {
                 <Button size="sm" variant="outline" onClick={() => selectedFile && backupApi.downloadFile(selectedFile)} disabled={!selectedFile}>
                   <Download className="h-4 w-4" />
                   Download
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => selectedFile && void emailBackupFile(selectedFile)} disabled={!selectedFile || busy !== null}>
+                  {busy === `email-file-${selectedFile}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                  Email
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => selectedFile && deleteFile(selectedFile)} disabled={!selectedFile || deleting !== null || busy !== null} className="text-red-600 dark:text-red-400 hover:text-red-700">
                   {deleting === selectedFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}

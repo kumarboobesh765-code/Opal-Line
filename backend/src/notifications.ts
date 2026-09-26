@@ -147,39 +147,63 @@ export async function notifyBackupComplete(
 
 export async function notifyLowStock(
   recipientEmail: string,
-  products: Array<{ name: string; sku: string; stock: number; reorderLevel: number }>
+  products: Array<{
+    name: string
+    sku: string
+    stock: number
+    reorderLevel: number
+    /** Optional detail columns for the richer alert. */
+    category?: string | null
+    sellingPrice?: number | null
+    shopifyStatus?: string | null
+    lastSoldDate?: string | null
+    qtySold30d?: number
+  }>
 ): Promise<boolean> {
   if (products.length === 0) return false
-  const rows = products
-    .map(
-      (p) => `
+  const money = (n: number) => '₹' + Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })
+  // Severity split: already OUT of stock vs still above zero.
+  const outOfStock = products.filter((p) => p.stock <= 0)
+  const belowReorder = products.filter((p) => p.stock > 0)
+  const row = (p: (typeof products)[number]) => `
       <tr>
         <td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(p.name)}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; font-family: monospace;">${escapeHtml(p.sku)}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: #dc2626; font-weight: bold;">${p.stock}</td>
+        ${p.category ? `<td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(p.category)}</td>` : ''}
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: ${p.stock <= 0 ? '#dc2626' : '#b45309'}; font-weight: bold;">${p.stock}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorderLevel}</td>
+        ${p.qtySold30d != null ? `<td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.qtySold30d}</td>` : ''}
+        ${p.sellingPrice != null ? `<td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${money(p.sellingPrice)}</td>` : ''}
+        ${p.shopifyStatus ? `<td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${escapeHtml(p.shopifyStatus)}</td>` : ''}
       </tr>`
-    )
-    .join('')
+  const columns =
+    `<th style="padding: 8px; text-align: left;">Product</th>` +
+    `<th style="padding: 8px; text-align: left;">SKU</th>` +
+    (products.some((p) => p.category) ? `<th style="padding: 8px; text-align: left;">Category</th>` : '') +
+    `<th style="padding: 8px; text-align: center;">In Stock</th>` +
+    `<th style="padding: 8px; text-align: center;">Reorder At</th>` +
+    (products.some((p) => p.qtySold30d != null) ? `<th style="padding: 8px; text-align: center;">Sold (30d)</th>` : '') +
+    (products.some((p) => p.sellingPrice != null) ? `<th style="padding: 8px; text-align: right;">Price</th>` : '') +
+    (products.some((p) => p.shopifyStatus) ? `<th style="padding: 8px; text-align: center;">Shopify</th>` : '')
+  const section = (title: string, color: string, list: typeof products) =>
+    list.length === 0
+      ? ''
+      : `<h3 style="color: ${color}; margin: 18px 0 6px;">${title} (${list.length})</h3>
+      <table style="width: 100%; border-collapse: collapse; border: 1px solid #eee;">
+        <thead><tr style="background: #f9fafb;">${columns}</tr></thead>
+        <tbody>${list.map(row).join('')}</tbody>
+      </table>`
 
   return sendEmail({
     to: recipientEmail,
-    subject: `⚠️ Low Stock Alert — ${products.length} product(s) below reorder level`,
+    subject: `⚠️ Low Stock Alert — ${outOfStock.length} out of stock, ${belowReorder.length} below reorder level`,
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="font-family: Arial, sans-serif; max-width: 760px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #dc2626;">⚠️ Low Stock Alert</h2>
-        <p>The following products are below their reorder level and need restocking:</p>
-        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; border: 1px solid #eee;">
-          <thead>
-            <tr style="background: #f9fafb;">
-              <th style="padding: 8px; text-align: left;">Product</th>
-              <th style="padding: 8px; text-align: left;">SKU</th>
-              <th style="padding: 8px; text-align: center;">Stock</th>
-              <th style="padding: 8px; text-align: center;">Reorder At</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <p>${products.length} product${products.length === 1 ? '' : 's'} need attention as of ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}:</p>
+        ${section('🔴 Out of stock — lost sales until restocked', '#dc2626', outOfStock)}
+        ${section('🟠 Below reorder level', '#b45309', belowReorder)}
+        <p style="margin-top: 14px; color: #666; font-size: 12px;">"Sold (30d)" is units invoiced in the last 30 days — fast movers at the top of the restock queue first.</p>
         <p style="color: #999; font-size: 12px;">Opal Line ERP — Low Stock Notification</p>
       </div>
     `,
@@ -249,27 +273,138 @@ export async function notifyDailySummary(
     duesTotal?: number
     duesCustomers?: number
     attachment?: { filename: string; content: Buffer }
+    /** Extra detail blocks for the richer summary. */
+    yesterdaySales?: number
+    lowStockItems?: Array<{ name: string; sku: string; stock: number; reorderLevel: number; qtySold30d?: number }>
+    topProducts?: Array<{ name: string; sku: string; qty: number; revenue: number; orders?: number }>
+    mostSoldProduct?: { name: string; sku: string; qty: number; revenue: number; orders?: number } | null
+    newCustomers?: number
+    silverRate?: { rate: number; change: number; updatedAt: string | null } | null
   }
 ): Promise<boolean> {
-  const money = (n: number) => '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+  const money = (n: number) => '₹' + Number(n ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })
   const duesRow =
     opts.duesTotal != null && opts.duesTotal > 0
       ? `\n        <tr><td style="padding: 12px; color: #666;">Outstanding Dues</td><td style="padding: 12px; font-weight: bold; color: #dc2626;">${money(opts.duesTotal)} <span style="font-weight: normal; color: #999;">(${opts.duesCustomers ?? 0} customers — see attached statement)</span></td></tr>`
       : ''
+  const delta = opts.yesterdaySales != null ? opts.todaySales - opts.yesterdaySales : null
+  const deltaRow =
+    delta != null
+      ? `\n        <tr><td style="padding: 12px; color: #666;">vs Previous Day</td><td style="padding: 12px; font-weight: bold; color: ${delta >= 0 ? '#16a34a' : '#dc2626'};">${delta >= 0 ? '▲' : '▼'} ${money(Math.abs(delta))}</td></tr>`
+      : ''
+  const newCustRow =
+    opts.newCustomers != null && opts.newCustomers > 0
+      ? `\n        <tr><td style="padding: 12px; color: #666;">New Customers</td><td style="padding: 12px; font-weight: bold;">${opts.newCustomers}</td></tr>`
+      : ''
+  const silver = opts.silverRate
+  const silverRow = silver
+    ? `\n        <tr><td style="padding: 12px; color: #666;">Silver Rate</td><td style="padding: 12px; font-weight: bold;">₹${Number(silver.rate).toFixed(2)}/gm <span style="font-weight: normal; color: ${silver.change >= 0 ? '#16a34a' : '#dc2626'};">(${silver.change >= 0 ? '+' : ''}${Number(silver.change).toFixed(2)})</span></td></tr>`
+    : ''
+
+  const mostSold = opts.mostSoldProduct
+  const mostSoldBlock = mostSold
+    ? `\n        <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 8px; padding: 14px 18px; margin: 16px 0;">
+          <p style="margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #92400e; text-transform: uppercase;">🏆 Most Sold Product (last 30 days)</p>
+          <p style="margin: 6px 0 2px; font-size: 16px; font-weight: 700; color: #78350f;">${escapeHtml(mostSold.name)}</p>
+          <p style="margin: 0; font-size: 12px; color: #92400e;">SKU ${escapeHtml(mostSold.sku)} · <b>${mostSold.qty}</b> units sold · ${money(mostSold.revenue)} revenue${mostSold.orders != null ? ` · ${mostSold.orders} order${mostSold.orders === 1 ? '' : 's'}` : ''}</p>
+        </div>`
+    : ''
+
+  const topRows = (opts.topProducts ?? [])
+    .map(
+      (p, i) => `\n          <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; color: #999; width: 28px;">${i + 1}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(p.name)}<br/><span style="font-family: monospace; font-size: 11px; color: #999;">${escapeHtml(p.sku)}</span></td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; font-weight: bold;">${p.qty}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${money(p.revenue)}</td>
+          </tr>`,
+    )
+    .join('')
+  const topBlock =
+    topRows && topRows.length > 0
+      ? `\n        <h3 style="color: #1f2937; margin: 20px 0 8px;">📈 Top 5 Products (last 30 days)</h3>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #eee;">
+          <thead><tr style="background: #f9fafb;"><th style="padding: 8px; text-align: left; width: 28px;">#</th><th style="padding: 8px; text-align: left;">Product</th><th style="padding: 8px; text-align: center;">Units</th><th style="padding: 8px; text-align: right;">Revenue</th></tr></thead>
+          <tbody>${topRows}</tbody>
+        </table>`
+      : ''
+
+  const lowRows = (opts.lowStockItems ?? [])
+    .slice(0, 10)
+    .map(
+      (p) => `\n          <tr>
+            <td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHtml(p.name)}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 11px;">${escapeHtml(p.sku)}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center; color: ${p.stock <= 0 ? '#dc2626' : '#b45309'}; font-weight: bold;">${p.stock}</td>
+            <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.reorderLevel}</td>
+            ${p.qtySold30d != null ? `<td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${p.qtySold30d}</td>` : ''}
+          </tr>`,
+    )
+    .join('')
+  const lowBlock =
+    lowRows && lowRows.length > 0
+      ? `\n        <h3 style="color: #dc2626; margin: 20px 0 8px;">⚠️ Low Stock Detail (${opts.lowStockCount} total${(opts.lowStockItems?.length ?? 0) < opts.lowStockCount ? ` — first ${Math.min(10, opts.lowStockItems?.length ?? 0)} shown` : ''})</h3>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #eee;">
+          <thead><tr style="background: #f9fafb;"><th style="padding: 8px; text-align: left;">Product</th><th style="padding: 8px; text-align: left;">SKU</th><th style="padding: 8px; text-align: center;">Stock</th><th style="padding: 8px; text-align: center;">Reorder At</th>${opts.lowStockItems?.some((p) => p.qtySold30d != null) ? '<th style="padding: 8px; text-align: center;">Sold (30d)</th>' : ''}</tr></thead>
+          <tbody>${lowRows}</tbody>
+        </table>`
+      : ''
+
   return sendEmail({
     to: recipientEmail,
-    subject: `📊 Daily Summary — ${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}`,
+    subject: `📊 Daily Summary — ${money(opts.todaySales)} · ${opts.todayOrders} order${opts.todayOrders === 1 ? '' : 's'}${mostSold ? ` · Top: ${mostSold.name}` : ''}`,
     attachments: opts.attachment ? [opts.attachment] : undefined,
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="font-family: Arial, sans-serif; max-width: 760px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #2563eb;">📊 Daily Business Summary</h2>
+        <p style="color: #666;">${new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kolkata' })}</p>
+        ${mostSoldBlock}
         <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-          <tr><td style="padding: 12px; color: #666;">Today's Sales</td><td style="padding: 12px; font-weight: bold; font-size: 18px;">₹${opts.todaySales.toLocaleString('en-IN')}</td></tr>
-          <tr><td style="padding: 12px; color: #666;">Orders Today</td><td style="padding: 12px; font-weight: bold;">${opts.todayOrders}</td></tr>
+          <tr><td style="padding: 12px; color: #666;">Today's Sales</td><td style="padding: 12px; font-weight: bold; font-size: 18px;">${money(opts.todaySales)}</td></tr>${deltaRow}
+          <tr><td style="padding: 12px; color: #666;">Orders Today</td><td style="padding: 12px; font-weight: bold;">${opts.todayOrders}</td></tr>${newCustRow}
           <tr><td style="padding: 12px; color: #666;">Pending Payments</td><td style="padding: 12px; color: ${opts.pendingPayments > 0 ? '#dc2626' : '#16a34a'};">${opts.pendingPayments}</td></tr>
-          <tr><td style="padding: 12px; color: #666;">Low Stock Items</td><td style="padding: 12px; color: ${opts.lowStockCount > 0 ? '#dc2626' : '#16a34a'};">${opts.lowStockCount}</td></tr>${duesRow}
-        </table>
+          <tr><td style="padding: 12px; color: #666;">Low Stock Items</td><td style="padding: 12px; color: ${opts.lowStockCount > 0 ? '#dc2626' : '#16a34a'};">${opts.lowStockCount}</td></tr>${silverRow}${duesRow}
+        </table>${topBlock}${lowBlock}
         <p style="color: #999; font-size: 12px;">Opal Line ERP — Daily Summary</p>
+      </div>
+    `,
+  })
+}
+/**
+ * Email one or more backup files as attachments. Used by the Backup & Restore
+ * page "Email backup" action and by scheduled full-DB email delivery.
+ * Gmail/G-suite attachment limit is 25 MB per message — the caller filters.
+ */
+export async function notifyBackupFiles(
+  recipientEmail: string,
+  files: Array<{ fileName: string; content: Buffer }>,
+  meta: { scopeLabel: string; tableCount: number; recordCount: number; note?: string }
+): Promise<boolean> {
+  if (files.length === 0) return false
+  const sizeOf = (b: Buffer) => (b.length / (1024 * 1024)).toFixed(2) + ' MB'
+  const fileRows = files
+    .map((f) => `<tr><td style="padding: 8px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px;">${escapeHtml(f.fileName)}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${sizeOf(f.content)}</td></tr>`)
+    .join('')
+  return sendEmail({
+    to: recipientEmail,
+    subject: `📦 Backup Files — ${meta.scopeLabel} (${files.length} file${files.length === 1 ? '' : 's'}, ${meta.recordCount.toLocaleString('en-IN')} records)`,
+    attachments: files.map((f) => ({ filename: f.fileName, content: f.content })),
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #2563eb;">📦 Backup Files Attached</h2>
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          <tr><td style="padding: 8px; color: #666;">Scope</td><td style="padding: 8px; font-weight: bold;">${escapeHtml(meta.scopeLabel)}</td></tr>
+          <tr><td style="padding: 8px; color: #666;">Tables</td><td style="padding: 8px;">${meta.tableCount}</td></tr>
+          <tr><td style="padding: 8px; color: #666;">Records</td><td style="padding: 8px;">${meta.recordCount.toLocaleString('en-IN')}</td></tr>
+          <tr><td style="padding: 8px; color: #666;">Time</td><td style="padding: 8px;">${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</td></tr>
+        </table>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #eee;">
+          <thead><tr style="background: #f9fafb;"><th style="padding: 8px; text-align: left;">File</th><th style="padding: 8px; text-align: right;">Size</th></tr></thead>
+          <tbody>${fileRows}</tbody>
+        </table>
+        ${meta.note ? `<p style="color: #666; font-size: 12px; margin-top: 12px;">${escapeHtml(meta.note)}</p>` : ''}
+        <p style="color: #b45309; font-size: 12px; margin-top: 8px;">Keep these files safe — they contain business data. Restore them from Backup &amp; Restore → Restore from file.</p>
+        <p style="color: #999; font-size: 12px;">Opal Line ERP — Backup Delivery</p>
       </div>
     `,
   })
