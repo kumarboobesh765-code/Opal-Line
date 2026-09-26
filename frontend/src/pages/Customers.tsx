@@ -1,5 +1,5 @@
 import { toast, promptDialog } from '@/components/ui/confirm'
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
 import { AlertTriangle, Download, FileText, MoreHorizontal, Plus, RefreshCcw, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
@@ -27,7 +27,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { dbApi, shopifyApi } from '@/lib/api'
+import { backupApi, dbApi, shopifyApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
 import type { Customer, Invoice, SalesOrder } from '@/types'
 import { formatCurrency, formatDate, formatNumber } from '@/lib/format'
@@ -41,6 +41,8 @@ export default function CustomersPage() {
   const [importing, setImporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [piiGap, setPiiGap] = useState(0)
+  const [exportLink, setExportLink] = useState<string | null>(null)
+  const csvInputRef = useRef<HTMLInputElement>(null)
 
   const refreshPiiGap = useCallback(() => {
     shopifyApi.piiGap().then((r) => setPiiGap(r.missing)).catch(() => {})
@@ -151,9 +153,10 @@ export default function CustomersPage() {
   }
 
   // Full PII sync: open Shopify's customers page so the user can click Export
-  // there; Shopify emails the CSV to the order mailbox and the backend ingests
-  // the attachment, filling redacted rows (name, email, phone, city) without
-  // touching data that is already present.
+  // there; Shopify emails the export to the order mailbox. The backend ingests
+  // .csv attachments directly; when the email only carries a download link
+  // (current Shopify templates), the link is surfaced so the user can download
+  // the file in their logged-in Shopify session and import it with the picker.
   const syncCustomers = async (checkOnly: boolean) => {
     setSyncing(true)
     try {
@@ -161,7 +164,7 @@ export default function CustomersPage() {
         try {
           const { url } = await shopifyApi.customersExportUrl()
           window.open(url, '_blank', 'noopener')
-          toast.info('Shopify opened — click Export customers there, then check back here in a minute.')
+          toast.info('Shopify opened — click Export customers there, then click "Check for the CSV" here in a minute.')
         } catch {
           toast.info('Export customers from Shopify Admin → Customers, then click "Check for the CSV".')
         }
@@ -173,13 +176,41 @@ export default function CustomersPage() {
         toast.success(`Customer CSV imported — ${res.updated} customers updated, ${res.imported} added${res.errors.length ? `, ${res.errors.length} skipped` : ''}`)
         await dbApi.getCustomers().then(setCustomers)
         refreshPiiGap()
+      } else if (res.downloadUrl) {
+        setExportLink(res.downloadUrl)
+        window.open(res.downloadUrl, '_blank', 'noopener')
+        toast.info('Export found — the download opened in your Shopify session. Save customers_export.csv, then use "Import the CSV file".')
       } else if (res.errors.length > 0) {
         toast.error(res.errors[0])
       } else {
-        toast.info('No customer CSV found yet — click Export customers in the Shopify tab, wait for the email, then try again.')
+        toast.info('No customer export email found yet — click Export customers in the Shopify tab, wait for the email, then try again.')
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // Import a downloaded customers_export.csv: Shopify's export emails now carry
+  // a download link instead of an attachment, so the user saves the file from
+  // their logged-in Shopify session and picks it here.
+  const importExportFile = async (file: File) => {
+    setSyncing(true)
+    try {
+      const csv = await file.text()
+      const parsed = await backupApi.parseCSV(csv)
+      if (!parsed.ok || parsed.count === 0) {
+        toast.error(parsed.count === 0 ? 'No rows found in the CSV' : 'Could not parse the CSV')
+        return
+      }
+      const res = await backupApi.importCustomersCSV(parsed.rows)
+      toast.success(`Customer CSV imported — ${res.updated} customers updated, ${res.imported} added${res.errors.length ? `, ${res.errors.length} skipped` : ''}`)
+      await dbApi.getCustomers().then(setCustomers)
+      refreshPiiGap()
+      setExportLink(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Import failed')
     } finally {
       setSyncing(false)
     }
@@ -342,6 +373,20 @@ export default function CustomersPage() {
             <Button variant="ghost" size="sm" onClick={() => syncCustomers(true)} disabled={syncing}>
               {syncing ? 'Checking...' : 'Check for the CSV'}
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => csvInputRef.current?.click()} disabled={syncing}>
+              Import the CSV file
+            </Button>
+            <input
+              ref={csvInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void importExportFile(f)
+                e.target.value = ''
+              }}
+            />
             <Button variant="outline" size="sm" onClick={importFromShopify} disabled={importing}>
               <UserPlus className="h-3.5 w-3.5" /> {importing ? 'Importing...' : 'Import from Shopify'}
             </Button>
@@ -358,6 +403,11 @@ export default function CustomersPage() {
           <span>
             <b>{piiGap}</b> customer{piiGap === 1 ? '' : 's'} still missing contact details (redacted by Shopify). Use <b>Sync Customers</b> to fill them.
           </span>
+          {exportLink ? (
+            <a href={exportLink} target="_blank" rel="noreferrer" className="ml-auto underline font-medium">
+              Open the export download page
+            </a>
+          ) : null}
         </div>
       ) : null}
 
