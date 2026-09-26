@@ -1909,13 +1909,16 @@ async function resolveShopifyCustomerId(input: ResolveCustomerInput): Promise<st
   const queries: string[] = []
   if (input.email) queries.push(`email:${input.email}`)
   if (input.phone) queries.push(`phone:${input.phone}`)
+  // Return the BARE numeric id — callers wrap it in gid:// form only where the
+  // GraphQL API requires it. Persisting the gid form ("gid://shopify/Customer/…")
+  // into customers.shopify_id broke every bare-id match and created duplicates.
   for (const q of queries) {
     const found = await findShopifyCustomerId(q)
-    if (found) return `gid://shopify/Customer/${found}`
+    if (found) return found
   }
   if (input.email || input.phone || input.name) {
     const created = await createShopifyCustomer(input)
-    if (created) return `gid://shopify/Customer/${created}`
+    if (created) return created
   }
   return undefined
 }
@@ -1989,7 +1992,8 @@ export async function createShopifyDraftOrder(payload: DraftOrderPayload): Promi
     billingAddress,
   })
   if (customerId) {
-    input.customerId = customerId
+    // DraftOrderInput.customerId is a GraphQL ID: it needs the gid form.
+    input.customerId = `gid://shopify/Customer/${customerId}`
   }
 
   const url = `https://${config.shop}.myshopify.com/admin/api/${config.apiVersion}/graphql.json`

@@ -27,7 +27,7 @@ import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup, startDailySummary } from './autoBackup'
 import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured, kickEmailIngest } from './orderEmailIngest'
-import { isPiiAccessDenied, missingPiiCustomerCount } from './shopifyDataEnhance'
+import { isPiiAccessDenied, missingPiiCustomerCount, normalizeShopifyCustomerId } from './shopifyDataEnhance'
 import { startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
 
@@ -1476,10 +1476,16 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
       // Customer matching: identity keys only (email/phone/shopifyId).
       // Never match on name — two different customers can share a name, and
       // merging them corrupts orders/totalSpent stats.
+      // Accept any id form (bare numeric or gid://shopify/Customer/…) and
+      // store/match only the bare numeric form — mixed formats defeat the
+      // shopifyId identity match and duplicate customers.
+      const draftCustomerShopifyId = draft?.customerId
+        ? normalizeShopifyCustomerId(draft.customerId) || null
+        : null
       const identityConditions = []
       if (email) identityConditions.push(eq(schema.customers.email, email))
       if (phone) identityConditions.push(eq(schema.customers.phone, phone))
-      if (draft?.customerId) identityConditions.push(eq(schema.customers.shopifyId, draft.customerId))
+      if (draftCustomerShopifyId) identityConditions.push(eq(schema.customers.shopifyId, draftCustomerShopifyId))
       const [existing] = identityConditions.length
         ? await tx.select().from(schema.customers).where(or(...identityConditions)).limit(1)
         : []
@@ -1491,7 +1497,7 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
             ...(email ? { email } : {}),
             ...(phone ? { phone } : {}),
             ...(customerCity ? { city: customerCity } : {}),
-            ...(draft?.customerId ? { shopifyId: draft.customerId } : {}),
+            ...(draftCustomerShopifyId ? { shopifyId: draftCustomerShopifyId } : {}),
             status: existing.status ?? 'active',
           })
           .where(eq(schema.customers.id, existing.id))

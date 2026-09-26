@@ -742,6 +742,28 @@ export interface CSVImportResult {
 export const normalizeCell = (v: string): string =>
   v.trim().replace(/^'+(?=[0-9+])/, '').trim()
 
+/**
+ * Accepts any Shopify customer identifier form and returns the bare numeric ID:
+ * "gid://shopify/Customer/9687511073019" → "9687511073019",
+ * "'9687511073019" → "9687511073019", "9687511073019" → unchanged.
+ * Any other gid form (Order, Product, …) is not a customer id → "".
+ */
+export const normalizeShopifyCustomerId = (v: string): string => {
+  const s = normalizeCell(v)
+  if (s.startsWith('gid://')) {
+    return s.startsWith('gid://shopify/Customer/')
+      ? s.slice('gid://shopify/Customer/'.length) || ''
+      : ''
+  }
+  return s || ''
+}
+
+/**
+ * Accepts any Shopify order identifier form and returns the bare numeric ID.
+ */
+export const normalizeShopifyOrderId = (v: string): string =>
+  normalizeCell(v).replace(/^gid:\/\/shopify\/Order\//, '') || ''
+
 const pick = (row: Record<string, string>, ...keys: string[]): string => {
   for (const k of keys) {
     const v = row[k]
@@ -820,7 +842,7 @@ export async function importCustomersFromCSV(rows: Record<string, string>[]): Pr
            LIMIT 1`,
           [param],
         )
-        resolvedShopifyId = (found[0] as any)?.id ?? null
+        resolvedShopifyId = normalizeShopifyCustomerId((found[0] as any)?.id ?? '') || null
       }
       const finalShopifyId = resolvedShopifyId
       // A row resolved through orders can now reach its redacted placeholder

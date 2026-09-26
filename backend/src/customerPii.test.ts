@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseCsvContent } from './orderEmailIngest'
-import { normalizeCell } from './shopifyDataEnhance'
+import { normalizeCell, normalizeShopifyCustomerId } from './shopifyDataEnhance'
 
 // Importing these modules transitively imports db/client.ts, which opens a
 // PostgreSQL LISTEN connection at import time. That handle keeps this file's
@@ -56,5 +56,20 @@ describe('normalizeCell (Excel-escape cleanup in CSV importers)', () => {
 
   test('never strips a deliberate single-quote prefix on a name', () => {
     assert.equal(normalizeCell("'t Hoen, Van"), "'t Hoen, Van")
+  })
+})
+
+describe('normalizeShopifyCustomerId (gid / apostrophe / bare forms)', () => {
+  test('reduces every identifier form to the bare numeric id', () => {
+    assert.equal(normalizeShopifyCustomerId('gid://shopify/Customer/9687511073019'), '9687511073019')
+    assert.equal(normalizeShopifyCustomerId("'9687511073019"), '9687511073019')
+    assert.equal(normalizeShopifyCustomerId('  9687511073019  '), '9687511073019')
+    assert.equal(normalizeShopifyCustomerId('9687511073019'), '9687511073019')
+  })
+
+  test('returns empty for blanks and non-customer gids', () => {
+    assert.equal(normalizeShopifyCustomerId(''), '')
+    assert.equal(normalizeShopifyCustomerId('gid://shopify/Order/5170894737675'), '')
+    assert.equal(normalizeShopifyCustomerId('gid://shopify/Customer/'), '')
   })
 })
