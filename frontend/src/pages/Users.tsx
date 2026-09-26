@@ -38,6 +38,10 @@ const statusBadge: Record<User['status'], { label: string; variant: 'success' | 
 export default function UsersPage() {
   const { hasPermission, refresh } = useAuth()
   const canEdit = hasPermission('system', 'edit')
+  // Deleting a user or a custom role is a distinct server-side permission
+  // (requirePermission('system', 'delete')), so it needs its own gate —
+  // otherwise the button is clickable and always fails with 403.
+  const canDelete = hasPermission('system', 'delete')
 
   const [users, setUsers] = useState<User[]>([])
   const [roles, setRoles] = useState<Role[]>([])
@@ -523,7 +527,7 @@ export default function UsersPage() {
                       <KeyRound className="h-3.5 w-3.5" /> Permissions
                     </Button>
                     {!role.isSystem ? (
-                      <Button variant="ghost" size="sm" className="text-red-600 dark:text-red-400 hover:text-red-600 dark:text-red-400" disabled={!canEdit} onClick={() => deleteRole(role)}>
+                      <Button variant="ghost" size="sm" className="text-red-600 dark:text-red-400 hover:text-red-600 dark:text-red-400" disabled={!canDelete} onClick={() => deleteRole(role)}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     ) : null}

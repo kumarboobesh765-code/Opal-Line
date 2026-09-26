@@ -3,7 +3,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { eq } from 'drizzle-orm'
 import * as schema from './schema'
-import { defaultRolePermissions } from '../rbac'
+import { defaultRolePermissions, MODULE_KEYS } from '../rbac'
 import { roleNames } from './seedData'
 import { randomBytes, createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -781,7 +781,9 @@ async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<{ adminPass
       role: 'Admin',
       status: 'active',
       requirePasswordChange: true,
-      permissions: defaultRolePermissions('Admin'),
+      // No personal override: the owner must inherit the Admin role so that
+      // later fixes to the role's defaults actually reach this account.
+      permissions: null,
     })
     logger.info('Bootstrap: created initial admin user')
     console.log('\n══════════════════════════════════════════════════════')
@@ -862,6 +864,54 @@ async function seedDefaults(db: ReturnType<typeof drizzle>): Promise<{ adminPass
     logger.info('Bootstrap: seeded default chart of accounts')
   }
   return { adminPassword: generatedAdminPassword }
+}
+
+/**
+ * One-time repair for installs that were bootstrapped before the Admin role
+ * gained system.delete. The role row stores a snapshot of the defaults, so
+ * changing defaultRolePermissions() alone would never reach an existing
+ * database. Only the exact legacy shape is rewritten, so a permission an
+ * administrator has since customised by hand is left untouched.
+ */
+async function repairAdminRolePermissions(db: ReturnType<typeof drizzle>): Promise<void> {
+  const [adminRole] = await db.select().from(schema.roles).where(eq(schema.roles.name, 'Admin')).limit(1)
+  if (!adminRole) return
+  const current = (adminRole.permissions ?? {}) as Record<string, Record<string, boolean>>
+  const system = current.system
+  if (!system) return
+  const isLegacyShape =
+    system.delete === false && system.view === true && system.create === true && system.edit === true
+  if (!isLegacyShape) return
+  const next = { ...(current as Record<string, unknown>), system: { view: true, create: true, edit: true, delete: true } }
+  await db.update(schema.roles).set({ permissions: next }).where(eq(schema.roles.id, adminRole.id))
+  logger.info('Bootstrap: repaired Admin role to allow system deletes')
+}
+
+/**
+ * The bootstrap owner used to be created with a personal permission override
+ * that was a snapshot of the Admin defaults. That snapshot carried
+ * system.delete = false, so repairing the role was not enough — the user's own
+ * override kept winning in mergePermissions(). Clear the override so the owner
+ * inherits the role again. Only an exact match of the legacy snapshot is
+ * cleared; a genuinely customised override is left alone.
+ */
+async function repairAdminUserOverride(db: ReturnType<typeof drizzle>): Promise<void> {
+  const current_default = defaultRolePermissions('Admin') as unknown as Record<string, Record<string, boolean>>
+  const [owner] = await db.select().from(schema.users).where(eq(schema.users.username, 'admin')).limit(1)
+  if (!owner?.permissions) return
+  const current = owner.permissions as Record<string, Record<string, boolean>>
+  // Only the exact legacy snapshot qualifies: every module matches today's Admin
+  // defaults, except system.delete which is still the old `false`.
+  const isLegacySnapshot = MODULE_KEYS.every((key) => {
+    const a = current[key]
+    const b = current_default[key]
+    if (!a || !b) return false
+    if (key === 'system') return a.view === b.view && a.create === b.create && a.edit === b.edit && a.delete === false
+    return a.view === b.view && a.create === b.create && a.edit === b.edit && a.delete === b.delete
+  })
+  if (!isLegacySnapshot) return
+  await db.update(schema.users).set({ permissions: null }).where(eq(schema.users.id, owner.id))
+  logger.info('Bootstrap: cleared the stale permission override on the admin user')
 }
 
 /**
@@ -1116,6 +1166,9 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
     for (const stmt of upgrades) {
       await sql.unsafe(stmt).catch(() => undefined)
     }
+    const upgradeDb = drizzle(sql, { schema })
+    await repairAdminRolePermissions(upgradeDb).catch(() => undefined)
+    await repairAdminUserOverride(upgradeDb).catch(() => undefined)
     return { ran: true, tablesCreated: false }
   } finally {
     await sql.end({ timeout: 5 })
