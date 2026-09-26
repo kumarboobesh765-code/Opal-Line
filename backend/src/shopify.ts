@@ -1669,6 +1669,8 @@ export interface SilverUpdateResult {
   skipped: number
   errors: string[]
   message?: string
+  /** Step-by-step progress for the UI status checklist. */
+  steps?: Array<{ key: string; label: string; status: 'done' | 'failed' | 'skipped'; detail?: string }>
 }
 
 function round2(n: number) {
@@ -1770,25 +1772,40 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
   let updated = 0
   let skipped = 0
   const errors: string[] = []
+  const steps: NonNullable<SilverUpdateResult['steps']> = [
+    { key: 'rate', label: 'Save new rate', status: 'done', detail: `₹${previousRate.toFixed(2)} → ₹${rate.toFixed(2)}/gm` },
+    { key: 'reprice', label: 'Reprice products', status: 'done', detail: `${recomputed} product(s) recomputed from the new rate` },
+  ]
 
   if (isConfigured()) {
     try {
       await syncPrices()
       const pending = store.price.filter((p) => p.status === 'update')
       matched = store.price.filter((p) => p.status !== 'no-match').length
+      steps.push({ key: 'match', label: 'Match products to Shopify', status: 'done', detail: `${matched} matched, ${store.price.filter((p) => p.status === 'no-match').length} without a Shopify match` })
       if (pending.length > 0) {
         const result = await applyPriceSync()
         updated = result.updated ?? 0
         skipped = result.skipped ?? 0
         errors.push(...(result.errors ?? []))
+        steps.push({
+          key: 'push',
+          label: 'Push prices to Shopify',
+          status: errors.length === 0 ? 'done' : 'failed',
+          detail: `${updated} pushed, ${skipped} skipped${errors.length ? `, ${errors.length} error(s)` : ''}`,
+        })
+      } else {
+        steps.push({ key: 'push', label: 'Push prices to Shopify', status: 'skipped', detail: 'All Shopify prices already match the new rate' })
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
       store.lastError = message
       errors.push(message)
+      steps.push({ key: 'push', label: 'Push prices to Shopify', status: 'failed', detail: message })
       await persistLog({ entity: 'Price', direction: 'out', action: 'Silver Rate Update', status: 'failed', error: message, retry: true })
     }
   } else {
+    steps.push({ key: 'push', label: 'Push prices to Shopify', status: 'skipped', detail: 'Shopify is not configured — prices updated locally only' })
     await persistLog({ entity: 'Silver', direction: 'in', action: 'Rate Update (Shopify not configured)', status: 'success' })
   }
 
@@ -1801,6 +1818,7 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
     updated,
     skipped,
     errors,
+    steps,
   }
 }
 

@@ -422,7 +422,7 @@ export const dbApi = {
     }
   },
   updateSilverRate: async (rate: number, syncFirst = false) =>
-    request<{ ok: boolean; rate: number; previousRate: number; affected: number; matched: number; updated: number; skipped: number; errors: string[]; message?: string }>(
+    request<{ ok: boolean; rate: number; previousRate: number; affected: number; matched: number; updated: number; skipped: number; errors: string[]; message?: string; steps?: Array<{ key: string; label: string; status: 'done' | 'failed' | 'skipped'; detail?: string }> }>(
       '/silver/update',
       { method: 'POST', body: JSON.stringify({ rate, syncFirst }) },
     ),
@@ -914,6 +914,12 @@ export const backupApi = {
     request('/backup/notifications/low-stock', { method: 'POST' }),
   sendDailySummary: (): Promise<{ ok: boolean }> =>
     request('/backup/notifications/daily-summary', { method: 'POST' }),
+  emailBackup: (scope: string, email?: string): Promise<{ ok: boolean; email: string; fileName: string; sizeBytes: number; tables: number; records: number }> =>
+    request('/backup/email', { method: 'POST', body: JSON.stringify({ scope, email }) }),
+  emailBackupSeparate: (email?: string): Promise<{ ok: boolean; email: string; files: string[]; totalBytes: number; skipped: string[] }> =>
+    request('/backup/email-separate', { method: 'POST', body: JSON.stringify({ email }) }),
+  emailBackupFile: (fileName: string, email?: string): Promise<{ ok: boolean; email: string; fileName: string; sizeBytes: number }> =>
+    request(`/backup/files/${encodeURIComponent(fileName)}/email`, { method: 'POST', body: JSON.stringify({ email }) }),
   downloadInvoicePDF: (invoiceId: string) => {
     window.open(`${API_BASE}/db/invoices/${encodeURIComponent(invoiceId)}/pdf`, '_blank', 'noopener')
   },

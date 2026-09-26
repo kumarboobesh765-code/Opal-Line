@@ -49,6 +49,7 @@ interface SilverUpdateResult {
   skipped: number
   errors: string[]
   message?: string
+  steps?: Array<{ key: string; label: string; status: 'done' | 'failed' | 'skipped'; detail?: string }>
 }
 
 interface Step {
@@ -480,10 +481,40 @@ export default function SilverRatePage() {
               <p className="text-base font-semibold text-foreground">
                 {result && !result.ok ? 'Silver rate saved, but Shopify sync had errors' : 'Price update approved & synced'}
               </p>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                New silver rate ₹{rateValue.toFixed(2)}/gm applied to {result ? result.affected : products.length} products
-                {result ? ` · ${result.updated} pushed to Shopify · ${result.skipped} skipped · ${result.matched} matched` : ''}.
-              </p>
+              {result?.steps && result.steps.length > 0 ? (
+                <div className="w-full max-w-md space-y-2 py-2 text-left">
+                  {result.steps.map((s) => (
+                    <div key={s.key} className="flex items-start gap-2.5 rounded-lg border px-3 py-2">
+                      {s.status === 'done' ? (
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-700" />
+                      ) : s.status === 'failed' ? (
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+                      ) : (
+                        <CircleDollarSign className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-semibold text-foreground">{s.label}</p>
+                        {s.detail ? <p className="text-xs text-muted-foreground">{s.detail}</p> : null}
+                      </div>
+                      <span
+                        className={cn(
+                          'ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide',
+                          s.status === 'done' && 'bg-success-50 text-success-700',
+                          s.status === 'failed' && 'bg-red-50 text-red-600 dark:text-red-400',
+                          s.status === 'skipped' && 'bg-muted text-muted-foreground',
+                        )}
+                      >
+                        {s.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  New silver rate ₹{rateValue.toFixed(2)}/gm applied to {result ? result.affected : products.length} products
+                  {result ? ` · ${result.updated} pushed to Shopify · ${result.skipped} skipped · ${result.matched} matched` : ''}.
+                </p>
+              )}
               {result && result.errors.length > 0 ? (
                 <div className="max-h-24 w-full max-w-sm overflow-auto rounded-lg border border-red-200 bg-red-50/60 p-2 text-left text-xs text-red-700">
                   {result.errors.slice(0, 5).map((msg, i) => (
