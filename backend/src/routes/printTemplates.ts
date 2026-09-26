@@ -1,0 +1,296 @@
+import { randomUUID } from 'node:crypto'
+import { Router, type Request, type Response } from 'express'
+import { and, eq } from 'drizzle-orm'
+import { db, schema } from '../db/client'
+import { actorFromRequest, recordActivity } from '../activity'
+import { logger } from '../logger'
+
+/**
+ * Saved designs for printable documents. One design can be marked default per
+ * doc type; the print flows (invoice detail, quotations, …) merge the default
+ * config over their built-in layout so a saved design changes every printout
+ * without code changes.
+ */
+
+export const printTemplatesRouter = Router()
+
+export const PRINT_DOC_TYPES = ['invoice', 'quotation', 'order'] as const
+export type PrintDocType = (typeof PRINT_DOC_TYPES)[number]
+
+const MAX_CONFIG_BYTES = 128 * 1024
+const MAX_LOGO_DATAURL_BYTES = 300 * 1024
+
+export interface PrintDesignerConfig {
+  accent: string
+  headerStyle: 'banner' | 'minimal' | 'boxed'
+  fontScale: number
+  pageSize: 'a4' | 'letter'
+  margins: { top: number; right: number; bottom: number; left: number }
+  showLogo: boolean
+  logoDataUrl: string | null
+  showGSTIN: boolean
+  showAmountWords: boolean
+  showSignature: boolean
+  showDeclaration: boolean
+  showHsn: boolean
+  showWeight: boolean
+  showRate: boolean
+  tableZebra: boolean
+  footerNote: string
+  thankYouNote: string
+  declaration: string
+  watermark: string | null
+}
+
+export function defaultPrintConfig(_docType: PrintDocType): PrintDesignerConfig {
+  return {
+    accent: '#c8a951',
+    headerStyle: 'banner',
+    fontScale: 1,
+    pageSize: 'a4',
+    margins: { top: 12, right: 12, bottom: 12, left: 12 },
+    showLogo: false,
+    logoDataUrl: null,
+    showGSTIN: true,
+    showAmountWords: true,
+    showSignature: true,
+    showDeclaration: true,
+    showHsn: true,
+    showWeight: true,
+    showRate: true,
+    tableZebra: true,
+    footerNote: '',
+    thankYouNote: 'Thank you for your business!',
+    declaration:
+      'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct. Goods once sold will only be exchanged as per store policy. This is a computer-generated invoice.',
+    watermark: null,
+  }
+}
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+/** Clamp/validate incoming config values; unknown keys are dropped. */
+export function sanitizePrintConfig(input: unknown): { config: PrintDesignerConfig; error?: string } {
+  if (typeof input !== 'object' || input === null) {
+    return { config: defaultPrintConfig('invoice'), error: 'config must be an object' }
+  }
+  if (JSON.stringify(input).length > MAX_CONFIG_BYTES) {
+    return { config: defaultPrintConfig('invoice'), error: 'config too large' }
+  }
+  const raw = input as Record<string, unknown>
+  const d = defaultPrintConfig('invoice')
+  const clampNum = (v: unknown, min: number, max: number, fallback: number): number => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback
+  }
+  const clampStr = (v: unknown, maxLen: number, fallback: string): string =>
+    typeof v === 'string' ? v.slice(0, maxLen) : fallback
+
+  const margins = (typeof raw.margins === 'object' && raw.margins !== null ? raw.margins : {}) as Record<string, unknown>
+  const config: PrintDesignerConfig = {
+    accent: typeof raw.accent === 'string' && HEX_RE.test(raw.accent.trim()) ? raw.accent.trim() : d.accent,
+    headerStyle: raw.headerStyle === 'minimal' || raw.headerStyle === 'boxed' ? raw.headerStyle : 'banner',
+    fontScale: clampNum(raw.fontScale, 0.8, 1.3, 1),
+    pageSize: raw.pageSize === 'letter' ? 'letter' : 'a4',
+    margins: {
+      top: clampNum(margins.top, 0, 40, 12),
+      right: clampNum(margins.right, 0, 40, 12),
+      bottom: clampNum(margins.bottom, 0, 40, 12),
+      left: clampNum(margins.left, 0, 40, 12),
+    },
+    showLogo: raw.showLogo === true,
+    logoDataUrl:
+      typeof raw.logoDataUrl === 'string' && raw.logoDataUrl.startsWith('data:image/') && raw.logoDataUrl.length <= MAX_LOGO_DATAURL_BYTES
+        ? raw.logoDataUrl
+        : null,
+    showGSTIN: raw.showGSTIN !== false,
+    showAmountWords: raw.showAmountWords !== false,
+    showSignature: raw.showSignature !== false,
+    showDeclaration: raw.showDeclaration !== false,
+    showHsn: raw.showHsn !== false,
+    showWeight: raw.showWeight !== false,
+    showRate: raw.showRate !== false,
+    tableZebra: raw.tableZebra !== false,
+    footerNote: clampStr(raw.footerNote, 500, ''),
+    thankYouNote: clampStr(raw.thankYouNote, 300, d.thankYouNote),
+    declaration: clampStr(raw.declaration, 1000, d.declaration),
+    watermark: typeof raw.watermark === 'string' && raw.watermark.trim() !== '' ? raw.watermark.trim().slice(0, 40) : null,
+  }
+  return { config }
+}
+
+function isDocType(v: unknown): v is PrintDocType {
+  return typeof v === 'string' && (PRINT_DOC_TYPES as readonly string[]).includes(v)
+}
+
+/** Realistic sample document so the designer preview looks like a real printout. */
+export function sampleDocument(docType: PrintDocType): Record<string, unknown> {
+  const base = {
+    number: docType === 'invoice' ? 'SI-2026-00123' : docType === 'quotation' ? 'QT-2026-00045' : 'SO-2026-00789',
+    shopifyOrder: '#10233',
+    customer: 'Meera Nair',
+    customerEmail: 'meera.nair@example.com',
+    customerPhone: '+91 98450 01111',
+    customerAddress: '105 Victoria St',
+    customerCity: 'Mumbai',
+    customerState: 'Maharashtra',
+    customerPincode: '400001',
+    businessName: 'OPAL LINE JEWELS LLP',
+    gst: 3,
+    gstAmount: 771.3,
+    discount: 500,
+    subtotal: 25710,
+    grandTotal: 26281.3,
+    paymentMethod: 'Razorpay',
+    paymentStatus: 'paid',
+    date: new Date().toISOString(),
+    items: [
+      { product: 'Rajwadi Necklace Set', sku: 'OL-RN-001', hsn: '7113', qty: 1, weight: 42.5, silverRate: 92, makingCharge: 4500, tax: 3, amount: 8410 },
+      { product: 'Temple Jhumka Earrings', sku: 'OL-TE-014', hsn: '7113', qty: 2, weight: 18.75, silverRate: 92, makingCharge: 2200, tax: 3, amount: 3865 },
+      { product: 'Oxidised Anklet Pair', sku: 'OA-AK-022', hsn: '7113', qty: 1, weight: 26.4, silverRate: 92, makingCharge: 1800, tax: 3, amount: 4228.8 },
+    ],
+  }
+  if (docType === 'quotation') {
+    return { ...base, number: 'QT-2026-00045', validUntil: new Date(Date.now() + 15 * 86400000).toISOString(), status: 'sent', notes: 'Prices valid for 15 days. Silver rate as on date.' }
+  }
+  if (docType === 'order') {
+    return { ...base, number: 'SO-2026-00789', status: 'confirmed', fulfillment: 'unfulfilled', tags: 'manual-order' }
+  }
+  return base
+}
+
+function jsonError(res: Response, status: number, error: string) {
+  res.status(status).json({ error })
+}
+
+printTemplatesRouter.get('/', async (req: Request, res: Response) => {
+  if (!db) return jsonError(res, 503, 'Database unavailable')
+  try {
+    const docType = req.query.docType
+    const rows = isDocType(docType)
+      ? await db.select().from(schema.printTemplates).where(eq(schema.printTemplates.docType, docType))
+      : await db.select().from(schema.printTemplates)
+    res.json({ templates: rows })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print templates list failed')
+    jsonError(res, 500, 'Could not load print templates')
+  }
+})
+
+printTemplatesRouter.get('/default/:docType', async (req: Request, res: Response) => {
+  if (!db) return jsonError(res, 503, 'Database unavailable')
+  const docType = req.params.docType
+  if (!isDocType(docType)) return jsonError(res, 400, `docType must be one of: ${PRINT_DOC_TYPES.join(', ')}`)
+  try {
+    const [row] = await db
+      .select()
+      .from(schema.printTemplates)
+      .where(and(eq(schema.printTemplates.docType, docType), eq(schema.printTemplates.isDefault, true)))
+      .limit(1)
+    res.json({ config: (row?.config as PrintDesignerConfig) ?? defaultPrintConfig(docType), name: row?.name ?? null, id: row?.id ?? null })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template default failed')
+    jsonError(res, 500, 'Could not load default print template')
+  }
+})
+
+printTemplatesRouter.get('/sample/:docType', (req: Request, res: Response) => {
+  const docType = req.params.docType
+  if (!isDocType(docType)) return jsonError(res, 400, `docType must be one of: ${PRINT_DOC_TYPES.join(', ')}`)
+  res.json({ doc: sampleDocument(docType) })
+})
+
+const unsetDefaultFor = async (docType: PrintDocType) => {
+  if (!db) return
+  await db
+    .update(schema.printTemplates)
+    .set({ isDefault: false })
+    .where(eq(schema.printTemplates.docType, docType))
+}
+
+printTemplatesRouter.post('/', async (req: Request, res: Response) => {
+  if (!db) return jsonError(res, 503, 'Database unavailable')
+  try {
+    const { docType, name, setDefault } = req.body ?? {}
+    if (!isDocType(docType)) return jsonError(res, 400, `docType must be one of: ${PRINT_DOC_TYPES.join(', ')}`)
+    const trimmedName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 80) : 'My design'
+    const { config, error } = sanitizePrintConfig(req.body?.config)
+    if (error) return jsonError(res, 400, error)
+
+    const makeDefault = setDefault !== false
+    if (makeDefault) await unsetDefaultFor(docType)
+
+    const id = `pt-${randomUUID()}`
+    await db.insert(schema.printTemplates).values({
+      id,
+      docType,
+      name: trimmedName,
+      config,
+      isDefault: makeDefault,
+      updatedAt: new Date().toISOString(),
+    })
+    void recordActivity({
+      action: 'Saved Print Design',
+      module: 'system',
+      entity: `Print Template (${trimmedName})`,
+      details: `${docType} · default=${makeDefault}`,
+      userId: actorFromRequest(req).userId,
+      ip: actorFromRequest(req).ip,
+    })
+    res.status(201).json({ ok: true, id, config })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template save failed')
+    jsonError(res, 500, 'Could not save print template')
+  }
+})
+
+printTemplatesRouter.patch('/:id', async (req: Request, res: Response) => {
+  if (!db) return jsonError(res, 503, 'Database unavailable')
+  try {
+    const id = req.params.id
+    const [row] = await db.select().from(schema.printTemplates).where(eq(schema.printTemplates.id, id)).limit(1)
+    if (!row) return jsonError(res, 404, 'Template not found')
+
+    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() }
+    if (typeof req.body?.name === 'string' && req.body.name.trim()) updates.name = req.body.name.trim().slice(0, 80)
+    if (req.body?.config !== undefined) {
+      const { config, error } = sanitizePrintConfig(req.body.config)
+      if (error) return jsonError(res, 400, error)
+      updates.config = config
+    }
+    if (req.body?.setDefault === true && !row.isDefault) {
+      await unsetDefaultFor(row.docType as PrintDocType)
+      updates.isDefault = true
+    }
+    await db.update(schema.printTemplates).set(updates).where(eq(schema.printTemplates.id, id))
+    res.json({ ok: true })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template update failed')
+    jsonError(res, 500, 'Could not update print template')
+  }
+})
+
+printTemplatesRouter.post('/:id/default', async (req: Request, res: Response) => {
+  if (!db) return jsonError(res, 503, 'Database unavailable')
+  try {
+    const [row] = await db.select().from(schema.printTemplates).where(eq(schema.printTemplates.id, req.params.id)).limit(1)
+    if (!row) return jsonError(res, 404, 'Template not found')
+    await unsetDefaultFor(row.docType as PrintDocType)
+    await db.update(schema.printTemplates).set({ isDefault: true }).where(eq(schema.printTemplates.id, row.id))
+    res.json({ ok: true })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template set-default failed')
+    jsonError(res, 500, 'Could not set default print template')
+  }
+})
+
+printTemplatesRouter.delete('/:id', async (req: Request, res: Response) => {
+  if (!db) return jsonError(res, 503, 'Database unavailable')
+  try {
+    await db.delete(schema.printTemplates).where(eq(schema.printTemplates.id, req.params.id))
+    res.json({ ok: true })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template delete failed')
+    jsonError(res, 500, 'Could not delete print template')
+  }
+})

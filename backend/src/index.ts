@@ -17,6 +17,7 @@ import { dbRouter } from './routes/db'
 import { dashboardRouter } from './routes/dashboard'
 import { rbacRouter } from './routes/rbac'
 import { backupRouter } from './routes/backup'
+import { printTemplatesRouter } from './routes/printTemplates'
 import { enforceRbac, requirePermission } from './rbac'
 import { requireAuth, shutdownSessions, getSessionStats } from './sessions'
 import { actorFromRequest, recordActivity } from './activity'
@@ -425,6 +426,7 @@ app.use('/api/v1/db', dbRouter)
 app.use('/api/v1/db', requireAuth, dashboardRouter)
 app.use('/api/v1/rbac', requireAuth, rbacRouter)
 app.use('/api/v1/backup', requireAuth, enforceRbac, backupRouter)
+app.use('/api/v1/print-templates', requireAuth, enforceRbac, printTemplatesRouter)
 app.use('/api/v1/auth', authRouter)
 app.use('/api/v1/silver', requireAuth, enforceRbac)
 
