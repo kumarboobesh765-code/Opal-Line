@@ -14,8 +14,11 @@ const PAGES = [
   '/system/settings',
   '/system/connections',
   '/system/activity',
+  '/system/print-designer',
   '/inventory/products',
   '/sales/invoices',
+  '/sales/customers',
+  '/sales/quotations',
   '/reports/business',
   '/shopify/dashboard',
   '/accounts/accounting',
@@ -37,7 +40,16 @@ for (const path of PAGES) {
 
     expect(pageErrors, `uncaught exceptions on ${path}`).toEqual([])
     expect(
-      consoleErrors.filter((e) => !/favicon|net::ERR_ABORTED|Load failed/i.test(e)),
+      consoleErrors.filter(
+        (e) =>
+          !/favicon|net::ERR_ABORTED|Load failed/i.test(e) &&
+          // Expected on /system/print-designer: the preview iframe is
+          // sandboxed WITHOUT allow-scripts, so Chromium logs the blocked
+          // auto-print script, and the Google-Fonts import is blocked by the
+          // page CSP inside the srcdoc frame (cosmetic — real print windows
+          // are not sandboxed and load fonts fine).
+          !/frame is sandboxed|violates the following Content Security Policy/i.test(e),
+      ),
       `console errors on ${path}`,
     ).toEqual([])
   })
@@ -46,8 +58,9 @@ for (const path of PAGES) {
 test('system status page shows live server info, updates and logs', async ({ page }) => {
   await page.goto('/system/status')
   await expect(page.getByRole('heading', { name: 'System Status' })).toBeVisible()
-  // live data from the new /api/v1/system/status endpoint
-  await expect(page.getByText('Port 47192')).toBeVisible({ timeout: 15000 })
+  // live data from the new /api/v1/system/status endpoint — the port depends on
+  // the environment (47192 installed app / 47191 dev backend), so match the prefix.
+  await expect(page.getByText(/^Port 47\d{3}/)).toBeVisible({ timeout: 15000 })
   await expect(page.getByText('Healthy')).toBeVisible()
   // update card (desktop bridge may be absent in a plain browser — the card
   // must render either way)
@@ -62,4 +75,24 @@ test('navigation sidebar exposes the system section', async ({ page }) => {
   await expect(page.getByRole('link', { name: /System Status/i })).toBeVisible()
   await expect(page.getByRole('link', { name: /Users & Roles/i })).toBeVisible()
   await expect(page.getByRole('link', { name: /Backup & Restore/i })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Print Designer/i })).toBeVisible()
+})
+
+test('print designer renders live preview and option groups', async ({ page }) => {
+  await page.goto('/system/print-designer')
+  await expect(page.getByRole('heading', { name: 'Print Designer' })).toBeVisible()
+  await expect(page.getByText('Live preview — invoice')).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('Header style').first()).toBeVisible()
+  await expect(page.getByText('Accent color').first()).toBeVisible()
+  await expect(page.getByText('Bank / payment details')).toBeVisible()
+  // The preview iframe must be sandboxed (only same-origin, no scripts).
+  const sandbox = await page.locator('iframe[title="Print preview"]').getAttribute('sandbox')
+  expect(sandbox ?? '').not.toContain('allow-scripts')
+})
+
+test('customers page shows the PII-recovery tools', async ({ page }) => {
+  await page.goto('/sales/customers')
+  await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
+  // The Sync Customers control must exist regardless of gap state.
+  await expect(page.getByRole('button', { name: /Sync Customers/i }).first()).toBeVisible({ timeout: 15000 })
 })
