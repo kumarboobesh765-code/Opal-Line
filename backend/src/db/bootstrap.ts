@@ -238,6 +238,9 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         shopify_id text,
         internal_id text,
         customer text,
+        customer_shopify_id text,
+        customer_email text,
+        customer_phone text,
         value numeric,
         payment text,
         fulfillment text,
@@ -1166,6 +1169,9 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
     for (const stmt of upgrades) {
       await sql.unsafe(stmt).catch(() => undefined)
     }
+    await sql.unsafe(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS customer_shopify_id text`).catch(() => undefined)
+    await sql.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_customer_shopify_id_idx ON sales_orders (customer_shopify_id)`).catch(() => undefined)
+    await sql.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_customer_email_idx ON sales_orders (customer_email)`).catch(() => undefined)
     const upgradeDb = drizzle(sql, { schema })
     await repairAdminRolePermissions(upgradeDb).catch(() => undefined)
     await repairAdminUserOverride(upgradeDb).catch(() => undefined)

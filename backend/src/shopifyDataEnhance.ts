@@ -733,6 +733,24 @@ export interface CSVImportResult {
   errors: string[]
 }
 
+const pick = (row: Record<string, string>, ...keys: string[]): string => {
+  for (const k of keys) {
+    const v = row[k]
+    if (typeof v === 'string' && v.trim() !== '') return v.trim()
+  }
+  return ''
+}
+
+/**
+ * Fill the customers table from a Shopify customers CSV export
+ * (Shopify Admin → Customers → Export).
+ *
+ * This is the manual fallback of the PII recovery chain: rows the mailbox
+ * never saw and the API cannot return (redacted) are recovered here. A row is
+ * matched to an existing customer by shopify_id, then email, then phone; a
+ * redacted placeholder ("Shopify Customer #<id>", no email/phone) is UPGRADED
+ * in place rather than duplicated.
+ */
 export async function importCustomersFromCSV(rows: Record<string, string>[]): Promise<CSVImportResult> {
   const client = getRawClient()
   if (!client) return { imported: 0, updated: 0, errors: ['DB unavailable'] }
@@ -741,51 +759,76 @@ export async function importCustomersFromCSV(rows: Record<string, string>[]): Pr
 
   for (const row of rows) {
     try {
-      const name = row.name || row.Name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || 'Unknown'
-      const email = row.email || row.Email || null
-      const phone = row.phone || row.Phone || row.mobile || row.Mobile || null
-      const address = row.address || row.Address || null
-      const shopifyId = row.shopify_id || row.shopifyId || row.id || null
+      // Shopify's official export: First Name, Last Name, Email, Phone (1),
+      // Accepts Email Marketing, Default Address City…, plus our generic set.
+      const first = pick(row, 'First Name', 'first_name', 'firstName')
+      const last = pick(row, 'Last Name', 'last_name', 'lastName')
+      const name = pick(row, 'Name', 'name') || `${first} ${last}`.trim()
+      const email = pick(row, 'Email', 'email') || null
+      const phone = pick(row, 'Phone (1)', 'Phone', 'phone', 'mobile', 'Mobile') || null
+      const city = pick(row, 'Default Address City', 'Default Address (City)', 'city', 'City') || null
+      const province = pick(row, 'Default Address Province', 'Default Address Province Code', 'Default Address (Province)', 'province') || null
+      const addr1 = pick(row, 'Default Address Address1', 'Default Address (Address 1)', 'address', 'Address', 'Address 1') || null
+      const shopifyId = pick(row, 'Customer ID', 'customer_id', 'shopify_id', 'shopifyId', 'id')
+        .replace(/^gid:\/\/shopify\/Customer\//, '') || null
 
-      if (!name || name === 'Unknown') {
-        result.errors.push(`Row skipped: no name`)
+      if (!name && !email) {
+        result.errors.push('Row skipped: no name and no email')
         continue
       }
 
-      // Check if customer exists by email, phone, or shopify_id
-      let existing = null
-      if (email) {
-        const rows = await client.unsafe(`SELECT id FROM customers WHERE email = $1 LIMIT 1`, [email])
-        existing = rows[0]
+      // Match order: shopify_id (exact), then email, then phone.
+      type ExistingCustomer = { id: string; email: string | null; phone: string | null; name: string; city: string | null; province: string | null }
+      let existing: ExistingCustomer | undefined
+      const findExisting = async (sql: string, param: string): Promise<ExistingCustomer | undefined> => {
+        const found = await client.unsafe(sql, [param])
+        return found[0] as unknown as ExistingCustomer | undefined
+      }
+      if (shopifyId) {
+        existing = await findExisting(`SELECT id, email, phone, name, city, province FROM customers WHERE shopify_id = $1 LIMIT 1`, shopifyId)
+      }
+      if (!existing && email) {
+        existing = await findExisting(`SELECT id, email, phone, name, city, province FROM customers WHERE email = $1 LIMIT 1`, email)
       }
       if (!existing && phone) {
-        const rows = await client.unsafe(`SELECT id FROM customers WHERE phone = $1 LIMIT 1`, [phone])
-        existing = rows[0]
+        existing = await findExisting(`SELECT id, email, phone, name, city, province FROM customers WHERE phone = $1 LIMIT 1`, phone)
       }
+      // Placeholder rows are named "Shopify Customer #<id>" and carry the id —
+      // match them so the CSV UPGRADES the placeholder instead of duplicating it.
       if (!existing && shopifyId) {
-        const rows = await client.unsafe(`SELECT id FROM customers WHERE shopify_id = $1 LIMIT 1`, [shopifyId])
-        existing = rows[0]
+        existing = await findExisting(`SELECT id, email, phone, name, city, province FROM customers WHERE name = $1 LIMIT 1`, `Shopify Customer #${shopifyId}`)
       }
 
       if (existing) {
-        // Update existing customer with new data
         const updates: string[] = []
         const values: any[] = []
-        if (email && !existing.email) { updates.push(`email = $${values.length + 1}`); values.push(email) }
-        if (phone && !existing.phone) { updates.push(`phone = $${values.length + 1}`); values.push(phone) }
-        if (address) { updates.push(`address = $${values.length + 1}`); values.push(address) }
-
+        const setIf = (col: string, v: string | null, current: string | null) => {
+          if (v && !(current && String(current).trim() !== '')) {
+            updates.push(`${col} = $${values.length + 1}`)
+            values.push(v)
+          }
+        }
+        // Only fill blanks — never overwrite data the ERP already has. The
+        // primary target is the redacted placeholder: empty email/phone/name.
+        setIf('email', email, existing.email)
+        setIf('phone', phone, existing.phone)
+        setIf('name', name, existing.name?.startsWith('Shopify Customer #') ? null : existing.name)
+        setIf('city', city, existing.city)
+        setIf('province', province, existing.province)
+        if (shopifyId) {
+          updates.push(`shopify_id = $${values.length + 1}`)
+          values.push(shopifyId)
+        }
         if (updates.length > 0) {
           values.push(existing.id)
           await client.unsafe(`UPDATE customers SET ${updates.join(', ')} WHERE id = $${values.length}`, values)
           result.updated++
         }
       } else {
-        // Create new customer
         const id = `cust-csv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         await client.unsafe(
-          `INSERT INTO customers (id, name, email, phone, address, shopify_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, name, email, phone, address, shopifyId]
+          `INSERT INTO customers (id, name, email, phone, city, province, shopify_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, name || email || 'Unknown', email, phone, city, province, shopifyId],
         )
         result.imported++
       }
@@ -805,29 +848,50 @@ export async function importOrdersFromCSV(rows: Record<string, string>[]): Promi
 
   for (const row of rows) {
     try {
-      const orderNumber = row.order_number || row['Order Number'] || row.invoice || row.Invoice
-      const customerName = row.customer || row.Customer || row.name || row.Name
-      const email = row.email || row.Email || null
-      const phone = row.phone || row.Phone || null
-      const total = row.total || row.Total || row.grand_total || row['Grand Total'] || '0'
-      const date = row.date || row.Date || row.created_at || new Date().toISOString()
-      const status = row.status || row.Status || 'confirmed'
+      // Shopify orders export: Name (order number), Email, Phone, Billing/Shipping
+      // Address blocks, Financial Status, Total, Created at, plus generic keys.
+      const orderNumberRaw = pick(row, 'Name', 'name', 'order_number', 'Order Number', 'invoice', 'Invoice')
+      const orderNumber = orderNumberRaw.replace(/^#*/, '')
+      const customerName = pick(row, 'Customer', 'customer', 'Billing Address Name', 'Shipping Address Name')
+      const email = pick(row, 'Email', 'email') || null
+      const phone = pick(row, 'Phone', 'phone', 'Billing Address Phone', 'Shipping Address Phone') || null
+      const total = pick(row, 'Total', 'total', 'Grand Total', 'grand_total') || '0'
+      const dateRaw = pick(row, 'Created at', 'created_at', 'date', 'Date')
+      const date = dateRaw || new Date().toISOString()
+      const status = pick(row, 'Financial Status', 'status', 'Status') || 'confirmed'
+      const shopifyCustomerId = pick(row, 'Customer ID', 'customer_id')
+        .replace(/^gid:\/\/shopify\/Customer\//, '') || null
 
       if (!orderNumber) {
         result.errors.push(`Row skipped: no order number`)
         continue
       }
 
-      const existing = await client.unsafe(`SELECT id FROM sales_orders WHERE shopify_id = $1 LIMIT 1`, [orderNumber])
+      const shopifyId = `#${orderNumber}`
+      const existing = await client.unsafe(`SELECT id FROM sales_orders WHERE shopify_id = $1 LIMIT 1`, [shopifyId])
 
       if (existing.length > 0) {
-        result.updated++
+        // Fill only what the existing row is missing (e.g. redacted PII).
+        const updates: string[] = []
+        const values: any[] = []
+        const setIf = (col: string, v: string | null) => {
+          if (v) { updates.push(`${col} = $${values.length + 1}`); values.push(v) }
+        }
+        setIf('customer_email', email)
+        setIf('customer_phone', phone)
+        setIf('customer', customerName || null)
+        if (shopifyCustomerId) setIf('customer_shopify_id', shopifyCustomerId)
+        if (updates.length > 0) {
+          values.push(existing[0].id)
+          await client.unsafe(`UPDATE sales_orders SET ${updates.join(', ')} WHERE id = $${values.length}`, values)
+          result.updated++
+        }
       } else {
         const id = `ord-csv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         await client.unsafe(
-          `INSERT INTO sales_orders (id, shopify_id, customer, email, phone, value, status, date)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [id, orderNumber, customerName || 'Unknown', email, phone, parseFloat(total) || 0, status, date]
+          `INSERT INTO sales_orders (id, shopify_id, internal_id, customer, customer_shopify_id, customer_email, customer_phone, value, status, date)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [id, shopifyId, `SO-${orderNumber}`, customerName || 'Unknown', shopifyCustomerId, email, phone, parseFloat(total) || 0, status, date],
         )
         result.imported++
       }
@@ -837,4 +901,25 @@ export async function importOrdersFromCSV(rows: Record<string, string>[]): Promi
   }
 
   return result
+}
+/**
+ * Count customers that still have no email AND no phone on file.
+ *
+ * Used by the PII recovery chain: after the mailbox poll and the Admin API
+ * enrichment retry have both run, this is the size of the residue that only
+ * the manual Shopify customers CSV export can fill (the API cannot return
+ * redacted PII, and there is no email for rows the mailbox never saw).
+ */
+export async function missingPiiCustomerCount(): Promise<number> {
+  const client = getRawClient()
+  if (!client) return 0
+  try {
+    const rows = await client.unsafe(
+      `SELECT count(*)::int AS n FROM customers
+       WHERE (email IS NULL OR email = '') AND (phone IS NULL OR phone = '')`,
+    )
+    return Number((rows[0] as any)?.n ?? 0)
+  } catch {
+    return 0
+  }
 }

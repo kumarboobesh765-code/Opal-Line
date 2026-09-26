@@ -113,6 +113,9 @@ export const salesOrders = pgTable('sales_orders', {
   shopifyId: text('shopify_id').unique(),
   internalId: text('internal_id'),
   customer: text('customer'),
+  customerShopifyId: text('customer_shopify_id'),
+  customerEmail: text('customer_email'),
+  customerPhone: text('customer_phone'),
   value: numericNumber('value'),
   payment: text('payment'),
   fulfillment: text('fulfillment'),
@@ -130,6 +133,7 @@ export const salesOrders = pgTable('sales_orders', {
   advancePaid: numericNumber('advance_paid'),
 }, (table) => ({
   shopifyIdIdx: uniqueIndex('sales_orders_shopify_id_idx').on(table.shopifyId),
+  customerShopifyIdIdx: index('sales_orders_customer_shopify_id_idx').on(table.customerShopifyId),
   internalIdIdx: index('sales_orders_internal_id_idx').on(table.internalId),
   customerIdx: index('sales_orders_customer_idx').on(table.customer),
   dateIdx: index('sales_orders_date_idx').on(table.date),

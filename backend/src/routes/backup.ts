@@ -1381,14 +1381,40 @@ backupRouter.post('/shopify/parse-csv', requirePermission('system', 'edit'), asy
   try {
     const { csv } = req.body ?? {}
     if (typeof csv !== 'string') return res.status(400).json({ error: 'csv string is required' })
-    const lines = csv.trim().split('\n')
+    // RFC 4180: fields can be quoted and contain commas/quotes/newlines —
+    // Shopify exports ("8 Marine Drive, Near Gateway") always do. A naive
+    // split(',') corrupts every quoted row.
+    const parseLine = (line: string): string[] => {
+      const out: string[] = []
+      let cur = ''
+      let inQuotes = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (inQuotes) {
+          if (ch === '"') {
+            if (line[i + 1] === '"') { cur += '"'; i++ }
+            else inQuotes = false
+          } else cur += ch
+        } else if (ch === '"') {
+          inQuotes = true
+        } else if (ch === ',') {
+          out.push(cur)
+          cur = ''
+        } else {
+          cur += ch
+        }
+      }
+      out.push(cur)
+      return out.map((v) => v.trim())
+    }
+    const lines = csv.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter((l) => l.trim() !== '')
     if (lines.length < 2) return res.status(400).json({ error: 'CSV must have header + at least 1 data row' })
-    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''))
+    const headers = parseLine(lines[0])
     const rows: Record<string, string>[] = []
     for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''))
+      const values = parseLine(lines[i])
       const row: Record<string, string> = {}
-      headers.forEach((h, idx) => { row[h] = values[idx] || '' })
+      headers.forEach((h, idx) => { row[h] = values[idx] ?? '' })
       rows.push(row)
     }
     res.json({ ok: true, rows, count: rows.length, headers })

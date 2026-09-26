@@ -2383,6 +2383,7 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
           .update(schema.salesOrders)
           .set({
             ...(customerName && customerName !== 'Guest' ? { customer: customerName } : {}),
+            ...(customerId ? { customerShopifyId: customerId } : {}),
             value,
             payment,
             fulfillment,
@@ -2407,6 +2408,9 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
                 shopifyId,
                 internalId: `SO-${orderNumber}`,
                 customer: customerName || 'Guest',
+                customerShopifyId: customerId,
+                customerEmail: safeStr(o.customer?.email) || safeStr(o.email) || undefined,
+                customerPhone: safeStr(o.phone) || safeStr(o.billing_address?.phone) || undefined,
                 value,
                 payment,
                 fulfillment,
