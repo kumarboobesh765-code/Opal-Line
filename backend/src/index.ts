@@ -27,6 +27,7 @@ import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup, startDailySummary } from './autoBackup'
 import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured, kickEmailIngest } from './orderEmailIngest'
+import { isPiiAccessDenied, missingPiiCustomerCount } from './shopifyDataEnhance'
 import { startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
 
@@ -603,6 +604,36 @@ app.get('/api/v1/shopify/email-ingest/status', requireAuth, (_req, res) => {
 app.post('/api/v1/shopify/email-ingest/poll', requirePermission('shopify', 'create'), async (_req, res) => {
   const result = await pollOrderMailbox()
   res.json(result)
+})
+
+// Customer-export CSV watcher: finds the CSV Shopify emails after a
+// "Export customers" click and imports it with Shopify customer IDs where
+// they can be resolved. Runs alongside the order-email poll.
+app.post('/api/v1/shopify/customer-export/poll', requirePermission('shopify', 'create'), async (req, res) => {
+  try {
+    const { pollCustomerExport } = await import('./orderEmailIngest')
+    const result = await pollCustomerExport()
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Imported Shopify Customer Export',
+      module: 'shopify',
+      entity: 'Customers',
+      details: `attachments: ${result.attachmentsFound}, imported: ${result.imported}, updated: ${result.updated}${result.errors.length ? `, errors: ${result.errors.length}` : ''}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json(result)
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Customer export poll failed' })
+  }
+})
+
+// Open the Shopify admin customers page (for the "Sync Customers" button —
+// the user clicks Export there and Shopify emails the CSV to the mailbox).
+app.get('/api/v1/shopify/customers-export-url', requirePermission('shopify', 'view'), (_req, res) => {
+  const shop = process.env.SHOPIFY_STORE_URL?.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')
+  if (!shop) return res.status(503).json({ error: 'Shopify is not configured' })
+  res.json({ url: `https://${shop}/admin/customers` })
 })
 
 app.post('/api/v1/shopify/sync', requirePermission('shopify', 'create'), validate(syncSchema), async (req, res) => {
@@ -1268,6 +1299,53 @@ app.post('/api/v1/shopify/customers/sync', requirePermission('shopify', 'create'
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(502).json({ ok: false, imported: 0, updated: 0, errors: [message], message: 'Shopify customer sync failed' })
+  }
+})
+
+// PII recovery: run the full fallback chain on demand.
+// 1) poll the order-notification mailbox (emails are never redacted),
+// 2) retry Admin API enrichment (works once PII access is approved),
+// 3) report the residue that only the Shopify customers CSV export can fill.
+app.post('/api/v1/shopify/recover-pii', requirePermission('shopify', 'create'), async (req, res) => {
+  try {
+    const result: Record<string, unknown> = {}
+    if (isEmailIngestConfigured()) {
+      result.email = await pollOrderMailbox()
+    } else {
+      result.email = { ok: false, skipped: true, reason: 'Email ingestion not configured (ORDER_EMAIL_ADDRESS / ORDER_EMAIL_PASSWORD)' }
+    }
+    const { enrichOrdersFromShopify, enrichCustomersFromShopify, missingPiiCustomerCount } = await import('./shopifyDataEnhance')
+    if (!isPiiAccessDenied()) {
+      result.api = {
+        orders: await enrichOrdersFromShopify(),
+        customers: await enrichCustomersFromShopify(),
+      }
+    } else {
+      result.api = { skipped: true, reason: 'Shopify denies Customer PII over the API (plan-gated) — approve access in the Shopify admin or use the CSV export' }
+    }
+    // Also check whether the customer-export CSV has arrived in the mailbox.
+    try {
+      const { pollCustomerExport } = await import('./orderEmailIngest')
+      result.customerExport = await pollCustomerExport()
+    } catch (err) {
+      result.customerExport = { ok: false, errors: [err instanceof Error ? err.message : 'export poll failed'] }
+    }
+    result.remainingWithoutPii = await missingPiiCustomerCount()
+    result.csvFallback = {
+      message: 'Export customers from Shopify Admin → Customers → Export and import the CSV on this page (Shopify → Data Import).',
+    }
+    void recordActivity({
+      action: 'Recovered Shopify Customer PII',
+      module: 'shopify',
+      entity: 'Customers',
+      details: `email: ${JSON.stringify(result.email).slice(0, 200)} | remaining without PII: ${result.remainingWithoutPii}`,
+      userId: actorFromRequest(req).userId,
+      ip: actorFromRequest(req).ip,
+    })
+    res.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
   }
 })
 
@@ -1954,7 +2032,16 @@ async function startServer() {
     // Register Shopify webhooks when a public base URL is configured (non-fatal)
     void import('./webhookRegistration').then((m) => m.registerShopifyWebhooks())
 
-    // Auto-enrich incomplete orders/customers on startup (background, non-blocking)
+    // PII recovery chain on startup (background, non-blocking).
+    //
+    // Shopify dev/preview stores redact Protected Customer Data over the API,
+    // which used to leave "Shopify Customer #<id>" placeholder rows with no
+    // email/phone. Recovery order, cheapest and most reliable first:
+    //   1. Order-notification mailbox — the emails are never redacted.
+    //   2. Admin API enrichment retry — works once PII access is approved.
+    //   3. If both leave gaps, surface the direct Shopify CSV export as the
+    //      manual fallback (System → Shopify → Data Import); no API call can
+    //      fix those rows, so nothing is attempted here.
     if (isConfigured()) {
       setTimeout(async () => {
         try {
@@ -1968,6 +2055,30 @@ async function startServer() {
         } catch (err) {
           logger.error({ err }, 'Startup auto-enrich failed')
         }
+        // Step 1 of the chain — after the API retry, so the email pass fills
+        // only what the API legitimately could not.
+        if (isEmailIngestConfigured()) {
+          try {
+            const res = await pollOrderMailbox()
+            logger.info(
+              { scanned: res.scanned, parsed: res.parsed, updated: res.updated, created: res.created, errors: res.errors.length },
+              'Startup PII recovery: order mailbox polled',
+            )
+          } catch (err) {
+            logger.error({ err }, 'Startup PII recovery: mailbox poll failed')
+          }
+        }
+        // Step 3 — report what the automatic chain could not fix so the user
+        // knows the CSV export is the remaining path.
+        try {
+          const remaining = await missingPiiCustomerCount()
+          if (remaining > 0) {
+            logger.warn(
+              { remaining },
+              'Startup PII recovery: some customers still lack contact data — use the Shopify customers CSV export (Shopify → Data Import) to fill them',
+            )
+          }
+        } catch { /* reporting only */ }
       }, 5000) // 5s delay to let server fully start
     }
   })

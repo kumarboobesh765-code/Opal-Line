@@ -2,7 +2,7 @@ import { toast, promptDialog } from '@/components/ui/confirm'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Download, FileText, MoreHorizontal, Plus, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
+import { Download, FileText, MoreHorizontal, Plus, RefreshCcw, Search, UserPlus, Users, Mail, Phone, ShoppingBag, CircleDollarSign } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
@@ -39,6 +39,7 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [importing, setImporting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
   const [addName, setAddName] = useState('')
@@ -140,6 +141,40 @@ export default function CustomersPage() {
       toast.error(err instanceof Error ? err.message : 'Import failed')
     } finally {
       setImporting(false)
+    }
+  }
+
+  // Full PII sync: open Shopify's customers page so the user can click Export
+  // there; Shopify emails the CSV to the order mailbox and the backend ingests
+  // the attachment, filling redacted rows (name, email, phone, city) without
+  // touching data that is already present.
+  const syncCustomers = async (checkOnly: boolean) => {
+    setSyncing(true)
+    try {
+      if (!checkOnly) {
+        try {
+          const { url } = await shopifyApi.customersExportUrl()
+          window.open(url, '_blank', 'noopener')
+          toast.info('Shopify opened — click Export customers there, then check back here in a minute.')
+        } catch {
+          toast.info('Export customers from Shopify Admin → Customers, then click "Check for the CSV".')
+        }
+        setSyncing(false)
+        return
+      }
+      const res = await shopifyApi.pollCustomerExport()
+      if (res.attachmentsFound > 0) {
+        toast.success(`Customer CSV imported — ${res.updated} customers updated, ${res.imported} added${res.errors.length ? `, ${res.errors.length} skipped` : ''}`)
+        await dbApi.getCustomers().then(setCustomers)
+      } else if (res.errors.length > 0) {
+        toast.error(res.errors[0])
+      } else {
+        toast.info('No customer CSV found yet — click Export customers in the Shopify tab, wait for the email, then try again.')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -293,6 +328,12 @@ export default function CustomersPage() {
           <>
             <Button variant="outline" size="sm" onClick={() => exportTable('customers.csv', columns, filtered)}>
               <Download className="h-3.5 w-3.5" /> Export
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => syncCustomers(false)} disabled={syncing}>
+              <RefreshCcw className="h-3.5 w-3.5" /> Sync Customers
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => syncCustomers(true)} disabled={syncing}>
+              {syncing ? 'Checking...' : 'Check for the CSV'}
             </Button>
             <Button variant="outline" size="sm" onClick={importFromShopify} disabled={importing}>
               <UserPlus className="h-3.5 w-3.5" /> {importing ? 'Importing...' : 'Import from Shopify'}

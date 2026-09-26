@@ -206,7 +206,15 @@ export function parseOrderEmailText(text: string, subject: string): OrderEmailDa
       if (m) { customerName = clean(m[1]); break }
     }
   }
-  if (!customerName) customerName = lineAfter(/^shipping address/)
+  // Last resort: the line after the "Shipping address" label. Careful: that is
+  // a LABEL, not a name — if the value is a known section header (or itself the
+  // label line), keep the fallback empty rather than inventing a customer
+  // called "Shipping address" (seen live on order #1052).
+  if (!customerName) {
+    const fallback = lineAfter(/^(shipping|billing) address/)
+    const isLabel = /^(shipping|billing|customer|email|phone|payment|note|order)\b/i.test(fallback)
+    if (fallback && !isLabel) customerName = fallback
+  }
 
   // Email: prefer a labeled "Email:" line, fall back to first address in body
   let email = ''
@@ -486,26 +494,98 @@ function normalizePayment(raw: string): string {
 }
 
 /**
+ * Find the redacted placeholder customer row that belongs to a Shopify order.
+ *
+ * Dev/preview stores receive "Shopify Customer #9687733207291" rows with no
+ * email or phone (Protected Customer Data). When the order-notification email
+ * later delivers the real PII, this links the two so the email fills the
+ * EXISTING customer instead of creating a near-duplicate row. The placeholder
+ * id convention ("C-shop-<id>") and name convention ("Shopify Customer #<id>")
+ * come from shopify.ts's customer import.
+ */
+export async function findRedactedCustomerForOrder(orderNumber: string): Promise<string | null> {
+  if (!db) return null
+  // 1. Direct link: the order row stores the customer's Shopify numeric id
+  //    (sales_orders.customer_shopify_id, written by the API order sync).
+  const [order] = await db
+    .select({ customerShopifyId: schema.salesOrders.customerShopifyId })
+    .from(schema.salesOrders)
+    .where(eq(schema.salesOrders.shopifyId, `#${orderNumber}`))
+    .limit(1)
+  const linkedShopifyId = order?.customerShopifyId
+  if (linkedShopifyId) {
+    const [c] = await db
+      .select({ id: schema.customers.id })
+      .from(schema.customers)
+      .where(eq(schema.customers.shopifyId, linkedShopifyId))
+      .limit(1)
+    if (c) return c.id
+  }
+  // 2. Legacy fallback: the order row's customer field names the placeholder
+  //    row directly ("Shopify Customer #<numeric id>").
+  const [orderDetail] = await db
+    .select({ customer: schema.salesOrders.customer })
+    .from(schema.salesOrders)
+    .where(eq(schema.salesOrders.shopifyId, `#${orderNumber}`))
+    .limit(1)
+  const orderCustomer = orderDetail?.customer ?? ''
+  if (/^Shopify Customer #\d+$/.test(orderCustomer)) {
+    const [c] = await db
+      .select({ id: schema.customers.id })
+      .from(schema.customers)
+      .where(eq(schema.customers.name, orderCustomer))
+      .limit(1)
+    if (c) return c.id
+  }
+  return null
+}
+
+/**
  * Ensure a customer record exists for the parsed order data.
  * Identity keys only (email/phone) — never name — so distinct customers with
  * the same name are not merged. Stats are derived afterwards via recount.
+ *
+ * Priority order when the email carries PII:
+ *   1. the redacted placeholder row linked to this order (upgrade it),
+ *   2. an existing customer matching by email or phone,
+ *   3. create a new customer row.
  */
 async function ensureCustomerFromEmail(d: OrderEmailData): Promise<void> {
   if (!db) return
   const email = d.email || null
   const phone = d.phone || null
   if (!email && !phone) return
+  const city = d.billing?.city || d.shipping?.city || null
+  const province = d.billing?.province || d.shipping?.province || null
+  const realName = d.customerName && d.customerName !== 'Guest' ? d.customerName : undefined
+
+  // 1. Prefer the redacted placeholder already linked to this order — filling
+  //    it prevents a duplicate "real" customer coexisting with the placeholder.
+  const placeholderId = await findRedactedCustomerForOrder(d.orderNumber)
+  if (placeholderId) {
+    await db
+      .update(schema.customers)
+      .set({
+        ...(realName ? { name: realName } : {}),
+        ...(email ? { email } : {}),
+        ...(phone ? { phone } : {}),
+        ...(city ? { city } : {}),
+        ...(province ? { province } : {}),
+      })
+      .where(eq(schema.customers.id, placeholderId))
+    return
+  }
+
+  // 2. Identity match by email or phone.
   const identityConditions = []
   if (email) identityConditions.push(eq(schema.customers.email, email))
   if (phone) identityConditions.push(eq(schema.customers.phone, phone))
   const [existing] = await db.select().from(schema.customers).where(or(...identityConditions)).limit(1)
-  const city = d.billing?.city || d.shipping?.city || null
-  const province = d.billing?.province || d.shipping?.province || null
   if (existing) {
     await db
       .update(schema.customers)
       .set({
-        name: d.customerName && d.customerName !== 'Guest' ? d.customerName : undefined,
+        name: realName,
         ...(email ? { email } : {}),
         ...(phone ? { phone } : {}),
         ...(city ? { city } : {}),
@@ -544,7 +624,7 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
   await ensureCustomerFromEmail(d)
 
   const [existing] = await db
-    .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress, shippingAddress: schema.salesOrders.shippingAddress, lineItems: schema.salesOrders.lineItems })
+    .select({ id: schema.salesOrders.id, customer: schema.salesOrders.customer, billingAddress: schema.salesOrders.billingAddress, shippingAddress: schema.salesOrders.shippingAddress, lineItems: schema.salesOrders.lineItems, customerEmail: schema.salesOrders.customerEmail, customerPhone: schema.salesOrders.customerPhone })
     .from(schema.salesOrders)
     .where(eq(schema.salesOrders.shopifyId, shopifyId))
     .limit(1)
@@ -576,7 +656,11 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
     }
     const newLineItems = mergedItems.length > prevItems.length ? mergedItems : undefined
     const newItems = newLineItems ? mergedItems.reduce((s, i) => s + i.quantity, 0) : undefined
-    if (!newAddr && !newCustomer && !newTotal && !newLineItems) {
+    // Backfill contact PII the API could not provide (redacted) — the order
+    // notification email always carries it.
+    const newEmail = !existing.customerEmail && d.email ? d.email : undefined
+    const newPhone = !existing.customerPhone && d.phone ? d.phone : undefined
+    if (!newAddr && !newCustomer && !newTotal && !newLineItems && !newEmail && !newPhone) {
       return { updated: false, created: false } // nothing meaningful to add
     }
     await db
@@ -588,6 +672,8 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
         lineItems: newLineItems,
         billingAddress: newAddr,
         shippingAddress: newShipAddr,
+        customerEmail: newEmail,
+        customerPhone: newPhone,
       })
       .where(eq(schema.salesOrders.shopifyId, shopifyId))
     return { updated: true, created: false }
@@ -611,6 +697,8 @@ export async function mergeOrderData(d: OrderEmailData): Promise<{ updated: bool
       lineItems: d.items.length > 0 ? d.items : null,
       billingAddress: billingAddress ?? undefined,
       shippingAddress: shippingAddress ?? undefined,
+      customerEmail: d.email || undefined,
+      customerPhone: d.phone || undefined,
     })
     .onConflictDoNothing()
   return { updated: false, created: true }
@@ -790,6 +878,130 @@ export interface IngestResult {
  * totalSpent=0 — derive those stats from the real order rows so the customers
  * list and reports reflect emailed orders immediately.
  */
+// ─── Customer-export CSV watcher ──────────────────────────────────
+
+export interface CustomerExportResult {
+  ok: boolean
+  scanned: number
+  attachmentsFound: number
+  imported: number
+  updated: number
+  errors: string[]
+}
+
+/**
+ * Look for a Shopify customers-CSV export in the order mailbox and import it.
+ *
+ * Flow (user-facing): on the Customers page, click "Sync Customers" → the app
+ * opens the Shopify admin customers page → the user clicks Export there and
+ * Shopify emails the CSV to the order mailbox → clicking "Check for the CSV"
+ * (or waiting for the 2-minute poll) ingests the attachment.
+ *
+ * The email arrives from Shopify with a subject like "Customer export for
+ * <store>" and the CSV as an attachment. Every row is matched against an
+ * existing customer by shopify_id → email → phone → the "Shopify Customer
+ * #<id>" placeholder convention, so the import fills redacted rows instead of
+ * duplicating them. Rows that match nothing new get a customer row keyed on
+ * their email address, which future syncs merge by email.
+ */
+export async function pollCustomerExport(): Promise<CustomerExportResult> {
+  const res: CustomerExportResult = { ok: false, scanned: 0, attachmentsFound: 0, imported: 0, updated: 0, errors: [] }
+  if (!isEmailIngestConfigured()) {
+    res.errors.push('Email ingestion not configured (ORDER_EMAIL_ADDRESS / ORDER_EMAIL_PASSWORD)')
+    return res
+  }
+  const { importCustomersFromCSV } = await import('./shopifyDataEnhance')
+  const cfg = emailConfig()
+  const client = new ImapFlow({
+    host: cfg.host,
+    port: cfg.port,
+    secure: true,
+    auth: { user: cfg.user, pass: cfg.pass },
+    logger: false,
+    emitLogs: false,
+  })
+  try {
+    await client.connect()
+    await client.mailboxOpen(cfg.folder)
+    const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
+    for await (const msg of client.fetch({ since }, { envelope: true, source: true, uid: true })) {
+      res.scanned++
+      if (!msg.source) continue
+      try {
+        const parsed = await simpleParser(msg.source)
+        const subject = clean(parsed.subject ?? '')
+        // Only customer-export notifications, not order notifications.
+        if (!/customer export|export.*customers|customers.*csv/i.test(subject)) continue
+        const attachments = (parsed.attachments ?? []).filter((a) => /\.csv$/i.test(a.filename ?? ''))
+        if (attachments.length === 0) continue
+        res.attachmentsFound += attachments.length
+        for (const att of attachments) {
+          const csv = att.content.toString('utf8')
+          const rows = parseCsvContent(csv)
+          if (rows.length === 0) {
+            res.errors.push(`No rows parsed from ${att.filename ?? 'attachment'}`)
+            continue
+          }
+          const result = await importCustomersFromCSV(rows)
+          res.imported += result.imported
+          res.updated += result.updated
+          res.errors.push(...result.errors)
+        }
+        logger.info({ subject, attachments: attachments.length, imported: res.imported, updated: res.updated }, 'Customer export CSV ingested')
+      } catch (err) {
+        res.errors.push(err instanceof Error ? err.message : 'customer export parse error')
+      }
+    }
+    res.ok = res.errors.length === 0
+  } catch (err) {
+    res.errors.push(err instanceof Error ? err.message : 'Unknown IMAP error')
+    logger.error({ err: res.errors[0] }, 'Customer export ingestion failed')
+  } finally {
+    try {
+      await client.logout()
+    } catch { /* already closed */ }
+  }
+  return res
+}
+
+/** Minimal RFC 4180 CSV parser (quoted fields, embedded commas, CRLF). */
+export function parseCsvContent(csv: string): Record<string, string>[] {
+  const parseLine = (line: string): string[] => {
+    const out: string[] = []
+    let cur = ''
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++ }
+          else inQuotes = false
+        } else cur += ch
+      } else if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        out.push(cur)
+        cur = ''
+      } else {
+        cur += ch
+      }
+    }
+    out.push(cur)
+    return out.map((v) => v.trim())
+  }
+  const lines = csv.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter((l) => l.trim() !== '')
+  if (lines.length < 2) return []
+  const headers = parseLine(lines[0])
+  const rows: Record<string, string>[] = []
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseLine(lines[i])
+    const row: Record<string, string> = {}
+    headers.forEach((h, idx) => { row[h] = values[idx] ?? '' })
+    rows.push(row)
+  }
+  return rows
+}
+
 async function recountAfterIngest(res: IngestResult): Promise<void> {
   if (res.updated === 0 && res.created === 0) return
   try {
@@ -844,6 +1056,8 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
       try {
         const parsed = await simpleParser(msg.source)
         const subject = clean(parsed.subject)
+        // Customer-export emails are handled by the CSV watcher, not here.
+        if (/customer export|export.*customers|customers.*csv/i.test(subject)) continue
         // Only order notifications — skip shipping/refund/etc.
         if (!parseOrderNumberFromSubject(subject)) continue
         if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
