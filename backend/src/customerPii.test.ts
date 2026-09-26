@@ -1,6 +1,7 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseCsvContent } from './orderEmailIngest'
+import { normalizeCell } from './shopifyDataEnhance'
 
 // Importing these modules transitively imports db/client.ts, which opens a
 // PostgreSQL LISTEN connection at import time. That handle keeps this file's
@@ -36,5 +37,24 @@ describe('parseCsvContent (customer export watcher)', () => {
   test('skips empty lines and returns [] for header-only input', () => {
     assert.deepEqual(parseCsvContent('A,B\n'), [])
     assert.deepEqual(parseCsvContent(''), [])
+  })
+})
+
+describe('normalizeCell (Excel-escape cleanup in CSV importers)', () => {
+  test('strips Excel-style leading apostrophes from numeric cells', () => {
+    assert.equal(normalizeCell("'9687511073019"), '9687511073019')
+    assert.equal(normalizeCell("'+16135550142"), '+16135550142')
+    assert.equal(normalizeCell("''9815165075707"), '9815165075707')
+  })
+
+  test('leaves normal values untouched', () => {
+    assert.equal(normalizeCell('Karine'), 'Karine')
+    assert.equal(normalizeCell('+1 613 555 0142'), '+1 613 555 0142')
+    assert.equal(normalizeCell(''), '')
+    assert.equal(normalizeCell('   '), '')
+  })
+
+  test('never strips a deliberate single-quote prefix on a name', () => {
+    assert.equal(normalizeCell("'t Hoen, Van"), "'t Hoen, Van")
   })
 })

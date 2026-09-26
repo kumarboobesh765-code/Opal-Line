@@ -733,10 +733,19 @@ export interface CSVImportResult {
   errors: string[]
 }
 
+// Shopify exports quote numeric cells with a leading apostrophe (Excel's
+// "keep as text" escape) so IDs/phones survive spreadsheet round-trips, e.g.
+// '9687511073019 or '+16135550142. Strip those before the value is stored or
+// matched, otherwise shopify_id/phone lookups silently miss. Only digits and
+// '+' follow the escape in practice, so a genuine leading apostrophe in a
+// name (e.g. "'t Hoen") is left untouched.
+export const normalizeCell = (v: string): string =>
+  v.trim().replace(/^'+(?=[0-9+])/, '').trim()
+
 const pick = (row: Record<string, string>, ...keys: string[]): string => {
   for (const k of keys) {
     const v = row[k]
-    if (typeof v === 'string' && v.trim() !== '') return v.trim()
+    if (typeof v === 'string' && v.trim() !== '') return normalizeCell(v)
   }
   return ''
 }
