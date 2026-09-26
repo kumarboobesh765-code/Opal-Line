@@ -50,7 +50,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { dbApi, shopifyApi } from '@/lib/api'
+import { dbApi, shopifyApi, printTemplatesApi } from '@/lib/api'
+import { printDocument, mergePrintConfig } from '@/lib/printTemplate'
 import { exportTable } from '@/lib/export'
 import type { Customer, Customer360, OrderEvent, OrderFullDetail, OrderStatus, Product, SalesOrder } from '@/types'
 import { cn } from '@/lib/utils'
@@ -231,6 +232,7 @@ export default function SalesOrdersPage() {
   const [scanFeedback, setScanFeedback] = useState<{ ok: boolean; text: string } | null>(null)
 
   const [viewOrder, setViewOrder] = useState<SalesOrder | null>(null)
+  const [printConfig, setPrintConfig] = useState<unknown>(null)
   const [selectedOrders, setSelectedOrders] = useState<SalesOrder[]>([])
   const [bulkBusy, setBulkBusy] = useState(false)
   const [invoiceSavingId, setInvoiceSavingId] = useState<string | null>(null)
@@ -285,7 +287,55 @@ export default function SalesOrdersPage() {
         setLoading(false)
       })
       .catch(() => setLoading(false))
+    printTemplatesApi.getDefault('order').then((r) => setPrintConfig(r.config)).catch(() => {})
   }, [])
+
+  const printOrder = (o: SalesOrder) => {
+    const items = o.lineItems ?? []
+    const subtotal = items.reduce((a, li) => a + (li.price ?? 0) * (li.quantity ?? 0), 0) || o.value
+    const billing = (o.billingAddress ?? {}) as Record<string, string>
+    const shipping = (o.shippingAddress ?? {}) as Record<string, string>
+    const addr = shipping.address1 || billing.address1 || ''
+    printDocument(
+      {
+        number: o.shopifyId,
+        shopifyOrder: o.shopifyId,
+        customer: o.customer,
+        customerEmail: customers.find((c) => c.name === o.customer)?.email || '',
+        customerPhone: shipping.phone || billing.phone || '',
+        customerAddress: addr || undefined,
+        customerCity: shipping.city || billing.city || undefined,
+        customerState: shipping.province || billing.province || undefined,
+        customerPincode: shipping.zip || billing.zip || undefined,
+        gst: 0,
+        gstAmount: 0,
+        discount: o.discount ?? 0,
+        subtotal,
+        grandTotal: o.value,
+        paymentMethod: o.payment,
+        paymentStatus: o.fulfillment,
+        date: o.date,
+        items: items.map((li) => ({
+          product: li.title,
+          sku: li.sku ?? '',
+          hsn: '',
+          qty: li.quantity,
+          weight: 0,
+          silverRate: li.price,
+          makingCharge: 0,
+          tax: 0,
+          amount: (li.price ?? 0) * (li.quantity ?? 0),
+        })),
+      },
+      mergePrintConfig(printConfig),
+      {
+        docType: 'order',
+        tagline: '92.5 Sterling Silver Jewellery',
+        totalLabel: 'ORDER VALUE',
+        terms: o.isBooking ? 'This is a booking confirmation, not a tax invoice.' : undefined,
+      },
+    )
+  }
 
   const cancelOrder = useCallback(async (o: SalesOrder) => {
     if (!(await confirmDialog({ title: `Cancel order ${o.shopifyId}?` }))) return
@@ -1260,7 +1310,7 @@ export default function SalesOrdersPage() {
           ) : null}
           <DialogFooter className="no-print mt-2">
             <Button variant="outline" onClick={() => setViewOrder(null)}>Close</Button>
-            <Button variant="outline" onClick={() => window.print()}>
+            <Button variant="outline" onClick={() => viewOrder && printOrder(viewOrder)}>
               <Printer className="h-4 w-4" /> Print / PDF
             </Button>
             {(() => {

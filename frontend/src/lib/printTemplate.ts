@@ -128,6 +128,12 @@ export interface PrintDocExtras {
   extraBox?: { label: string; value: string }
   /** Extra line under the customer (e.g. quotation notes). */
   notes?: string
+  /** Label for the customer box (default "Bill To"; quotations use "Prepared For"). */
+  billToLabel?: string
+  /** Label for the grand total row (default "GRAND TOTAL"; quotations use "QUOTED TOTAL"). */
+  totalLabel?: string
+  /** Optional terms paragraph printed after the totals (quotations). */
+  terms?: string
 }
 
 const fmt = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -267,6 +273,7 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
       .totals-box .grand{display:flex;justify-content:space-between;padding-top:8px;font-size:14px;font-weight:700;color:#1a1a2e;border-top:2px solid ${c.accent};margin-top:6px;}
       .amount-words{background:#fef3c7;border-radius:4px;padding:10px 14px;font-size:10px;color:#92400e;margin:16px 0;clear:both;}
       .amount-words b{color:#78350f;}
+      .terms{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:16px;font-size:9px;color:#6b728b;line-height:1.6;max-width:65%;clear:both;}
       .footer{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:16px;clear:both;}
       .declaration{font-size:9px;color:#6b728b;line-height:1.6;margin-bottom:${c.showSignature ? '16px' : '4px'};max-width:65%;}
       .signatures{display:flex;justify-content:space-between;margin-top:20px;}
@@ -302,7 +309,7 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
       </div>
       <div class="billto-row">
         <div class="billto-box">
-          <div class="label">Bill To</div>
+          <div class="label">${escapeHtml(extras.billToLabel ?? 'Bill To')}</div>
           <div class="name">${escapeHtml(doc.customer || 'Guest')}</div>
           <div class="detail">${[doc.customerEmail, doc.customerPhone].filter(Boolean).map((v) => escapeHtml(String(v))).join('<br/>')}</div>
           ${doc.customerAddress || doc.customerCity || doc.customerState || doc.customerPincode ? `<div class="detail" style="margin-top:4px;white-space:pre-line;">${escapeHtml([doc.customerAddress, [doc.customerCity, doc.customerState, doc.customerPincode].filter(Boolean).join(', ')].filter(Boolean).join('\n'))}</div>` : ''}
@@ -323,8 +330,9 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
         <div class="row"><span>Taxable Value</span><span>₹${fmt(taxable)}</span></div>
         ${gstRate > 0 ? `<div class="row"><span>CGST @ ${gstRate / 2}%</span><span>₹${fmt(halfTax)}</span></div><div class="row"><span>SGST @ ${gstRate / 2}%</span><span>₹${fmt(halfTax)}</span></div><div class="row"><span>Total GST</span><span>₹${fmt(totalTax)}</span></div>` : ''}
         ${Number(doc.discount) > 0 ? `<div class="row" style="color:#dc2626;"><span>Discount</span><span>- ₹${fmt(doc.discount)}</span></div>` : ''}
-        <div class="grand"><span>GRAND TOTAL</span><span>₹${fmt(doc.grandTotal)}</span></div>
+        <div class="grand"><span>${escapeHtml(extras.totalLabel ?? 'GRAND TOTAL')}</span><span>₹${fmt(doc.grandTotal)}</span></div>
       </div>
+      ${extras.terms ? `<div class="terms"><b>Terms &amp; Conditions:</b> ${escapeHtml(extras.terms)}</div>` : ''}
       ${c.showAmountWords ? `<div class="amount-words"><b>Amount in Words:</b> ${escapeHtml(numberToIndianWords(Number(doc.grandTotal) || 0))} Rupees Only</div>` : ''}
       <div class="footer">
         ${c.showDeclaration ? `<div class="declaration"><b>Declaration:</b> ${escapeHtml(c.declaration)}</div>` : ''}
