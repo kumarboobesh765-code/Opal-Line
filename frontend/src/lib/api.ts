@@ -214,6 +214,8 @@ export const shopifyApi = {
     request('/shopify/customer-export/poll', { method: 'POST' }),
   customersExportUrl: (): Promise<{ url: string }> =>
     request('/shopify/customers-export-url'),
+  piiGap: (): Promise<{ missing: number }> =>
+    request('/shopify/pii-gap'),
   createOrder: (body: {
     customer: string
     email?: string
