@@ -739,6 +739,18 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         is_open boolean DEFAULT true,
         closed_at timestamp
       )`)
+
+    // ── Printable designer templates ────────────────────────────────────
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS print_templates (
+        id text PRIMARY KEY,
+        doc_type text NOT NULL,
+        name text NOT NULL,
+        config jsonb NOT NULL,
+        is_default boolean NOT NULL DEFAULT false,
+        updated_at timestamp
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS print_templates_doc_type_idx ON print_templates (doc_type)`)
   })
 }
 
@@ -1165,6 +1177,15 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
         is_open boolean DEFAULT true,
         closed_at timestamp
       )`,
+      `CREATE TABLE IF NOT EXISTS print_templates (
+        id text PRIMARY KEY,
+        doc_type text NOT NULL,
+        name text NOT NULL,
+        config jsonb NOT NULL,
+        is_default boolean NOT NULL DEFAULT false,
+        updated_at timestamp
+      )`,
+      `CREATE INDEX IF NOT EXISTS print_templates_doc_type_idx ON print_templates (doc_type)`,
     ]
     for (const stmt of upgrades) {
       await sql.unsafe(stmt).catch(() => undefined)

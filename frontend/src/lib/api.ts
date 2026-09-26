@@ -1116,3 +1116,29 @@ export const accountingApi = {
     return request<{ outputGst: number; inputGst: number; netPayable: number; b2bTaxable: number; b2cTaxable: number; mismatches: Array<{ invoiceNumber: string; expected: number; actual: number; diff: number }> }>(`/db/reports/gst-reconciliation${suffix}`)
   },
 }
+
+export interface PrintTemplateRow {
+  id: string
+  docType: 'invoice' | 'quotation' | 'order'
+  name: string
+  config: unknown
+  isDefault: boolean
+  updatedAt: string | null
+}
+
+export const printTemplatesApi = {
+  list: (docType?: 'invoice' | 'quotation' | 'order') =>
+    request<{ templates: PrintTemplateRow[] }>(`/print-templates${docType ? `?docType=${docType}` : ''}`),
+  getDefault: (docType: 'invoice' | 'quotation' | 'order') =>
+    request<{ config: unknown; name: string | null; id: string | null }>(`/print-templates/default/${docType}`),
+  getSample: (docType: 'invoice' | 'quotation' | 'order') =>
+    request<{ doc: Record<string, unknown> }>(`/print-templates/sample/${docType}`),
+  create: (body: { docType: 'invoice' | 'quotation' | 'order'; name: string; config: unknown; setDefault?: boolean }) =>
+    request<{ ok: boolean; id: string }>('/print-templates', { method: 'POST', body: JSON.stringify(body) }),
+  update: (id: string, body: { name?: string; config?: unknown; setDefault?: boolean }) =>
+    request<{ ok: boolean }>(`/print-templates/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  setDefault: (id: string) =>
+    request<{ ok: boolean }>(`/print-templates/${id}/default`, { method: 'POST' }),
+  remove: (id: string) =>
+    request<{ ok: boolean }>(`/print-templates/${id}`, { method: 'DELETE' }),
+}

@@ -66,6 +66,7 @@ const HsnSummaryPage = lazy(() => import('@/pages/HsnSummary'))
 const BackupRestorePage = lazy(() => import('@/pages/BackupRestore'))
 const AuditLogsPage = lazy(() => import('@/pages/AuditLogs'))
 const ActivityLogsPage = lazy(() => import('@/pages/ActivityLogs'))
+const PrintDesignerPage = lazy(() => import('@/pages/PrintDesigner'))
 const SystemStatusPage = lazy(() => import('@/pages/SystemStatus'))
 const UpdatesPage = lazy(() => import('@/pages/Updates'))
 
@@ -174,6 +175,7 @@ function App() {
             <Route path="/system/notification-log" element={guarded('system', <NotificationLogPage />)} />
             <Route path="/system/audit" element={guarded('system', <AuditLogsPage />)} />
             <Route path="/system/activity" element={guarded('system', <ActivityLogsPage />)} />
+            <Route path="/system/print-designer" element={guarded('system', <PrintDesignerPage />)} />
 
             <Route path="*" element={<NotFound />} />
           </Route>

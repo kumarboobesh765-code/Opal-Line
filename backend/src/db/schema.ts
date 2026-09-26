@@ -734,3 +734,17 @@ export const financialPeriods = pgTable('financial_periods', {
   isOpen: boolean('is_open').default(true),
   closedAt: timestamp('closed_at'),
 })
+
+/** Saved designs for printable documents (invoice, quotation, order). */
+export const printTemplates = pgTable('print_templates', {
+  id: text('id').primaryKey(),
+  /** invoice | quotation | order — one default design per document type. */
+  docType: text('doc_type').notNull(),
+  name: text('name').notNull(),
+  /** PrintDesignerConfig JSON: accent color, header style, toggles, margins… */
+  config: jsonb('config').notNull(),
+  isDefault: boolean('is_default').notNull().default(false),
+  updatedAt: ts('updated_at'),
+}, (table) => ({
+  docTypeIdx: index('print_templates_doc_type_idx').on(table.docType),
+}))

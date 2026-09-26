@@ -164,6 +164,7 @@ const RESOURCE_MODULE: Record<string, string> = {
   'sync-logs': 'shopify',
   'silver-rates': 'silver-rate',
   settings: 'system',
+  'print-templates': 'system',
   stats: 'dashboard',
   search: 'dashboard',
   dashboard: 'dashboard',

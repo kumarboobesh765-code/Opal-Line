@@ -142,6 +142,7 @@ export const navSections: NavSection[] = [
       { title: 'System Status', path: '/system/status', icon: Server },
       { title: 'App Updates', path: '/system/updates', icon: RefreshCcw },
       { title: 'Settings', path: '/system/settings', icon: Settings },
+      { title: 'Print Designer', path: '/system/print-designer', icon: FileText },
       { title: 'Connections', path: '/system/connections', icon: Plug },
       { title: 'Notifications', path: '/system/notifications', icon: Settings },
       { title: 'Notification Log', path: '/system/notification-log', icon: ScrollText },
