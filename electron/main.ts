@@ -416,7 +416,7 @@ function createWindow() {
     title: 'Opal Line — Billing Software',
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
-      contextIsolation: true, nodeIntegration: false, sandbox: false,
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
     },
     show: false,
   })
