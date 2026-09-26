@@ -37,7 +37,7 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "concurrently": "^10.0.4",
-    "electron": "^35.7.5",
+    "electron": "^44.4.5",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"

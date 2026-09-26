@@ -71,10 +71,31 @@ function downloadTo(url, dest) {
   })
 }
 
+// The EnterpriseDB "binaries" zip is a full development distribution: it
+// ships pgAdmin 4 (~16,600 files), StackBuilder, server headers, the full docs
+// tree and debug symbols. None of it is used at runtime — we only ever exec
+// bin/initdb.exe + bin/pg_ctl.exe and let them load lib/ and share/. Shipping
+// it verbatim added ~700 MB to the installer and made electron-builder
+// code-sign ~20,000 files one at a time (a >1 hour build).
+const PG_PRUNE_DIRS = ['pgAdmin 4', 'StackBuilder', 'doc', 'include', 'symbols']
+
+function prunePortablePostgres() {
+  let removed = 0
+  for (const dir of PG_PRUNE_DIRS) {
+    const target = path.join(PG_DIR, dir)
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true })
+      removed++
+    }
+  }
+  if (removed > 0) console.log(`  Pruned ${removed} unused PostgreSQL director${removed === 1 ? 'y' : 'ies'} (pgAdmin 4, StackBuilder, doc, include, symbols).`)
+}
+
 async function ensurePortablePostgres() {
   const pgBin = path.join(PG_DIR, 'bin', 'pg_ctl.exe')
   if (fs.existsSync(pgBin)) {
     console.log('  PostgreSQL already bundled.')
+    prunePortablePostgres()
     fs.writeFileSync(path.join(ROOT, 'backend', 'pgsql-present.flag'), new Date().toISOString())
     return true
   }
@@ -97,6 +118,7 @@ async function ensurePortablePostgres() {
     fs.rmSync(zip, { force: true })
     fs.rmSync(path.join(ROOT, 'pg-tmp'), { recursive: true, force: true })
     console.log('  PostgreSQL bundled at backend/pgsql')
+    prunePortablePostgres()
     fs.writeFileSync(path.join(ROOT, 'backend', 'pgsql-present.flag'), new Date().toISOString())
     return true
   } catch (err) {

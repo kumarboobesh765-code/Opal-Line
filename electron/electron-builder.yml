@@ -46,13 +46,25 @@ extraResources:
     to: backend/package.json
   - from: backend/drizzle
     to: backend/drizzle
+  - from: backend/pgsql-present.flag
+    to: pgsql-present.flag
   # Portable PostgreSQL — optional; present only when scripts/build-desktop.js
   # downloaded it. electron-builder errors on missing sources without
   # filter support, so the build script writes this marker file.
-  - from: backend/pgsql-present.flag
-    to: pgsql-present.flag
+  #
+  # The filter mirrors scripts/build-desktop.js: the EnterpriseDB binaries zip is
+  # a full dev distribution (pgAdmin 4, StackBuilder, headers, docs, debug
+  # symbols) that we never exec. Without this, electron-builder also code-signs
+  # ~20,000 of those files one by one, which turns the build into an hour+.
   - from: backend/pgsql
     to: pgsql
+    filter:
+      - "**/*"
+      - "!pgAdmin 4/**"
+      - "!StackBuilder/**"
+      - "!doc/**"
+      - "!include/**"
+      - "!symbols/**"
 
 win:
   target:

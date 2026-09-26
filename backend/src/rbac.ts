@@ -35,8 +35,11 @@ export function defaultRolePermissions(name: string): Permissions {
       for (const m of MODULES) p[m.key] = { ...all }
       break
     case 'Admin':
+      // The bootstrap owner is created with this role, so it must be able to do
+      // everything an owner needs — including deleting a user or a custom role.
+      // It previously had system.delete = false, which made the Users page's
+      // Delete button always fail with 403 and left stray roles undeletable.
       for (const m of MODULES) p[m.key] = { ...all }
-      p.system = { view: true, create: true, edit: true, delete: false }
       break
     case 'Manager':
       p.dashboard = { ...viewOnly }
