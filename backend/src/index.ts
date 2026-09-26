@@ -667,6 +667,17 @@ app.post('/api/v1/shopify/sync', requirePermission('shopify', 'create'), validat
         } catch (e) {
           dbResults.orders = e instanceof Error ? e.message : 'failed'
         }
+        // The API response is redacted for protected customer data — poll the
+        // order mailbox right away so the notification emails (never redacted)
+        // fill in the real customer data for the orders just synced.
+        if (selected.includes('orders') && isEmailIngestConfigured()) {
+          try {
+            const emailRes = await pollOrderMailbox()
+            dbResults.emailIngest = `scanned: ${emailRes.scanned}, updated: ${emailRes.updated}, created: ${emailRes.created}`
+          } catch (e) {
+            logger.error({ err: e instanceof Error ? e.message : e }, 'Post-sync email ingest failed')
+          }
+        }
       }
       // Auto-enrich after sync: fetch full customer data for incomplete records
       try {
