@@ -210,7 +210,7 @@ export const shopifyApi = {
     }),
   sync: (resources?: SyncResource[]) =>
     request<SyncResult>('/shopify/sync', { method: 'POST', body: JSON.stringify({ resources }) }),
-  pollCustomerExport: (): Promise<{ ok: boolean; scanned: number; attachmentsFound: number; imported: number; updated: number; errors: string[] }> =>
+  pollCustomerExport: (): Promise<{ ok: boolean; scanned: number; attachmentsFound: number; imported: number; updated: number; errors: string[]; downloadUrl?: string | null; emailFound?: boolean }> =>
     request('/shopify/customer-export/poll', { method: 'POST' }),
   customersExportUrl: (): Promise<{ url: string }> =>
     request('/shopify/customers-export-url'),

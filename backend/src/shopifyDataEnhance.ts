@@ -798,6 +798,27 @@ export async function importCustomersFromCSV(rows: Record<string, string>[]): Pr
       if (!existing && shopifyId) {
         existing = await findExisting(`SELECT id, email, phone, name, city, province FROM customers WHERE name = $1 LIMIT 1`, `Shopify Customer #${shopifyId}`)
       }
+      // Shopify's customer export has NO Customer ID column. Resolve one from
+      // our own orders: a matching order row carries customer_shopify_id from
+      // the API sync, and it belongs to the customer with this email/phone.
+      let resolvedShopifyId: string | null = shopifyId
+      if (!resolvedShopifyId && (email || phone)) {
+        const cond = email ? `customer_email = $1` : `customer_phone = $1`
+        const param = email ?? phone
+        const found = await client.unsafe(
+          `SELECT customer_shopify_id AS id FROM sales_orders
+           WHERE ${cond} AND customer_shopify_id IS NOT NULL AND customer_shopify_id != ''
+           LIMIT 1`,
+          [param],
+        )
+        resolvedShopifyId = (found[0] as any)?.id ?? null
+      }
+      const finalShopifyId = resolvedShopifyId
+      // A row resolved through orders can now reach its redacted placeholder
+      // (the placeholder carries the shopify_id even though it has no email).
+      if (!existing && finalShopifyId) {
+        existing = await findExisting(`SELECT id, email, phone, name, city, province FROM customers WHERE shopify_id = $1 LIMIT 1`, finalShopifyId)
+      }
 
       if (existing) {
         const updates: string[] = []
@@ -815,9 +836,10 @@ export async function importCustomersFromCSV(rows: Record<string, string>[]): Pr
         setIf('name', name, existing.name?.startsWith('Shopify Customer #') ? null : existing.name)
         setIf('city', city, existing.city)
         setIf('province', province, existing.province)
-        if (shopifyId) {
-          updates.push(`shopify_id = $${values.length + 1}`)
-          values.push(shopifyId)
+        // Only stamp the resolved Shopify id when the row does not have one.
+        if (finalShopifyId) {
+          updates.push(`shopify_id = COALESCE(shopify_id, $${values.length + 1})`)
+          values.push(finalShopifyId)
         }
         if (updates.length > 0) {
           values.push(existing.id)
@@ -828,7 +850,7 @@ export async function importCustomersFromCSV(rows: Record<string, string>[]): Pr
         const id = `cust-csv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         await client.unsafe(
           `INSERT INTO customers (id, name, email, phone, city, province, shopify_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [id, name || email || 'Unknown', email, phone, city, province, shopifyId],
+          [id, name || email || 'Unknown', email, phone, city, province, finalShopifyId],
         )
         result.imported++
       }

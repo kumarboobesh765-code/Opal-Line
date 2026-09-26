@@ -887,6 +887,12 @@ export interface CustomerExportResult {
   imported: number
   updated: number
   errors: string[]
+  /** Set when the export email was found but delivers a download LINK instead
+   * of an attachment (current Shopify templates). The link needs the user's
+   * logged-in Shopify admin session, so the frontend opens it in the browser
+   * and then lets the user pick the downloaded CSV file for import. */
+  downloadUrl?: string | null
+  emailFound?: boolean
 }
 
 /**
@@ -930,24 +936,39 @@ export async function pollCustomerExport(): Promise<CustomerExportResult> {
       try {
         const parsed = await simpleParser(msg.source)
         const subject = clean(parsed.subject ?? '')
-        // Only customer-export notifications, not order notifications.
-        if (!/customer export|export.*customers|customers.*csv/i.test(subject)) continue
+        // Only customer-export notifications, not order notifications. Shopify
+        // titles the email "Export of your customers".
+        if (!/export of your customers|customer export|export.*customers|customers.*csv/i.test(subject)) continue
+        res.emailFound = true
+        // Shopify delivers the export two ways: as a .csv attachment, or (the
+        // current template) as a "customers_export.csv" download link in the
+        // body. The link requires the user's admin browser session (verified:
+        // API token gets 401), so attachments are imported here while links are
+        // handed back to the UI for the user to download and pick.
         const attachments = (parsed.attachments ?? []).filter((a) => /\.csv$/i.test(a.filename ?? ''))
-        if (attachments.length === 0) continue
-        res.attachmentsFound += attachments.length
-        for (const att of attachments) {
-          const csv = att.content.toString('utf8')
-          const rows = parseCsvContent(csv)
-          if (rows.length === 0) {
-            res.errors.push(`No rows parsed from ${att.filename ?? 'attachment'}`)
-            continue
+        if (attachments.length > 0) {
+          res.attachmentsFound += attachments.length
+          for (const att of attachments) {
+            const rows = parseCsvContent(att.content.toString('utf8'))
+            if (rows.length === 0) {
+              res.errors.push(`No rows parsed from ${att.filename ?? 'attachment'}`)
+              continue
+            }
+            const result = await importCustomersFromCSV(rows)
+            res.imported += result.imported
+            res.updated += result.updated
+            res.errors.push(...result.errors)
           }
-          const result = await importCustomersFromCSV(rows)
-          res.imported += result.imported
-          res.updated += result.updated
-          res.errors.push(...result.errors)
+        } else if (!res.downloadUrl) {
+          const html = typeof parsed.html === 'string' ? parsed.html : ''
+          const text = parsed.text ?? ''
+          // Plain-text body renders the link as "( https://…/customers_export.csv/download )".
+          const fromText = [...text.matchAll(/\(\s*(https:\/\/[^)\s]+\.csv\/download)\s*\)/g)].map((m) => m[1])
+          const fromHtml = [...html.matchAll(/https:\/\/[^\s"'<>]+\/admin\/files\/[\w]+\/[^\s"'<>]*?\.csv\/download/g)].map((m) => m[0])
+          const link = [...new Set([...fromText, ...fromHtml])][0]
+          if (link) res.downloadUrl = link
         }
-        logger.info({ subject, attachments: attachments.length, imported: res.imported, updated: res.updated }, 'Customer export CSV ingested')
+        logger.info({ subject, attachments: attachments.length, downloadUrl: res.downloadUrl ?? null, imported: res.imported, updated: res.updated }, 'Customer export email processed')
       } catch (err) {
         res.errors.push(err instanceof Error ? err.message : 'customer export parse error')
       }
@@ -1056,8 +1077,9 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
       try {
         const parsed = await simpleParser(msg.source)
         const subject = clean(parsed.subject)
-        // Customer-export emails are handled by the CSV watcher, not here.
-        if (/customer export|export.*customers|customers.*csv/i.test(subject)) continue
+        // Customer-export emails ("Export of your customers") are handled by
+        // the CSV watcher, not here.
+        if (/export of your customers|customer export|export.*customers|customers.*csv/i.test(subject)) continue
         // Only order notifications — skip shipping/refund/etc.
         if (!parseOrderNumberFromSubject(subject)) continue
         if (/refund|return|cancel|cxl|shipping|fulfill|delivery/i.test(subject)) continue
