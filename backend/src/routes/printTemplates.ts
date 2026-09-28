@@ -5,6 +5,7 @@ import { db, schema } from '../db/client'
 import { actorFromRequest, recordActivity } from '../activity'
 import { logger } from '../logger'
 import { buildUpiQrDataUrl } from '../upiQr'
+import { requirePermission } from '../rbac'
 
 /**
  * Saved designs for printable documents. One design can be marked default per
@@ -251,6 +252,14 @@ printTemplatesRouter.get('/default/:docType', async (req: Request, res: Response
     logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template default failed')
     jsonError(res, 500, 'Could not load default print template')
   }
+})
+
+// Validate an imported design file's config without saving it. Returns the
+// clamped, allowlisted config so the designer can apply it safely.
+printTemplatesRouter.post('/sanitize', requirePermission('system', 'edit'), (req: Request, res: Response) => {
+  const { config, error } = sanitizePrintConfig(req.body?.config)
+  if (error) return jsonError(res, 400, error)
+  res.json({ config })
 })
 
 printTemplatesRouter.get('/sample/:docType', (req: Request, res: Response) => {
