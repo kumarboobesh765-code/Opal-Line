@@ -11,7 +11,9 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  ListChecks,
   MessageCircle,
+  Package,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -51,7 +53,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi, printTemplatesApi } from '@/lib/api'
-import { printDocument, mergePrintConfig } from '@/lib/printTemplate'
+import { printDocument, mergePrintConfig, DEFAULT_PRINT_CONFIG, type PrintDoc, type PrintDesignerConfig } from '@/lib/printTemplate'
 import { exportTable } from '@/lib/export'
 import type { Customer, Customer360, OrderEvent, OrderFullDetail, OrderStatus, Product, SalesOrder } from '@/types'
 import { cn } from '@/lib/utils'
@@ -233,6 +235,9 @@ export default function SalesOrdersPage() {
 
   const [viewOrder, setViewOrder] = useState<SalesOrder | null>(null)
   const [printConfig, setPrintConfig] = useState<unknown>(null)
+  // Fulfilment docs fall back to defaults until their saved designs load.
+  const [packingConfig, setPackingConfig] = useState<PrintDesignerConfig>(DEFAULT_PRINT_CONFIG)
+  const [pickConfig, setPickConfig] = useState<PrintDesignerConfig>(DEFAULT_PRINT_CONFIG)
   const [selectedOrders, setSelectedOrders] = useState<SalesOrder[]>([])
   const [bulkBusy, setBulkBusy] = useState(false)
   const [invoiceSavingId, setInvoiceSavingId] = useState<string | null>(null)
@@ -288,53 +293,64 @@ export default function SalesOrdersPage() {
       })
       .catch(() => setLoading(false))
     printTemplatesApi.getDefault('order').then((r) => setPrintConfig(r.config)).catch(() => {})
+    printTemplatesApi.getDefault('packing-slip').then((r) => setPackingConfig(mergePrintConfig(r.config))).catch(() => {})
+    printTemplatesApi.getDefault('pick-list').then((r) => setPickConfig(mergePrintConfig(r.config))).catch(() => {})
   }, [])
 
-  const printOrder = (o: SalesOrder) => {
+  const buildOrderPrintDoc = (o: SalesOrder): PrintDoc => {
     const items = o.lineItems ?? []
     const subtotal = items.reduce((a, li) => a + (li.price ?? 0) * (li.quantity ?? 0), 0) || o.value
     const billing = (o.billingAddress ?? {}) as Record<string, string>
     const shipping = (o.shippingAddress ?? {}) as Record<string, string>
     const addr = shipping.address1 || billing.address1 || ''
-    printDocument(
-      {
-        number: o.shopifyId,
-        shopifyOrder: o.shopifyId,
-        customer: o.customer,
-        customerEmail: customers.find((c) => c.name === o.customer)?.email || '',
-        customerPhone: shipping.phone || billing.phone || '',
-        customerAddress: addr || undefined,
-        customerCity: shipping.city || billing.city || undefined,
-        customerState: shipping.province || billing.province || undefined,
-        customerPincode: shipping.zip || billing.zip || undefined,
-        gst: 0,
-        gstAmount: 0,
-        discount: o.discount ?? 0,
-        subtotal,
-        grandTotal: o.value,
-        paymentMethod: o.payment,
-        paymentStatus: o.fulfillment,
-        date: o.date,
-        items: items.map((li) => ({
-          product: li.title,
-          sku: li.sku ?? '',
-          hsn: '',
-          qty: li.quantity,
-          weight: 0,
-          silverRate: li.price,
-          makingCharge: 0,
-          tax: 0,
-          amount: (li.price ?? 0) * (li.quantity ?? 0),
-        })),
-      },
-      mergePrintConfig(printConfig),
-      {
-        docType: 'order',
-        tagline: '92.5 Sterling Silver Jewellery',
-        totalLabel: 'ORDER VALUE',
-        terms: o.isBooking ? 'This is a booking confirmation, not a tax invoice.' : undefined,
-      },
-    )
+    return {
+      number: o.shopifyId,
+      shopifyOrder: o.shopifyId,
+      customer: o.customer,
+      customerEmail: customers.find((c) => c.name === o.customer)?.email || '',
+      customerPhone: shipping.phone || billing.phone || '',
+      customerAddress: addr || undefined,
+      customerCity: shipping.city || billing.city || undefined,
+      customerState: shipping.province || billing.province || undefined,
+      customerPincode: shipping.zip || billing.zip || undefined,
+      gst: 0,
+      gstAmount: 0,
+      discount: o.discount ?? 0,
+      subtotal,
+      grandTotal: o.value,
+      paymentMethod: o.payment,
+      paymentStatus: o.fulfillment,
+      date: o.date,
+      items: items.map((li) => ({
+        product: li.title,
+        sku: li.sku ?? '',
+        hsn: '',
+        qty: li.quantity,
+        weight: 0,
+        silverRate: li.price,
+        makingCharge: 0,
+        tax: 0,
+        amount: (li.price ?? 0) * (li.quantity ?? 0),
+      })),
+    }
+  }
+
+  const printOrder = (o: SalesOrder) => {
+    printDocument(buildOrderPrintDoc(o), mergePrintConfig(printConfig), {
+      docType: 'order',
+      tagline: '92.5 Sterling Silver Jewellery',
+      totalLabel: 'ORDER VALUE',
+      terms: o.isBooking ? 'This is a booking confirmation, not a tax invoice.' : undefined,
+    })
+  }
+
+  const printFulfilment = (o: SalesOrder, docType: 'packing-slip' | 'pick-list') => {
+    const config = docType === 'packing-slip' ? packingConfig : pickConfig
+    printDocument(buildOrderPrintDoc(o), config, {
+      docType,
+      tagline: '92.5 Sterling Silver Jewellery',
+      billToLabel: docType === 'packing-slip' ? 'Deliver To' : 'Staging For',
+    })
   }
 
   const cancelOrder = useCallback(async (o: SalesOrder) => {
@@ -1312,6 +1328,12 @@ export default function SalesOrdersPage() {
             <Button variant="outline" onClick={() => setViewOrder(null)}>Close</Button>
             <Button variant="outline" onClick={() => viewOrder && printOrder(viewOrder)}>
               <Printer className="h-4 w-4" /> Print / PDF
+            </Button>
+            <Button variant="outline" onClick={() => viewOrder && printFulfilment(viewOrder, 'packing-slip')}>
+              <Package className="h-4 w-4" /> Packing Slip
+            </Button>
+            <Button variant="outline" onClick={() => viewOrder && printFulfilment(viewOrder, 'pick-list')}>
+              <ListChecks className="h-4 w-4" /> Pick List
             </Button>
             {(() => {
               const phone = viewOrder?.shippingAddress?.phone || viewOrder?.billingAddress?.phone || customers.find((c) => c.name === viewOrder?.customer)?.phone || ''

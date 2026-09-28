@@ -176,7 +176,7 @@ export interface PrintDoc {
 }
 
 export interface PrintDocExtras {
-  docType: 'invoice' | 'quotation' | 'order'
+  docType: 'invoice' | 'quotation' | 'order' | 'packing-slip' | 'pick-list'
   /** Sub-line under the business name in the header. */
   tagline?: string
   /** Extra key/value box (e.g. "Valid Until" on quotations). */
@@ -234,15 +234,47 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
   const accentSoft2 = lighten(c.accent, 0.93)
   const radius = `${c.cornerRadius}px`
   const pageWidth = c.pageSize === 'letter' ? '216mm' : '210mm'
-  const docLabel = extras.docType === 'quotation' ? 'QUOTATION' : extras.docType === 'order' ? 'SALES ORDER' : 'TAX INVOICE'
-  const docNumberLabel = extras.docType === 'quotation' ? 'Quotation No' : extras.docType === 'order' ? 'Order No' : 'Invoice No'
+  const docLabel =
+    extras.docType === 'quotation' ? 'QUOTATION'
+    : extras.docType === 'order' ? 'SALES ORDER'
+    : extras.docType === 'packing-slip' ? 'PACKING SLIP'
+    : extras.docType === 'pick-list' ? 'PICK LIST'
+    : 'TAX INVOICE'
+  const docNumberLabel =
+    extras.docType === 'quotation' ? 'Quotation No'
+    : extras.docType === 'order' ? 'Order No'
+    : extras.docType === 'packing-slip' || extras.docType === 'pick-list' ? 'Order No'
+    : 'Invoice No'
   const tagline = extras.tagline || '92.5 Sterling Silver Jewellery'
+  // Fulfilment documents (packing slip / pick list) are internal: no GST
+  // math, no amounts, no payment box — just products, SKUs and quantities.
+  const fulfilmentDoc = extras.docType === 'packing-slip' || extras.docType === 'pick-list'
 
   const cellBorder =
     c.borderStyle === 'full' ? 'border:1px solid #e5e7eb;' : c.borderStyle === 'rows' ? 'border-bottom:1px solid #e5e7eb;' : ''
   const headBg =
     c.tableHeaderStyle === 'dark' ? `background:#1a1a2e;color:#fff;` : c.tableHeaderStyle === 'accent' ? `background:${c.accent};color:#1a1a2e;` : `background:${accentSoft2};color:#374151;border-bottom:2px solid ${c.accent};`
   const zebra = (idx: number) => (c.tableZebra && idx % 2 === 0 ? `background:#fafafa;` : '')
+
+  // Fulfilment rows: product + SKU + qty (+ weight), with tick boxes on pick
+  // lists so staff can mark each line as collected.
+  const fulfilmentRows = items
+    .map((i, idx) => {
+      const tick = extras.docType === 'pick-list'
+        ? `<td style="padding:9px 10px;${cellBorder}width:34px;"><span style="display:inline-block;width:16px;height:16px;border:2px solid ${c.accent2};border-radius:3px;"></span></td>`
+        : ''
+      return `<tr style="${zebra(idx)}">
+          ${tick}
+          <td style="padding:9px 10px;${cellBorder}font-size:11px;">${escapeHtml(String(i.product ?? ''))}<br/><span style="color:#8a8fa3;font-size:9px;">${escapeHtml(String(i.sku ?? ''))}</span></td>
+          <td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${Number(i.qty) || 0}</td>
+          ${c.showWeight ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${(Number(i.weight) || 0).toFixed(2)}</td>` : ''}
+        </tr>`
+    })
+    .join('')
+  const fulfilmentHeadCols =
+    (extras.docType === 'pick-list' ? `<th style="width:34px;"></th>` : '') +
+    `<th>Product</th><th style="text-align:right;">Qty</th>` +
+    (c.showWeight ? `<th style="text-align:right;">Weight (g)</th>` : '')
 
   const itemRows = items
     .map((i, idx) => {
@@ -418,6 +450,7 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
       .qr-caption{font-size:8.5px;color:#6b7280;margin-top:3px;}
       .watermark{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:72px;font-weight:800;opacity:.08;letter-spacing:10px;pointer-events:none;white-space:nowrap;}
       .terms{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:14px;font-size:9px;color:#6b7280;line-height:1.6;max-width:65%;clear:both;}
+      .fulfil-note{background:${accentSoft2};border:1px solid ${accentSoft};border-radius:${radius};padding:10px 14px;font-size:10px;color:#374151;margin-bottom:16px;}
       @media print{
         body{font-size:10px;}
         .header-banner{background:linear-gradient(135deg, ${c.accent2} 0%, #2a2a45 100%) !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
@@ -445,11 +478,15 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
         </div>
       </div>
       <table class="items">
-        <thead><tr>${headCols}</tr></thead>
-        <tbody>${itemRows}</tbody>
-        <tfoot><tr>${footSpans}</tr></tfoot>
+        <thead><tr>${fulfilmentDoc ? fulfilmentHeadCols : headCols}</tr></thead>
+        <tbody>${fulfilmentDoc ? fulfilmentRows : itemRows}</tbody>
+        ${fulfilmentDoc ? '' : `<tfoot><tr>${footSpans}</tr></tfoot>`}
       </table>
-      <div class="totals-wrap">
+      ${fulfilmentDoc
+        ? `<div class="fulfil-note">${extras.docType === 'pick-list'
+            ? `Tick each line as it is collected from stock. ${totalQty} item(s) / ${totalWeight.toFixed(2)} g across ${items.length} line(s).`
+            : `Package contents: ${totalQty} item(s) / ${totalWeight.toFixed(2)} g. Invoice is sent separately; do not include prices in the parcel.`}</div>`
+        : `<div class="totals-wrap">
         ${qrBlock}
         <div class="totals-box">
           <div class="row"><span>Taxable Value</span><span>₹${fmt(taxable)}</span></div>
@@ -458,17 +495,17 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
           <div class="grand"><span>${escapeHtml(extras.totalLabel ?? 'GRAND TOTAL')}</span><span>₹${fmt(doc.grandTotal)}</span></div>
         </div>
       </div>
-      ${c.showAmountWords ? `<div class="amount-words"><b>Amount in Words:</b> ${escapeHtml(numberToIndianWords(Number(doc.grandTotal) || 0))} Rupees Only</div>` : ''}
+      ${c.showAmountWords ? `<div class="amount-words"><b>Amount in Words:</b> ${escapeHtml(numberToIndianWords(Number(doc.grandTotal) || 0))} Rupees Only</div>` : ''}`}
       <div class="footer">
-        ${c.showDeclaration ? `<div class="declaration"><b>Declaration:</b> ${escapeHtml(c.declaration)}</div>` : ''}
-        ${extras.terms ? `<div class="terms"><b>Terms &amp; Conditions:</b> ${escapeHtml(extras.terms)}</div>` : ''}
-        ${c.bankDetails ? `<div class="bank"><b>Bank &amp; Payment Details:</b>\n${escapeHtml(c.bankDetails)}</div>` : ''}
-        ${c.footerNote ? `<div class="footnote">${escapeHtml(c.footerNote)}</div>` : ''}
-        ${c.showSignature ? `<div class="signatures">
-          <div class="sig-block"><div class="sig-line">Customer Signature</div></div>
-          <div class="sig-block"><div class="sig-line">${signatoryFor}</div></div>
+        ${!fulfilmentDoc && c.showDeclaration ? `<div class="declaration"><b>Declaration:</b> ${escapeHtml(c.declaration)}</div>` : ''}
+        ${!fulfilmentDoc && extras.terms ? `<div class="terms"><b>Terms &amp; Conditions:</b> ${escapeHtml(extras.terms)}</div>` : ''}
+        ${!fulfilmentDoc && c.bankDetails ? `<div class="bank"><b>Bank &amp; Payment Details:</b>\n${escapeHtml(c.bankDetails)}</div>` : ''}
+        ${!fulfilmentDoc && c.footerNote ? `<div class="footnote">${escapeHtml(c.footerNote)}</div>` : ''}
+        ${c.showSignature || fulfilmentDoc ? `<div class="signatures">
+          <div class="sig-block"><div class="sig-line">${fulfilmentDoc ? 'Packed By' : 'Customer Signature'}</div></div>
+          <div class="sig-block"><div class="sig-line">${fulfilmentDoc ? 'Checked By' : signatoryFor}</div></div>
         </div>` : ''}
-        ${c.thankYouNote ? `<div class="thanks">${escapeHtml(c.thankYouNote)}</div>` : ''}
+        ${!fulfilmentDoc && c.thankYouNote ? `<div class="thanks">${escapeHtml(c.thankYouNote)}</div>` : ''}
       </div>
       <div class="gen-footer">Generated by ${escapeHtml(doc.businessName || 'Opal Line')} ERP · opalline.in</div>
     </body></html>`

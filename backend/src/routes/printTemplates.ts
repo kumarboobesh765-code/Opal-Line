@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm'
 import { db, schema } from '../db/client'
 import { actorFromRequest, recordActivity } from '../activity'
 import { logger } from '../logger'
+import { buildUpiQrDataUrl } from '../upiQr'
 
 /**
  * Saved designs for printable documents. One design can be marked default per
@@ -14,7 +15,7 @@ import { logger } from '../logger'
 
 export const printTemplatesRouter = Router()
 
-export const PRINT_DOC_TYPES = ['invoice', 'quotation', 'order'] as const
+export const PRINT_DOC_TYPES = ['invoice', 'quotation', 'order', 'packing-slip', 'pick-list'] as const
 export type PrintDocType = (typeof PRINT_DOC_TYPES)[number]
 
 const MAX_CONFIG_BYTES = 128 * 1024
@@ -208,6 +209,12 @@ export function sampleDocument(docType: PrintDocType): Record<string, unknown> {
   if (docType === 'order') {
     return { ...base, number: 'SO-2026-00789', status: 'confirmed', fulfillment: 'unfulfilled', tags: 'manual-order' }
   }
+  if (docType === 'packing-slip') {
+    return { ...base, number: 'SO-2026-00789', status: 'confirmed' }
+  }
+  if (docType === 'pick-list') {
+    return { ...base, number: 'SO-2026-00789', status: 'confirmed' }
+  }
   return base
 }
 
@@ -250,6 +257,23 @@ printTemplatesRouter.get('/sample/:docType', (req: Request, res: Response) => {
   const docType = req.params.docType
   if (!isDocType(docType)) return jsonError(res, 400, `docType must be one of: ${PRINT_DOC_TYPES.join(', ')}`)
   res.json({ doc: sampleDocument(docType) })
+})
+
+// UPI payment QR for printables. Auth-only (requireAuth already applied at
+// mount); accepts a payload of { total, businessName? } and returns a PNG
+// data URL built from the Settings UPI ID — or { enabled: false } when no
+// UPI ID is configured so the UI can hide the slot.
+printTemplatesRouter.get('/upi-qr', async (req: Request, res: Response) => {
+  try {
+    const total = Number(req.query.total ?? 0)
+    if (!Number.isFinite(total) || total <= 0) return jsonError(res, 400, 'total must be a positive number')
+    const name = typeof req.query.businessName === 'string' ? req.query.businessName : undefined
+    const dataUrl = await buildUpiQrDataUrl(total, name)
+    res.json({ enabled: dataUrl !== null, dataUrl })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'upi qr generation failed')
+    jsonError(res, 500, 'Could not generate UPI QR')
+  }
 })
 
 const unsetDefaultFor = async (docType: PrintDocType) => {

@@ -19,13 +19,15 @@ import {
   type PrintDocExtras,
 } from '@/lib/printTemplate'
 
-const DOC_TYPES = ['invoice', 'quotation', 'order'] as const
+const DOC_TYPES = ['invoice', 'quotation', 'order', 'packing-slip', 'pick-list'] as const
 type DocType = (typeof DOC_TYPES)[number]
 
 const TAGLINES: Record<DocType, string> = {
   invoice: '92.5 Sterling Silver Jewellery',
   quotation: '92.5 Sterling Silver Jewellery',
   order: '92.5 Sterling Silver Jewellery',
+  'packing-slip': '92.5 Sterling Silver Jewellery',
+  'pick-list': '92.5 Sterling Silver Jewellery',
 }
 
 function ToggleRow({ title, description, checked, onCheckedChange }: { title: string; description: string; checked: boolean; onCheckedChange: (v: boolean) => void }) {
@@ -205,10 +207,14 @@ export default function PrintDesignerPage() {
                 <TabsTrigger value="invoice" className="flex-1">Invoice</TabsTrigger>
                 <TabsTrigger value="quotation" className="flex-1">Quotation</TabsTrigger>
                 <TabsTrigger value="order" className="flex-1">Order</TabsTrigger>
+                <TabsTrigger value="packing-slip" className="flex-1">Packing Slip</TabsTrigger>
+                <TabsTrigger value="pick-list" className="flex-1">Pick List</TabsTrigger>
               </TabsList>
               <TabsContent value="invoice" />
               <TabsContent value="quotation" />
               <TabsContent value="order" />
+              <TabsContent value="packing-slip" />
+              <TabsContent value="pick-list" />
             </Tabs>
 
             <div className="space-y-1.5">

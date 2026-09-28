@@ -39,6 +39,8 @@ export default function InvoiceDetailPage() {
   const [refunding, setRefunding] = useState(false)
   const [waSending, setWaSending] = useState(false)
   const [emailSending, setEmailSending] = useState(false)
+  // Auto UPI QR for printables (from Settings UPI ID); null = hidden.
+  const [upiQr, setUpiQr] = useState<string | null>(null)
   // Return-dialog state must live above the early returns (Rules of Hooks)
   const [returnOpen, setReturnOpen] = useState(false)
   const [returnQty, setReturnQty] = useState<Record<string, number>>({})
@@ -54,6 +56,20 @@ export default function InvoiceDetailPage() {
     dbApi.getSettings().then((s) => setSettings(s ?? null)).catch(() => {})
     printTemplatesApi.getDefault('invoice').then((r) => setPrintConfig(r.config)).catch(() => {})
   }, [id])
+
+  // Fetch the UPI QR once the invoice total is known; silently absent when
+  // no UPI ID is configured in Settings.
+  useEffect(() => {
+    if (!invoice?.grandTotal) return
+    let cancelled = false
+    printTemplatesApi
+      .getUpiQr(invoice.grandTotal)
+      .then((r) => { if (!cancelled && r.enabled && r.dataUrl) setUpiQr(r.dataUrl) })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [invoice?.grandTotal])
 
   if (loading) {
     return (
@@ -112,7 +128,10 @@ export default function InvoiceDetailPage() {
         amount: i.amount,
       })),
     }
-    printDocument(doc, mergePrintConfig(printConfig), {
+    const merged = mergePrintConfig(printConfig)
+    // Prefer a manually-uploaded QR design; otherwise use the auto UPI QR.
+    const withQr = merged.qrDataUrl ? merged : { ...merged, showQr: upiQr !== null, qrDataUrl: upiQr, qrCaption: 'Scan to pay via UPI' }
+    printDocument(doc, withQr, {
       docType: 'invoice',
       tagline: '92.5 Sterling Silver Jewellery',
     })
