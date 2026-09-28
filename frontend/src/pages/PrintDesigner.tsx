@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Printer, Save, RotateCcw, CheckCircle2, Trash2 } from 'lucide-react'
+import { CheckCircle2, Download, Printer, RotateCcw, Save, Trash2, Upload } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -179,6 +179,66 @@ export default function PrintDesignerPage() {
     setDesignName('My design')
   }
 
+  // ── Export / import the current design ────────────────────────────────
+  // Export writes a self-contained .opal-print JSON file (docType + config +
+  // version). Import validates the file locally, then runs it through the
+  // server-side sanitizer before applying it to the canvas.
+  const exportDesign = () => {
+    const payload = {
+      _opalPrint: 1 as const,
+      docType,
+      name: designName,
+      exportedAt: new Date().toISOString(),
+      config,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${docType}-${designName.replace(/[^a-z0-9-_]+/gi, '-')}.opal-print.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(`Design exported for ${docType}`)
+  }
+
+  const importDesignFile = async (file: File) => {
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text) as {
+        _opalPrint?: number
+        docType?: DocType
+        name?: string
+        config?: unknown
+      }
+      if (parsed._opalPrint !== 1 || !parsed.config) {
+        toast.error('Not an Opal Line print design file')
+        return
+      }
+      if (parsed.docType && parsed.docType !== docType) {
+        toast.error(`This file is a ${parsed.docType} design — open the ${parsed.docType} tab and import it there.`)
+        return
+      }
+      // Server-side sanitize returns a clamped config (or an error).
+      const check = await fetch('/api/v1/print-templates/sanitize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ config: parsed.config }),
+      })
+      if (!check.ok) {
+        toast.error('Design file failed validation')
+        return
+      }
+      const { config: clean } = (await check.json()) as { config: PrintDesignerConfig }
+      setCurrentId(null)
+      setConfig(clean)
+      if (parsed.name) setDesignName(`${parsed.name} (imported)`)
+      toast.success('Design imported — review it, then Save to keep it')
+    } catch {
+      toast.error('Could not read the design file')
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1560px] space-y-5 px-4 py-4 sm:py-6 lg:px-6">
       <PageHeader
@@ -189,6 +249,24 @@ export default function PrintDesignerPage() {
             <Button variant="outline" size="sm" onClick={openPreviewWindow}>
               <Printer className="h-3.5 w-3.5" /> Print preview
             </Button>
+            <Button variant="outline" size="sm" onClick={exportDesign}>
+              <Download className="h-3.5 w-3.5" /> Export design
+            </Button>
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (f) void importDesignFile(f)
+                }}
+              />
+              <span className="inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-card px-3 text-xs font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground">
+                <Upload className="h-3.5 w-3.5" /> Import design
+              </span>
+            </label>
             <Button variant="outline" size="sm" onClick={resetToBuiltIn}>
               <RotateCcw className="h-3.5 w-3.5" /> Reset
             </Button>
