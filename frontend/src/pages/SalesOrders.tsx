@@ -618,7 +618,7 @@ export default function SalesOrdersPage() {
             <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={() => setViewOrder(row.original)}>
+              <Button variant="ghost" size="icon-sm" aria-label={`View order ${row.original.shopifyId}`} onClick={() => setViewOrder(row.original)}>
                 <Eye className="h-3.5 w-3.5" />
               </Button>
               </TooltipTrigger>
@@ -626,7 +626,7 @@ export default function SalesOrdersPage() {
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={() => startEdit(row.original)}>
+              <Button variant="ghost" size="icon-sm" aria-label={`Edit order ${row.original.shopifyId}`} onClick={() => startEdit(row.original)}>
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
               </TooltipTrigger>
@@ -634,7 +634,7 @@ export default function SalesOrdersPage() {
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={() => duplicateOrder(row.original)}>
+              <Button variant="ghost" size="icon-sm" aria-label={`Duplicate order ${row.original.shopifyId}`} onClick={() => duplicateOrder(row.original)}>
                 <Copy className="h-3.5 w-3.5" />
               </Button>
               </TooltipTrigger>
@@ -1259,11 +1259,20 @@ export default function SalesOrdersPage() {
           </DialogHeader>
           {viewOrder ? (
             <div className="space-y-2 text-sm">
-              {/* Customer contact from Customer 360 data */}
+              {/* Customer contact: prefer the customer record, fall back to
+                  what is stored on the order itself (email/phone/addresses). */}
+              <DetailRow label="Customer" value={viewOrder.customer || '—'} />
               {(() => {
                 const cust = customers.find((c) => c.name === viewOrder.customer)
                   ?? customers.find((c) => viewOrder.shippingAddress?.phone && c.phone === viewOrder.shippingAddress.phone)
-                return cust?.email ? <DetailRow label="Email" value={cust.email} /> : null
+                const email = cust?.email ?? viewOrder.customerEmail ?? null
+                const phone = cust?.phone ?? viewOrder.customerPhone ?? viewOrder.shippingAddress?.phone ?? viewOrder.billingAddress?.phone ?? null
+                return (
+                  <>
+                    {email ? <DetailRow label="Email" value={email} /> : null}
+                    {phone ? <DetailRow label="Phone" value={phone} /> : null}
+                  </>
+                )
               })()}
               {(() => {
                 const a = (viewOrder.shippingAddress && (viewOrder.shippingAddress.address1 || viewOrder.shippingAddress.city)) ? viewOrder.shippingAddress : viewOrder.billingAddress
