@@ -24,6 +24,7 @@ import { actorFromRequest, recordActivity } from './activity'
 import { validate, createOrderSchema, updateOrderSchema, silverRateSchema, pushProductsSchema, pushInventorySchema, productPriceSchema, syncSchema } from './validation'
 import { logger } from './logger'
 import { CONSTANTS } from './constants'
+import { applyTrustProxy } from './proxyTrust'
 import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup, startDailySummary } from './autoBackup'
@@ -36,7 +37,10 @@ const app = express()
 
 // Don't advertise the framework in response headers.
 app.disable('x-powered-by')
-app.set('trust proxy', 1)
+// Only trust X-Forwarded-* when explicitly deployed behind a reverse proxy.
+// Trusting by default lets direct clients spoof X-Forwarded-For to rotate
+// rate-limit keys (req.ip) and bypass login throttling.
+applyTrustProxy(app, process.env)
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:47195'
 
