@@ -1250,7 +1250,7 @@ export default function SalesOrdersPage() {
       </Dialog>
 
       <Dialog open={viewOrder !== null} onOpenChange={(open) => { if (!open) setViewOrder(null) }}>
-        <DialogContent className="max-w-lg print-dialog">
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto print-dialog">
           <DialogHeader>
             <DialogTitle>Order {viewOrder?.shopifyId ?? ''}</DialogTitle>
             <DialogDescription>
@@ -1260,7 +1260,9 @@ export default function SalesOrdersPage() {
           {viewOrder ? (
             <div className="space-y-2 text-sm">
               {/* Customer contact: prefer the customer record, fall back to
-                  what is stored on the order itself (email/phone/addresses). */}
+                  what is stored on the order itself. Addresses render as the
+                  formatted Billing/Shipping cards further down — no flat
+                  duplicates here. */}
               <DetailRow label="Customer" value={viewOrder.customer || '—'} />
               {(() => {
                 const cust = customers.find((c) => c.name === viewOrder.customer)
@@ -1271,18 +1273,6 @@ export default function SalesOrdersPage() {
                   <>
                     {email ? <DetailRow label="Email" value={email} /> : null}
                     {phone ? <DetailRow label="Phone" value={phone} /> : null}
-                  </>
-                )
-              })()}
-              {(() => {
-                const a = (viewOrder.shippingAddress && (viewOrder.shippingAddress.address1 || viewOrder.shippingAddress.city)) ? viewOrder.shippingAddress : viewOrder.billingAddress
-                if (!a) return null
-                return (
-                  <>
-                    {a.phone ? <DetailRow label="Phone" value={a.phone} /> : null}
-                    {a.address1 ? <DetailRow label="Address" value={[a.address1, a.address2].filter(Boolean).join(', ')} /> : null}
-                    {[a.city, a.province, a.zip].some(Boolean) ? <DetailRow label="City" value={[a.city, a.province, a.zip].filter(Boolean).join(', ')} /> : null}
-                    {a.country ? <DetailRow label="Country" value={a.country} /> : null}
                   </>
                 )
               })()}

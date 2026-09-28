@@ -21,6 +21,9 @@ test.describe('sales order details dialog', () => {
     // Core detail rows must render too.
     await expect(dialog.getByText('Order Value', { exact: true })).toBeVisible()
     await expect(dialog.getByText('Payment', { exact: true })).toBeVisible()
+    // Regression guard: the phone used to render twice (contact row + flat
+    // address row). It must appear exactly once as a labelled row now.
+    await expect(dialog.getByText('Phone', { exact: true })).toHaveCount(1)
   })
 
   test('repaired orders show addresses and email in the dialog', async ({ page }) => {
