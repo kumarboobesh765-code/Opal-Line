@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, ScanLine, Save, Trash2, AlertCircle } from 'lucide-react'
+import { CheckCircle2, ScanLine, Save, Trash2, AlertCircle, CloudUpload } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { dbApi } from '@/lib/api'
+import { Switch } from '@/components/ui/switch'
 
 interface ScannedItem {
   id: string
@@ -29,6 +30,7 @@ export default function StockCountPage() {
   const [items, setItems] = useState<ScannedItem[]>([])
   const [code, setCode] = useState('')
   const [mode, setMode] = useState<'set' | 'adjust'>('set')
+  const [pushToShopify, setPushToShopify] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [savedMsg, setSavedMsg] = useState('')
@@ -79,9 +81,16 @@ export default function StockCountPage() {
     try {
       const res = await dbApi.applyStockCount(
         items.map((x) => ({ id: x.id, counted: x.counted })),
-        mode
+        mode,
+        pushToShopify,
       )
-      setSavedMsg(`Applied ${res.applied} item(s) (${mode === 'set' ? 'set stock' : 'adjust stock'}).`)
+      let msg = `Applied ${res.applied} item(s) (${mode === 'set' ? 'set stock' : 'adjust stock'}).`
+      if (res.shopifyPush) {
+        msg += res.shopifyPush.ok
+          ? ` Pushed ${res.shopifyPush.updated} stock level(s) to Shopify.`
+          : ` Shopify push failed: ${res.shopifyPush.errors?.[0] ?? 'unknown error'}`
+      }
+      setSavedMsg(msg)
       setItems([])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Apply failed')
@@ -139,6 +148,14 @@ export default function StockCountPage() {
                   Adjust (+/−)
                 </Button>
               </div>
+            </div>
+            <div>
+              <Label>Shopify</Label>
+              <label className="mt-1 flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-card px-3 text-sm">
+                <Switch checked={pushToShopify} onCheckedChange={setPushToShopify} />
+                <CloudUpload className="h-3.5 w-3.5 text-muted-foreground" />
+                Push to Shopify
+              </label>
             </div>
           </div>
 

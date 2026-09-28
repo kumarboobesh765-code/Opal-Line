@@ -637,11 +637,18 @@ export const dbApi = {
     request<{ data: { id: string; name: string; sku: string; barcode: string | null; stock: number | null; category: string | null } }>(
       `/db/products/scan?code=${encodeURIComponent(code)}`,
     ),
-  applyStockCount: (counts: Array<{ id: string; counted: number }>, mode: 'set' | 'adjust') =>
-    request<{ ok: boolean; applied: number; mode: string; errors: string[] }>('/db/inventory/stock-count', {
-      method: 'POST',
-      body: JSON.stringify({ counts, mode }),
-    }),
+  applyStockCount: (
+    counts: Array<{ id: string; counted: number }>,
+    mode: 'set' | 'adjust',
+    pushToShopify?: boolean,
+  ) =>
+    request<{ ok: boolean; applied: number; mode: string; errors: string[]; shopifyPush?: { ok: boolean; updated: number; skipped: number; errors: string[] } | null }>(
+      '/db/inventory/stock-count',
+      {
+        method: 'POST',
+        body: JSON.stringify({ counts, mode, pushToShopify: pushToShopify === true }),
+      },
+    ),
   createInvoiceForOrder: (orderId: string) =>
     request<{ created: boolean; invoiceNumber: string | null }>(`/db/sales-orders/${encodeURIComponent(orderId)}/create-invoice`, {
       method: 'POST',
