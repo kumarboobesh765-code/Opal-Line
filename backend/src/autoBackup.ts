@@ -60,6 +60,24 @@ export async function setAutoBackupEncrypted(value: boolean): Promise<void> {
   await db.update(schema.settings).set({ notificationSettings: { ...current, autoBackupEncrypted: value } }).where(eq(schema.settings.id, 'app'))
 }
 
+/** When true, the 7 PM auto-backup also emails the fresh archive (≤20 MB). */
+export async function isBackupEmailEnabled(): Promise<boolean> {
+  if (!db) return false
+  try {
+    const [row] = await db.select({ notificationSettings: schema.settings.notificationSettings }).from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+    return (row?.notificationSettings as Record<string, unknown> | null)?.autoBackupEmail === true
+  } catch {
+    return false
+  }
+}
+
+export async function setBackupEmailEnabled(value: boolean): Promise<void> {
+  if (!db) return
+  const [row] = await db.select({ notificationSettings: schema.settings.notificationSettings }).from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
+  const current = (row?.notificationSettings ?? {}) as Record<string, unknown>
+  await db.update(schema.settings).set({ notificationSettings: { ...current, autoBackupEmail: value } }).where(eq(schema.settings.id, 'app'))
+}
+
 async function runAutoBackup(): Promise<void> {
   const result = await exportScopeData('full')
   if (!result.ok) {
@@ -104,6 +122,24 @@ async function runAutoBackup(): Promise<void> {
         logger.info({ email }, 'Backup notification sent')
       }
     } catch (err) { logger.error({ err }, 'Backup notification failed') }
+
+    // Optionally attach the fresh archive to an email (auto-send toggle).
+    try {
+      if (await isBackupEmailEnabled()) {
+        const { notifyBackupFiles } = await import('./notifications')
+        const recipient = process.env.NOTIFICATION_EMAIL?.trim()
+        if (recipient) {
+          const content = await readFile(path.join(autoBackupDirectory(), fileName))
+          const sent = await notifyBackupFiles(recipient, [{ fileName, content }], {
+            scopeLabel: 'Full Backup (auto email)',
+            tableCount: Object.keys(result.data).length,
+            recordCount: Object.values(result.data).reduce((a: number, t) => a + (Array.isArray(t) ? t.length : 0), 0),
+            note: 'Attached automatically after the 7:00 PM IST auto-backup.',
+          })
+          logger.info({ sent, file: fileName }, 'Auto-backup email attempt finished')
+        }
+      }
+    } catch (err) { logger.warn({ err }, 'Auto-backup email attach skipped') }
 
     // Check low stock and send alert
     try {

@@ -1,7 +1,8 @@
 import { Router, type Response } from 'express'
-import { and, desc, eq, ne, sql, type AnyColumn } from 'drizzle-orm'
+import { and, desc, eq, gte, ne, sql, type AnyColumn } from 'drizzle-orm'
 import { db, schema } from '../db/client'
 import { CONSTANTS } from '../constants'
+import { logger } from '../logger'
 import { computeInputGst, netPayable } from '../gst'
 
 export const dashboardRouter = Router()
@@ -414,6 +415,38 @@ dashboardRouter.get('/dashboard/activities', async (_req, res) => {
       })),
     )
   } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// Security snapshot for the dashboard widget: failed logins and active
+// account lockouts in the last 24 hours (login_attempts) plus the most
+// recent failed-login audit entries for context.
+dashboardRouter.get('/dashboard/security', async (_req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    const failedLogins = await db!
+      .select({ n: sql<number>`count(*)` })
+      .from(schema.auditLogs)
+      .where(and(sql`${schema.auditLogs.action} = 'Failed Login Attempt'`, gte(schema.auditLogs.timestamp, cutoff.toISOString().slice(0, 19).replace('T', ' '))))
+    const locked = await db!
+      .select({ n: sql<number>`count(*)` })
+      .from(schema.loginAttempts)
+      .where(sql`${schema.loginAttempts.count} >= 5`)
+    const recent = await db!
+      .select({ entity: schema.auditLogs.entity, details: schema.auditLogs.changes, timestamp: schema.auditLogs.timestamp })
+      .from(schema.auditLogs)
+      .where(sql`${schema.auditLogs.action} = 'Failed Login Attempt'`)
+      .orderBy(desc(schema.auditLogs.timestamp))
+      .limit(5)
+    res.json({
+      failedLogins24h: Number(failedLogins[0]?.n ?? 0),
+      lockedAccounts: Number(locked[0]?.n ?? 0),
+      recent,
+    })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown error' }, 'dashboard security failed')
     res.status(500).json({ error: 'Internal server error' })
   }
 })
