@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, Building2, Check, Landmark, Loader2, Monitor, Moon, Save, Settings as SettingsIcon, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
+import { Bell, Building2, Check, Landmark, Loader2, LogOut, Monitor, Moon, Save, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,7 +9,9 @@ import { Select } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RequireModule } from '@/components/RequirePermission'
-import { dbApi } from '@/lib/api'
+import { dbApi, authApi } from '@/lib/api'
+import { confirmDialog, toast } from '@/components/ui/confirm'
+import { useAuth } from '@/auth/auth-context'
 import { setTheme, type Theme } from '@/lib/theme'
 import type { AppSettings } from '@/types'
 
@@ -275,17 +277,21 @@ function SettingsContent() {
         </TabsContent>
 
         <TabsContent value="team">
-          <Card>
-            <CardContent className="space-y-4 p-5">
-              <div className="flex items-center gap-2">
-                <SettingsIcon className="h-4 w-4 text-muted-foreground" />
-                <h3 className="font-semibold text-foreground">Role Permissions</h3>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Manage role-based access to modules. Fine-grained permissions are configured per user in Users & Roles.
-              </p>
-            </CardContent>
-          </Card>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card>
+              <CardContent className="space-y-4 p-5">
+                <div className="flex items-center gap-2">
+                  <SettingsIcon className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="font-semibold text-foreground">Role Permissions</h3>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Manage role-based access to modules. Fine-grained permissions are configured per user in Users & Roles.
+                </p>
+              </CardContent>
+            </Card>
+
+            <SessionSecurityCard />
+          </div>
         </TabsContent>
       </Tabs>
     </div>
@@ -380,5 +386,51 @@ function SettingRow({ title, description, checked, onCheckedChange }: { title: s
       </div>
       <Switch checked={checked} onCheckedChange={onCheckedChange} />
     </div>
+  )
+}
+
+function SessionSecurityCard() {
+  const { currentUser } = useAuth()
+  const [revoking, setRevoking] = useState(false)
+
+  const revokeOthers = async () => {
+    if (
+      !(await confirmDialog({
+        title: 'Log out other devices?',
+        description: 'Every other signed-in session for your account will be revoked. This device stays signed in.',
+        confirmLabel: 'Log out others',
+        danger: true,
+      }))
+    )
+      return
+    setRevoking(true)
+    try {
+      const r = await authApi.logoutOtherSessions()
+      toast.success(`Signed out ${r.revoked} other session${r.revoked === 1 ? '' : 's'}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not log out other devices')
+    } finally {
+      setRevoking(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground">Security</h3>
+        </div>
+        <div className="rounded-lg border p-4">
+          <p className="text-sm font-medium text-foreground">Devices</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Signed in as {currentUser?.name ?? 'you'}. Revoke all other sessions if you left a device signed in somewhere.
+          </p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={revokeOthers} disabled={revoking}>
+            <LogOut className="h-3.5 w-3.5" /> {revoking ? 'Signing out…' : 'Log out other devices'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
