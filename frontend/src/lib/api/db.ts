@@ -232,6 +232,14 @@ export const dbApi = {
     request<{ data: Array<{ id: string; orderId: string; event: string; details: string | null; actor: string | null; createdAt: string }> }>(`/db/orders/${orderId}/events`),
   getOrderFull: (orderId: string) =>
     request<OrderFullDetail>(`/db/orders/${orderId}/full`),
+  repairOrderPii: (orderIds?: string[]) =>
+    request<{ ok: boolean; matched: number; repaired: Array<{ shopifyId: string; from: string; to: string }>; unmatched: string[] }>(
+      '/db/orders/repair-pii',
+      {
+        method: 'POST',
+        body: JSON.stringify(orderIds ? { orderIds } : {}),
+      },
+    ),
   customer360: (name: string) =>
     request<Customer360>(`/db/customers/${encodeURIComponent(name)}/summary`),
   bulkOrderStatus: (ids: string[], status: string) =>

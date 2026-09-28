@@ -21,6 +21,7 @@ import {
   RefreshCw,
   ScanBarcode,
   Search,
+  UserRoundCheck,
   ShoppingBag,
   Trash2,
   X,
@@ -436,6 +437,32 @@ export default function SalesOrdersPage() {
     }
   }
 
+  const repairPii = async () => {
+    if (
+      !(await confirmDialog({
+        title: 'Repair order customer details?',
+        description:
+          'Orders showing "Guest" get their customer name, email and address backfilled from matching local customer records (by email or phone). Nothing is pushed to Shopify, and orders with real names are never touched.',
+        confirmLabel: 'Repair',
+      }))
+    )
+      return
+    setSyncingOrders(true)
+    setSyncMsg(null)
+    try {
+      const res = await dbApi.repairOrderPii()
+      setSyncMsg({
+        ok: true,
+        text: `Repaired ${res.repaired.length} order(s) from local customer records${res.unmatched.length ? ` — ${res.unmatched.length} could not be matched (use PII recovery on the Shopify page)` : ''}.`,
+      })
+      reload()
+    } catch (err) {
+      setSyncMsg({ ok: false, text: err instanceof Error ? err.message : 'Repair failed.' })
+    } finally {
+      setSyncingOrders(false)
+    }
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return orders.filter((o) => {
@@ -802,6 +829,9 @@ export default function SalesOrdersPage() {
             <Button variant="outline" size="sm" onClick={syncOrders} disabled={syncingOrders}>
               {syncingOrders ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
               {syncingOrders ? 'Syncing...' : 'Sync Orders'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={repairPii} disabled={syncingOrders}>
+              <UserRoundCheck className="h-3.5 w-3.5" /> Repair customer info
             </Button>
             <Button size="sm" className="gap-1.5" onClick={openDialog}>
               <Plus className="h-4 w-4" /> Manual Order
