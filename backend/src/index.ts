@@ -4,14 +4,13 @@ import helmet from 'helmet'
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import cookieParser from 'cookie-parser'
 import { randomBytes, randomUUID, createHmac, timingSafeEqual } from 'node:crypto'
-import { readFileSync, writeFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { and, desc, eq, ne, or, sql } from 'drizzle-orm'
 import { config, isConfigured, loadSecretsFromDb } from './config'
 import { applyPriceSync, applySilverRate, createShopifyDraftOrder, ensureSynced, getLatestSilverRate, importShopifyOrders, purgeProducts, pushInventoryToShopify, pushProductPriceToShopify, pushProductsToShopify, runSync, store, syncProductsToDb, testShopifyConnection, updateShopifyOrder } from './shopify'
 import type { SyncResource } from './types'
-import { db, schema, checkDbHealth, getDbStats, getRawClient } from './db/client'
+import { db, schema, checkDbHealth, getDbStats } from './db/client'
 import { authRouter } from './routes/auth'
 import { dbRouter } from './routes/db'
 import { dashboardRouter } from './routes/dashboard'
@@ -19,7 +18,9 @@ import { rbacRouter } from './routes/rbac'
 import { backupRouter } from './routes/backup'
 import { printTemplatesRouter } from './routes/printTemplates'
 import { enforceRbac, requirePermission } from './rbac'
-import { requireAuth, shutdownSessions, getSessionStats } from './sessions'
+import { requireAuth, shutdownSessions } from './sessions'
+import { systemRouter } from './routes/systemStatus'
+import { reportsRouter } from './routes/reports'
 import { actorFromRequest, recordActivity } from './activity'
 import { validate, createOrderSchema, updateOrderSchema, silverRateSchema, pushProductsSchema, pushInventorySchema, productPriceSchema, syncSchema } from './validation'
 import { logger } from './logger'
@@ -456,6 +457,8 @@ app.use('/api/v1/rbac', requireAuth, rbacRouter)
 app.use('/api/v1/backup', requireAuth, enforceRbac, backupRouter)
 app.use('/api/v1/print-templates', requireAuth, enforceRbac, printTemplatesRouter)
 app.use('/api/v1/auth', authRouter)
+app.use('/api/v1/system', requireAuth, systemRouter)
+app.use('/api/v1/reports', requireAuth, reportsRouter)
 app.use('/api/v1/silver', requireAuth, enforceRbac)
 
 // Shopify Flow webhook — must be BEFORE requireAuth since it's called from Shopify servers (no browser session)
@@ -1046,104 +1049,6 @@ app.get('/api/v1/shopify/products/auto-sync/status', requirePermission('shopify'
   }
 })
 
-// ── System Status: server health, runtime info and server-side log viewer ──
-const LOG_FILE_NAMES: Record<string, string> = {
-  app: 'app.log',
-  backend: 'backend.log',
-  'backend-err': 'backend-err.log',
-  postgres: 'postgres.log',
-  pgctl: 'pgctl.log',
-  dev: 'dev.log',
-}
-
-function logDirectory(): string {
-  if (process.env.LOG_DIR?.trim()) return process.env.LOG_DIR.trim()
-  const appData = process.env.APP_DATA_DIR?.trim()
-  if (appData) return join(appData, '..', 'logs')
-  const roaming = process.env.APPDATA?.trim() || join(homedir(), 'AppData', 'Roaming')
-  return join(roaming, 'Opal Line Billing', 'logs')
-}
-
-function tailLines(filePath: string, count: number): string[] {
-  const MAX_BYTES = 256 * 1024
-  let fd: number | null = null
-  try {
-    const size = statSync(filePath).size
-    const start = Math.max(0, size - MAX_BYTES)
-    const length = size - start
-    if (length <= 0) return []
-    fd = openSync(filePath, 'r')
-    const buf = Buffer.alloc(length)
-    readSync(fd, buf, 0, length, start)
-    return buf.toString('utf8').split(/\r?\n/).filter(Boolean).slice(-count)
-  } catch {
-    return []
-  } finally {
-    if (fd !== null) closeSync(fd)
-  }
-}
-
-app.get('/api/v1/system/status', requireAuth, requirePermission('system', 'view'), async (_req, res) => {
-  try {
-    const dbHealth = await checkDbHealth()
-    const mem = process.memoryUsage()
-    const sessionStats = await getSessionStats()
-    res.json({
-      ok: true,
-      app: { name: 'Opal Line Billing', version: process.env.APP_VERSION?.trim() || 'dev' },
-      runtime: { node: process.version, platform: process.platform, arch: process.arch, env: process.env.NODE_ENV ?? null },
-      server: {
-        port: config.port,
-        uptimeSec: Math.round(process.uptime()),
-        rssMb: Math.round(mem.rss / (1024 * 1024)),
-        heapMb: Math.round(mem.heapUsed / (1024 * 1024)),
-        sessions: sessionStats,
-      },
-      database: {
-        configured: Boolean(process.env.DATABASE_URL),
-        healthy: dbHealth.healthy,
-        latencyMs: dbHealth.latencyMs,
-        stats: dbHealth.healthy ? await getDbStats() : null,
-      },
-      integrations: {
-        shopify: isConfigured(),
-        emailIngest: isEmailIngestConfigured(),
-      },
-      paths: {
-        logs: logDirectory(),
-        env: process.env.DOTENV_CONFIG_PATH?.trim() || null,
-      },
-    })
-  } catch (err) {
-    logger.error({ err }, 'system status failed')
-    res.status(500).json({ error: 'Failed to read system status' })
-  }
-})
-
-app.get('/api/v1/system/log-files', requireAuth, requirePermission('system', 'view'), (_req, res) => {
-  const dir = logDirectory()
-  const files = Object.entries(LOG_FILE_NAMES).map(([key, name]) => {
-    try {
-      const s = statSync(join(dir, name))
-      return { key, name, sizeKb: Math.round(s.size / 1024), modifiedAt: s.mtime.toISOString() }
-    } catch {
-      return { key, name, sizeKb: 0, modifiedAt: null }
-    }
-  })
-  res.json({ directory: dir, files })
-})
-
-app.get('/api/v1/system/logs', requireAuth, requirePermission('system', 'view'), (req, res) => {
-  const key = String(req.query.file ?? 'app')
-  const name = LOG_FILE_NAMES[key]
-  if (!name) return res.status(400).json({ error: 'Unknown log file' })
-  const requested = Number(req.query.lines ?? 200)
-  const lines = Number.isFinite(requested) && requested > 0 ? Math.min(Math.round(requested), 1000) : 200
-  const filePath = join(logDirectory(), name)
-  if (!existsSync(filePath)) return res.json({ file: key, directory: logDirectory(), lines: [] })
-  res.json({ file: key, directory: logDirectory(), lines: tailLines(filePath, lines) })
-})
-
 // WhatsApp connection status + test message
 app.get('/api/v1/settings/whatsapp-status', requireAuth, requirePermission('system', 'view'), (_req, res) => {
   const { isWhatsAppConfigured } = require('./whatsapp') as typeof import('./whatsapp')
@@ -1705,283 +1610,6 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
     res.json({ order: updated, shopifySync })
   } catch (err) {
     res.status(400).json({ error: 'Failed to update order' })
-  }
-})
-
-// ─── Reports ────────────────────────────────────────────────────────────────
-
-function requireDbReports(res: express.Response): boolean {
-  const client = getRawClient()
-  if (!client) {
-    res.status(503).json({ error: 'Database is temporarily unavailable' })
-    return false
-  }
-  return true
-}
-
-function parseReportDates(req: express.Request): { from: string; to: string } | null {
-  const from = String(req.query.from ?? '').trim()
-  const to = String(req.query.to ?? '').trim()
-  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    return null
-  }
-  return { from, to }
-}
-
-// GET /api/v1/reports/hsn-summary
-app.get('/api/v1/reports/hsn-summary', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
-  if (!requireDbReports(res)) return
-  const dates = parseReportDates(req)
-  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
-
-  try {
-    const client = getRawClient()!
-    const rows = await client.unsafe(`
-      SELECT
-        p.hsn AS hsn_code,
-        p.name AS product_name,
-        SUM(ii.qty) AS total_quantity,
-        SUM(ii.amount) AS taxable_value,
-        SUM(ii.tax) AS gst_amount,
-        p.gst AS gst_rate
-      FROM sales_invoice_items ii
-      JOIN products p ON ii.sku = p.sku
-      WHERE ii.invoice_id IN (
-        SELECT id FROM sales_invoices
-        WHERE date BETWEEN $1 AND $2
-      )
-      GROUP BY p.hsn, p.name, p.gst
-      ORDER BY taxable_value DESC
-    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
-
-    const summary = rows.map((r: any) => ({
-      hsnCode: r.hsn_code ?? null,
-      productName: r.product_name ?? null,
-      totalQuantity: Number(r.total_quantity ?? 0),
-      taxableValue: Number(r.taxable_value ?? 0),
-      gstAmount: Number(r.gst_amount ?? 0),
-      gstRate: Number(r.gst_rate ?? 0),
-    }))
-
-    const totals = summary.reduce(
-      (acc, row) => ({
-        taxableValue: acc.taxableValue + row.taxableValue,
-        gstAmount: acc.gstAmount + row.gstAmount,
-        totalQuantity: acc.totalQuantity + row.totalQuantity,
-      }),
-      { taxableValue: 0, gstAmount: 0, totalQuantity: 0 },
-    )
-
-    res.json({ items: summary, totals })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    logger.error({ err: message }, 'HSN summary report failed')
-    res.status(500).json({ error: message })
-  }
-})
-
-// GET /api/v1/reports/gst-reconciliation
-app.get('/api/v1/reports/gst-reconciliation', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
-  if (!requireDbReports(res)) return
-  const dates = parseReportDates(req)
-  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
-
-  try {
-    const client = getRawClient()!
-    const range = [dates.from + 'T00:00:00', dates.to + 'T23:59:59']
-
-    // Sales totals
-    const [salesTotals] = await client.unsafe(`
-      SELECT
-        COALESCE(SUM(subtotal), 0) AS taxable_value,
-        COALESCE(SUM(gst_amount), 0) AS gst_amount,
-        COALESCE(SUM(grand_total), 0) AS grand_total,
-        COUNT(*) AS invoice_count
-      FROM sales_invoices
-      WHERE date BETWEEN $1 AND $2
-    `, range) as any[]
-
-    // Sales breakup by GST rate
-    const salesByRate = await client.unsafe(`
-      SELECT
-        p.gst AS gst_rate,
-        SUM(ii.amount) AS taxable_value,
-        SUM(ii.tax) AS gst_amount
-      FROM sales_invoice_items ii
-      JOIN products p ON ii.sku = p.sku
-      WHERE ii.invoice_id IN (
-        SELECT id FROM sales_invoices
-        WHERE date BETWEEN $1 AND $2
-      )
-      GROUP BY p.gst
-      ORDER BY p.gst
-    `, range) as any[]
-
-    // Purchase totals
-    const [purchaseTotals] = await client.unsafe(`
-      SELECT
-        COALESCE(SUM(cost), 0) AS total_cost,
-        COALESCE(SUM(tax), 0) AS total_tax,
-        COALESCE(SUM(total), 0) AS grand_total,
-        COUNT(*) AS invoice_count
-      FROM purchase_invoices
-      WHERE date BETWEEN $1 AND $2
-    `, range) as any[]
-
-    const totalSalesGST = Number(salesTotals?.gst_amount ?? 0)
-    const totalPurchaseITC = Number(purchaseTotals?.total_tax ?? 0)
-    const netGstPayable = totalSalesGST - totalPurchaseITC
-
-    res.json({
-      period: { from: dates.from, to: dates.to },
-      sales: {
-        invoiceCount: Number(salesTotals?.invoice_count ?? 0),
-        taxableValue: Number(salesTotals?.taxable_value ?? 0),
-        gstAmount: totalSalesGST,
-        grandTotal: Number(salesTotals?.grand_total ?? 0),
-        cgst: Math.round(totalSalesGST / 2 * 100) / 100,
-        sgst: Math.round(totalSalesGST / 2 * 100) / 100,
-        igst: 0,
-      },
-      purchases: {
-        invoiceCount: Number(purchaseTotals?.invoice_count ?? 0),
-        totalCost: Number(purchaseTotals?.total_cost ?? 0),
-        itc: totalPurchaseITC,
-        grandTotal: Number(purchaseTotals?.grand_total ?? 0),
-      },
-      netGstPayable,
-      rateBreakup: salesByRate.map((r: any) => ({
-        gstRate: Number(r.gst_rate ?? 0),
-        taxableValue: Number(r.taxable_value ?? 0),
-        gstAmount: Number(r.gst_amount ?? 0),
-        cgst: Math.round(Number(r.gst_amount ?? 0) / 2 * 100) / 100,
-        sgst: Math.round(Number(r.gst_amount ?? 0) / 2 * 100) / 100,
-        igst: 0,
-      })),
-    })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    logger.error({ err: message }, 'GST reconciliation report failed')
-    res.status(500).json({ error: message })
-  }
-})
-
-// GET /api/v1/reports/sales-register
-app.get('/api/v1/reports/sales-register', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
-  if (!requireDbReports(res)) return
-  const dates = parseReportDates(req)
-  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
-
-  try {
-    const client = getRawClient()!
-    const rows = await client.unsafe(`
-      SELECT
-        number AS invoice_number,
-        date AS invoice_date,
-        customer AS customer_name,
-        subtotal AS taxable_amount,
-        gst_amount,
-        grand_total AS total_amount,
-        tds_amount,
-        payment_status
-      FROM sales_invoices
-      WHERE date BETWEEN $1 AND $2
-      ORDER BY date DESC
-    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
-
-    res.json({
-      items: rows.map((r: any) => ({
-        invoiceNumber: r.invoice_number,
-        invoiceDate: r.invoice_date,
-        customerName: r.customer_name,
-        taxableAmount: Number(r.taxable_amount ?? 0),
-        gstAmount: Number(r.gst_amount ?? 0),
-        totalAmount: Number(r.total_amount ?? 0),
-        tdsAmount: Number(r.tds_amount ?? 0),
-        paymentStatus: r.payment_status,
-      })),
-    })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    logger.error({ err: message }, 'Sales register report failed')
-    res.status(500).json({ error: message })
-  }
-})
-
-// GET /api/v1/reports/purchase-register
-app.get('/api/v1/reports/purchase-register', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
-  if (!requireDbReports(res)) return
-  const dates = parseReportDates(req)
-  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
-
-  try {
-    const client = getRawClient()!
-    const rows = await client.unsafe(`
-      SELECT
-        number AS invoice_number,
-        date AS invoice_date,
-        supplier AS supplier_name,
-        cost AS taxable_amount,
-        tax AS gst_amount,
-        total AS total_amount
-      FROM purchase_invoices
-      WHERE date BETWEEN $1 AND $2
-      ORDER BY date DESC
-    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
-
-    res.json({
-      items: rows.map((r: any) => ({
-        invoiceNumber: r.invoice_number,
-        invoiceDate: r.invoice_date,
-        supplierName: r.supplier_name,
-        taxableAmount: Number(r.taxable_amount ?? 0),
-        gstAmount: Number(r.gst_amount ?? 0),
-        totalAmount: Number(r.total_amount ?? 0),
-      })),
-    })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    logger.error({ err: message }, 'Purchase register report failed')
-    res.status(500).json({ error: message })
-  }
-})
-
-// GET /api/v1/reports/tds-report
-app.get('/api/v1/reports/tds-report', requireAuth, requirePermission('reports', 'view'), async (req, res) => {
-  if (!requireDbReports(res)) return
-  const dates = parseReportDates(req)
-  if (!dates) return res.status(400).json({ error: 'Invalid or missing "from" / "to" query parameters (YYYY-MM-DD)' })
-
-  try {
-    const client = getRawClient()!
-    const rows = await client.unsafe(`
-      SELECT
-        customer AS customer_name,
-        buyer_gstin AS pan,
-        tds_section AS section,
-        subtotal AS amount,
-        tds_amount
-      FROM sales_invoices
-      WHERE date BETWEEN $1 AND $2
-        AND tds_type IS NOT NULL
-        AND tds_type != 'none'
-        AND COALESCE(tds_amount, 0) > 0
-      ORDER BY date DESC
-    `, [dates.from + 'T00:00:00', dates.to + 'T23:59:59'])
-
-    res.json({
-      items: rows.map((r: any) => ({
-        customerName: r.customer_name,
-        pan: r.pan,
-        section: r.section,
-        amount: Number(r.amount ?? 0),
-        tdsAmount: Number(r.tds_amount ?? 0),
-      })),
-    })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    logger.error({ err: message }, 'TDS report failed')
-    res.status(500).json({ error: message })
   }
 })
 

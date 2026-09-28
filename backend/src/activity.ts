@@ -91,3 +91,34 @@ export async function recordActivity(entry: ActivityEntry): Promise<void> {
     // Activity logging must never break a business operation.
   }
 }
+
+/**
+ * Append an entry to the audit_logs table (the log Users → Audit Logs reads).
+ * Fire-and-forget: failures are swallowed so logging never breaks a business
+ * operation. Prefer this over raw inserts into schema.auditLogs.
+ */
+export async function recordAudit(entry: {
+  user?: string
+  action: string
+  module: string
+  entity?: string | null
+  changes?: string | null
+  ip?: string | null
+  timestamp?: string
+}): Promise<void> {
+  if (!db) return
+  try {
+    await db.insert(schema.auditLogs).values({
+      id: randomUUID(),
+      timestamp: entry.timestamp ?? new Date().toISOString(),
+      user: entry.user ?? 'System',
+      action: entry.action,
+      module: entry.module,
+      entity: entry.entity ?? null,
+      changes: entry.changes ?? null,
+      ip: entry.ip ?? null,
+    })
+  } catch {
+    // Audit logging must never break a business operation.
+  }
+}
