@@ -2445,6 +2445,10 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
       const custFirstName = safeStr(o.customer?.first_name) || safeStr(o.billing_address?.first_name) || ''
       const custLastName = safeStr(o.customer?.last_name) || safeStr(o.billing_address?.last_name) || ''
       let customerName = `${custFirstName} ${custLastName}`.trim() || (safeStr(o.customer?.email) || safeStr(o.billing_address?.email) || 'Guest')
+      // A raw email is a redaction artifact, not a display name. If Shopify
+      // only gave us the email, keep the LOCAL name on updates and re-sync
+      // after the Flow webhook / PII repair has recovered the real one.
+      const apiNameIsEmail = /^[^\s@]+@[^\s@]+$/.test(customerName)
       const value = Math.round(Number(o.total_price ?? 0) * 100) / 100
       const items = o.line_items?.reduce((sum: number, li: any) => sum + Number(li.quantity ?? 0), 0) ?? 0
       const date = new Date(o.created_at ?? Date.now()).toISOString()
@@ -2495,7 +2499,7 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
         await db
           .update(schema.salesOrders)
           .set({
-            ...(customerName && customerName !== 'Guest' ? { customer: customerName } : {}),
+            ...(!apiNameIsEmail && customerName && customerName !== 'Guest' ? { customer: customerName } : {}),
             ...(customerId ? { customerShopifyId: customerId } : {}),
             value,
             payment,
@@ -2506,6 +2510,8 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
             currency,
             discount,
             lineItems: lineItems.length > 0 ? lineItems : undefined,
+            // Locally recovered addresses (repair / webhook) win over a
+            // redacted empty payload — never blank them back out.
             billingAddress: billingAddress ?? undefined,
             shippingAddress: shippingAddress ?? undefined,
           })

@@ -382,6 +382,86 @@ dbRouter.get('/invoices/:id/items', async (req, res) => {
   }
 })
 
+// ─── Order PII repair ─────────────────────────────────────────────────────
+// Dev stores get customer PII redacted over the REST API, so imported orders
+// can end up with customer "Guest" and no addresses. The customers table may
+// still hold the identity (matched by email or phone from earlier syncs, the
+// Flow webhook or CSV imports). This repairs those order rows LOCALLY —
+// nothing is pushed to Shopify and orders with real names are never touched.
+//
+// body: { orderIds?: string[] } — omit to scan every order.
+// Returns { matched, repaired: [{ shopifyId, from, to }], unmatched: [...] }.
+dbRouter.post('/orders/repair-pii', requirePermission('shopify', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const orderIds = Array.isArray(req.body?.orderIds)
+      ? req.body.orderIds.map((x: unknown) => String(x)).filter(Boolean).slice(0, 500)
+      : null
+    const rows = orderIds && orderIds.length > 0
+      ? await db!.select().from(s.salesOrders).where(inArray(s.salesOrders.id, orderIds))
+      : await db!.select().from(s.salesOrders)
+
+    const customers = await db!.select().from(s.customers)
+    const byEmail = new Map<string, typeof customers[number]>()
+    const byPhoneDigits = new Map<string, typeof customers[number]>()
+    for (const c of customers) {
+      // Guest-checkout customer rows (no real name) must never "repair" an
+      // order's name — that would just write Guest back over Guest.
+      if (!c.name || !c.name.trim() || c.name.trim().toLowerCase() === 'guest') continue
+      if (c.email) byEmail.set(c.email.trim().toLowerCase(), c)
+      const digits = (c.phone ?? '').replace(/\D/g, '')
+      if (digits.length >= 6) byPhoneDigits.set(digits, c)
+    }
+    const isMissingName = (name: string | null | undefined) => !name || !name.trim() || name.trim().toLowerCase() === 'guest'
+
+    let matched = 0
+    const repaired: Array<{ shopifyId: string; from: string; to: string }> = []
+    const unmatched: string[] = []
+    for (const o of rows) {
+      if (!isMissingName(o.customer)) continue
+      const email = (o.customerEmail ?? '').trim().toLowerCase()
+      const phoneDigits = (o.customerPhone ?? '').replace(/\D/g, '')
+      const addr = (o.billingAddress ?? o.shippingAddress) as Record<string, unknown> | null
+      const addrName = typeof addr?.name === 'string' ? addr.name.trim() : ''
+      const addrPhone = typeof addr?.phone === 'string' ? addr.phone.replace(/\D/g, '') : ''
+
+      // Identity match order: order email → order phone → address phone →
+      // address block itself (only as a last resort).
+      const byEmailHit = email ? byEmail.get(email) : undefined
+      const byOrderPhoneHit = phoneDigits.length >= 6 ? byPhoneDigits.get(phoneDigits) : undefined
+      const byAddrPhoneHit = addrPhone.length >= 6 ? byPhoneDigits.get(addrPhone) : undefined
+      const hit = byEmailHit ?? byOrderPhoneHit ?? byAddrPhoneHit
+
+      if (hit) {
+        matched++
+        const from = o.customer ?? ''
+        const set: Record<string, unknown> = { customer: hit.name }
+        if (hit.email && !o.customerEmail) set.customerEmail = hit.email
+        if (hit.phone && !o.customerPhone) set.customerPhone = hit.phone
+        if (!o.billingAddress && (hit.city || hit.province)) {
+          set.billingAddress = { name: hit.name, city: hit.city ?? '', province: hit.province ?? '', phone: hit.phone ?? '' }
+        }
+        await db!.update(s.salesOrders).set(set).where(eq(s.salesOrders.id, o.id))
+        repaired.push({ shopifyId: o.shopifyId ?? o.id, from, to: hit.name })
+      } else if (addrName && addrName.toLowerCase() !== 'guest') {
+        matched++
+        const from = o.customer ?? ''
+        const set: Record<string, unknown> = { customer: addrName }
+        if (addr?.phone && !o.customerPhone) set.customerPhone = String(addr.phone)
+        await db!.update(s.salesOrders).set(set).where(eq(s.salesOrders.id, o.id))
+        repaired.push({ shopifyId: o.shopifyId ?? o.id, from, to: addrName })
+      } else {
+        unmatched.push(o.shopifyId ?? o.id)
+      }
+    }
+    recordCrud('sales_orders', 'Updated', req, { piiRepair: true, repaired: repaired.length })
+    res.json({ ok: true, matched, repaired, unmatched })
+  } catch (err) {
+    logger.error({ err }, 'order PII repair failed')
+    res.status(500).json({ error: 'Order PII repair failed' })
+  }
+})
+
 dbRouter.get('/einvoice/:invoiceId', requirePermission('sales', 'view'), async (req, res) => {
   try {
     const [settingsRow] = await db!.select().from(s.settings).where(eq(s.settings.id, SETTINGS_ID)).limit(1)
