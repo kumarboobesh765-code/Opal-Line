@@ -329,6 +329,8 @@ export interface SalesOrder {
   shopifyId: string
   internalId: string
   customer: string
+  customerEmail?: string | null
+  customerPhone?: string | null
   value: number
   payment: 'paid' | 'pending' | 'refunded'
   fulfillment: 'unfulfilled' | 'partial' | 'fulfilled' | 'processing' | 'returned'

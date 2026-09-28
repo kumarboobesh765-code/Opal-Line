@@ -332,7 +332,7 @@ export default function CustomersPage() {
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" onClick={() => navigate(`/sales/customers/${encodeURIComponent(c.name)}`)}>
+                <Button variant="ghost" size="icon-sm" aria-label={`Customer 360 for ${c.name}`} onClick={() => navigate(`/sales/customers/${encodeURIComponent(c.name)}`)}>
                   <FileText className="h-3.5 w-3.5" />
                 </Button>
                 </TooltipTrigger>

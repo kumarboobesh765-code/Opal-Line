@@ -1,0 +1,67 @@
+import { expect, test } from '@playwright/test'
+
+test.describe('sales order details dialog', () => {
+  test('order details always show the customer name and contact rows', async ({ page }) => {
+    test.setTimeout(60_000)
+    await page.goto('/sales/orders')
+    await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
+
+    // Open the details dialog from the first row's "View order" action.
+    await page.getByRole('button', { name: /view order/i }).first().click({ timeout: 20000 })
+
+    const dialog = page.getByRole('dialog')
+    // The dialog must always identify WHO placed the order — this was the
+    // regression: the customer name row was missing entirely.
+    const customerRow = dialog.getByText('Customer', { exact: true }).locator('..')
+    await expect(customerRow).toBeVisible({ timeout: 10000 })
+    const customerValue = (await customerRow.innerText()).replace(/^Customer/, '').trim()
+    expect(customerValue.length, 'customer name must not be blank').toBeGreaterThan(0)
+    test.info().annotations.push({ type: 'note', description: `customer shown: ${customerValue}` })
+
+    // Core detail rows must render too.
+    await expect(dialog.getByText('Order Value', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('Payment', { exact: true })).toBeVisible()
+  })
+
+  test('repaired orders show addresses and email in the dialog', async ({ page }) => {
+    test.setTimeout(60_000)
+    await page.goto('/sales/orders')
+    await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
+
+    // Find the row for a PII-recovered order (Kavya Reddy, order #1030 on the
+    // dev store) and open its dialog.
+    const row = page.locator('table tbody tr', { hasText: 'Kavya Reddy' }).first()
+    await row.getByRole('button', { name: /view order/i }).click({ timeout: 20000 })
+
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByText('Customer', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('Kavya Reddy').first()).toBeVisible()
+    // Email comes from the order row (or the matched customer record).
+    await expect(dialog.getByText('kavya.reddy@gmail.com')).toBeVisible()
+    // Address block from the recovered billing/shipping jsonb.
+    await expect(dialog.getByText('Billing Address').or(dialog.getByText('Shipping Address')).first()).toBeVisible({ timeout: 10000 })
+  })
+
+  test('every order row opens a dialog without errors', async ({ page }) => {
+    test.setTimeout(120_000)
+    const pageErrors: string[] = []
+    page.on('pageerror', (e) => pageErrors.push(String(e)))
+
+    await page.goto('/sales/orders')
+    await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
+
+    const rows = page.locator('table tbody tr')
+    await expect(rows.first()).toBeVisible({ timeout: 20000 })
+    const count = await rows.count()
+    test.info().annotations.push({ type: 'note', description: `${count} order rows` })
+
+    // Walk up to the first 8 rows: open the dialog, assert it renders, close.
+    for (let i = 0; i < Math.min(count, 8); i++) {
+      await rows.nth(i).getByRole('button', { name: /view order/i }).click()
+      await expect(page.getByRole('dialog').getByText('Customer', { exact: true })).toBeVisible({ timeout: 10000 })
+      await page.keyboard.press('Escape')
+      await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 5000 })
+    }
+    expect(pageErrors, 'uncaught exceptions while opening order dialogs').toEqual([])
+  })
+})
