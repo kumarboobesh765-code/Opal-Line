@@ -9,6 +9,8 @@ import { encrypt, decrypt, mask, encryptSecret } from '../lib/crypto'
 import { isConfigured as isShopifyConfigured, config as shopifyConfig, normalizeShopDomain } from '../config'
 import { upsertEnvVar } from '../lib/envfile'
 import { logger } from '../logger'
+import { buildStockCountRows } from '../stockCount'
+import { pushInventoryToShopify } from '../shopify'
 import { escapeHtml } from '../htmlEscape'
 
 export const dbRouter = Router()
@@ -244,35 +246,40 @@ dbRouter.get('/products/scan', requirePermission('inventory', 'view'), async (re
 })
 
 // Bulk stock-count: apply counted quantities for many products at once.
-// body: { counts: [{ id, counted }], mode: 'set' | 'adjust' }
+// body: { counts: [{ id, counted }], mode: 'set' | 'adjust', pushToShopify?: boolean }
 dbRouter.post('/inventory/stock-count', requirePermission('inventory', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
     const counts = Array.isArray(req.body?.counts) ? req.body.counts : []
     const mode = req.body?.mode === 'adjust' ? 'adjust' : 'set'
+    const pushToShopify = req.body?.pushToShopify === true
     if (counts.length === 0) return res.status(400).json({ error: 'counts array is required' })
+    const { rows, errors } = buildStockCountRows(counts)
     let applied = 0
-    const errors: string[] = []
-    for (const c of counts.slice(0, 500)) {
-      const id = String(c?.id ?? '').trim()
-      const counted = Number(c?.counted)
-      if (!id || !Number.isFinite(counted) || counted < 0) {
-        errors.push(`${id || 'unknown'}: invalid counted value`)
-        continue
-      }
+    for (const c of rows) {
       try {
         if (mode === 'set') {
-          await db!.update(s.products).set({ stock: Math.floor(counted) }).where(eq(s.products.id, id))
+          await db!.update(s.products).set({ stock: c.counted }).where(eq(s.products.id, c.id))
         } else {
-          await db!.update(s.products).set({ stock: sql`greatest(0, ${s.products.stock} + ${Math.floor(counted)})` }).where(eq(s.products.id, id))
+          await db!.update(s.products).set({ stock: sql`greatest(0, ${s.products.stock} + ${c.counted})` }).where(eq(s.products.id, c.id))
         }
         applied++
       } catch (err) {
-        errors.push(`${id}: ${err instanceof Error ? err.message : 'update failed'}`)
+        errors.push(`${c.id}: ${err instanceof Error ? err.message : 'update failed'}`)
       }
     }
-    recordCrud('products', 'Updated', req, { stockCount: true, applied, mode })
-    res.json({ ok: errors.length === 0, applied, mode, errors })
+    // Optional round-trip: push the (already-applied) local stock to Shopify so
+    // the store matches the physical count. Best-effort — local apply stands.
+    let shopifyPush: Awaited<ReturnType<typeof pushInventoryToShopify>> | null = null
+    if (pushToShopify && applied > 0) {
+      try {
+        shopifyPush = await pushInventoryToShopify(rows.map((c) => c.id))
+      } catch (err) {
+        shopifyPush = { ok: false, updated: 0, skipped: 0, errors: [err instanceof Error ? err.message : 'Shopify push failed'] }
+      }
+    }
+    recordCrud('products', 'Updated', req, { stockCount: true, applied, mode, shopifyPush: shopifyPush ? shopifyPush.updated : undefined })
+    res.json({ ok: errors.length === 0, applied, mode, errors, shopifyPush })
   } catch (err) {
     logger.error({ err }, 'stock count apply failed')
     res.status(500).json({ error: 'Stock count failed' })
