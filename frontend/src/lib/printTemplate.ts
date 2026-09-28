@@ -175,6 +175,11 @@ export interface PrintDoc {
   items?: Array<Record<string, unknown>>
 }
 
+/** Open one or more built documents in print windows (batch = one window per doc). */
+export function printDocuments(batch: Array<{ doc: PrintDoc; config: PrintDesignerConfig; extras: PrintDocExtras }>): void {
+  for (const b of batch) printDocument(b.doc, b.config, b.extras)
+}
+
 export interface PrintDocExtras {
   docType: 'invoice' | 'quotation' | 'order' | 'packing-slip' | 'pick-list'
   /** Sub-line under the business name in the header. */
@@ -189,6 +194,8 @@ export interface PrintDocExtras {
   totalLabel?: string
   /** Optional terms paragraph printed after the totals (quotations). */
   terms?: string
+  /** Show product thumbnails on fulfilment docs (packing slip / pick list). */
+  showImages?: boolean
 }
 
 const FONTS: Record<PrintDesignerConfig['font'], string> = {
@@ -257,14 +264,20 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
   const zebra = (idx: number) => (c.tableZebra && idx % 2 === 0 ? `background:#fafafa;` : '')
 
   // Fulfilment rows: product + SKU + qty (+ weight), with tick boxes on pick
-  // lists so staff can mark each line as collected.
+  // lists so staff can mark each line as collected. Optional thumbnails when
+  // the caller supplies image URLs per item.
   const fulfilmentRows = items
     .map((i, idx) => {
       const tick = extras.docType === 'pick-list'
         ? `<td style="padding:9px 10px;${cellBorder}width:34px;"><span style="display:inline-block;width:16px;height:16px;border:2px solid ${c.accent2};border-radius:3px;"></span></td>`
         : ''
+      const imgSrc = typeof i.image === 'string' && i.image ? i.image : ''
+      const imgCell = extras.showImages && imgSrc
+        ? `<td style="padding:6px 8px;${cellBorder}width:56px;"><img src="${escapeHtml(imgSrc)}" alt="" style="width:48px;height:48px;object-fit:cover;border-radius:4px;border:1px solid #e5e7eb;" onerror="this.style.display='none'"/></td>`
+        : ''
       return `<tr style="${zebra(idx)}">
           ${tick}
+          ${imgCell}
           <td style="padding:9px 10px;${cellBorder}font-size:11px;">${escapeHtml(String(i.product ?? ''))}<br/><span style="color:#8a8fa3;font-size:9px;">${escapeHtml(String(i.sku ?? ''))}</span></td>
           <td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${Number(i.qty) || 0}</td>
           ${c.showWeight ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${(Number(i.weight) || 0).toFixed(2)}</td>` : ''}
@@ -273,6 +286,7 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
     .join('')
   const fulfilmentHeadCols =
     (extras.docType === 'pick-list' ? `<th style="width:34px;"></th>` : '') +
+    (extras.showImages ? `<th style="width:56px;"></th>` : '') +
     `<th>Product</th><th style="text-align:right;">Qty</th>` +
     (c.showWeight ? `<th style="text-align:right;">Weight (g)</th>` : '')
 

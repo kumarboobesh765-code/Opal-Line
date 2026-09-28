@@ -54,7 +54,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { dbApi, shopifyApi, printTemplatesApi } from '@/lib/api'
-import { printDocument, mergePrintConfig, DEFAULT_PRINT_CONFIG, type PrintDoc, type PrintDesignerConfig } from '@/lib/printTemplate'
+import { printDocument, printDocuments, mergePrintConfig, DEFAULT_PRINT_CONFIG, type PrintDoc, type PrintDesignerConfig } from '@/lib/printTemplate'
 import { exportTable } from '@/lib/export'
 import type { Customer, Customer360, OrderEvent, OrderFullDetail, OrderStatus, Product, SalesOrder } from '@/types'
 import { cn } from '@/lib/utils'
@@ -332,6 +332,8 @@ export default function SalesOrdersPage() {
         makingCharge: 0,
         tax: 0,
         amount: (li.price ?? 0) * (li.quantity ?? 0),
+        // Product photo for fulfilment docs (packing slip / pick list).
+        image: products.find((p) => p.sku === (li.sku ?? ''))?.image ?? undefined,
       })),
     }
   }
@@ -351,7 +353,26 @@ export default function SalesOrdersPage() {
       docType,
       tagline: '92.5 Sterling Silver Jewellery',
       billToLabel: docType === 'packing-slip' ? 'Deliver To' : 'Staging For',
+      showImages: true,
     })
+  }
+
+  // Bulk print fulfilment docs: one print window per order, images included.
+  const bulkPrintFulfilment = (docType: 'packing-slip' | 'pick-list') => {
+    if (selectedOrders.length === 0) return
+    const config = docType === 'packing-slip' ? packingConfig : pickConfig
+    printDocuments(
+      selectedOrders.map((o) => ({
+        doc: buildOrderPrintDoc(o),
+        config,
+        extras: {
+          docType,
+          tagline: '92.5 Sterling Silver Jewellery',
+          billToLabel: docType === 'packing-slip' ? 'Deliver To' : 'Staging For',
+          showImages: true,
+        },
+      })),
+    )
   }
 
   const cancelOrder = useCallback(async (o: SalesOrder) => {
@@ -899,6 +920,12 @@ export default function SalesOrdersPage() {
               <span className="text-xs font-medium">{selectedOrders.length} selected</span>
               <Button size="sm" variant="outline" onClick={bulkInvoice} disabled={bulkBusy}>
                 <FileText className="h-3.5 w-3.5" /> Create Invoices
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => bulkPrintFulfilment('packing-slip')} disabled={bulkBusy}>
+                <Printer className="h-3.5 w-3.5" /> Print Packing Slips
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => bulkPrintFulfilment('pick-list')} disabled={bulkBusy}>
+                <ListChecks className="h-3.5 w-3.5" /> Print Pick Lists
               </Button>
               <Button size="sm" variant="outline" onClick={() => bulkStatus('confirmed')} disabled={bulkBusy}>Mark Confirmed</Button>
               <Button size="sm" variant="outline" onClick={() => bulkStatus('processing')} disabled={bulkBusy}>Mark Processing</Button>
