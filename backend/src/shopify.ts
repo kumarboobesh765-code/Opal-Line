@@ -11,6 +11,40 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+/**
+ * Sanitize a local product description for Shopify's body_html. Paragraph
+ * and line-break tags are preserved (shop editors use them); scripts, event
+ * handlers, iframes, styles and javascript: URLs are stripped so a local
+ * editor can never inject active content into the storefront.
+ */
+export function sanitizeProductDescription(raw: string): string {
+  const ALLOWED = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'blockquote'])
+  let html = raw
+  // Drop script/style blocks entirely, then any remaining tags not allowlisted.
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, '')
+  html = html.replace(/<style[\s\S]*?<\/style>/gi, '')
+  html = html.replace(/<\/?([a-zA-Z0-9]+)([^>]*)>/g, (match, tag: string) => {
+    if (!ALLOWED.has(tag.toLowerCase())) return ''
+    return match.replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+      .replace(/\s+(href|src)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '')
+  })
+  return html.trim()
+}
+
+export function toDescriptionHtml(localDescription: string | null | undefined, name: string): string {
+  const text = (localDescription ?? '').trim()
+  if (!text) return `<p>${escapeHtml(name)}</p>`
+  // Plain text or text with no real HTML structure → escape and wrap as
+  // paragraphs (this also escapes stray angle brackets users typed literally).
+  if (!/<\s*(p|br|ul|ol|li|h[1-4]|div)\b/i.test(text)) {
+    return text
+      .split(/\n+/)
+      .map((para) => `<p>${escapeHtml(para.trim())}</p>`)
+      .join('')
+  }
+  return sanitizeProductDescription(text)
+}
+
 const MAX_STORE_ITEMS = 10000
 
 export const store: SyncStore = {
@@ -237,6 +271,7 @@ export function normalizeProduct(raw: any): SyncProduct {
     handle: raw.handle ?? '',
     vendor: raw.vendor ?? '',
     productType: raw.product_type ?? '',
+    description: typeof raw.body_html === 'string' ? raw.body_html : '',
     collection,
     chargeOnTax,
     status: raw.status ?? '',
@@ -333,7 +368,51 @@ async function syncProducts(): Promise<number> {
   } catch {
     // Inventory is an enhancement; product catalog must never fail because of it.
   }
+  try {
+    await attachCollectionsToProducts()
+  } catch {
+    // Collections are an enhancement too; never fail the catalog pull over them.
+  }
   return store.products.length
+}
+
+/**
+ * Resolve each product's real Shopify collections. The REST list endpoint
+ * only exposes product_type/tags, so memberships come from the collects
+ * endpoint (custom collections) plus the collection id in each collect row
+ * (titles resolved from custom_collection + smart_collection listings).
+ * Result: store.products[i].collection = "Collection A | Collection B".
+ */
+export async function attachCollectionsToProducts(): Promise<void> {
+  if (store.products.length === 0) return
+  const [custom, smart, collects] = await Promise.all([
+    paginate<any>('custom_collections', 'limit=250'),
+    paginate<any>('smart_collections', 'limit=250'),
+    paginate<any>('collects', 'limit=250'),
+  ])
+  const titleById = new Map<string, string>()
+  for (const c of [...custom, ...smart]) {
+    if (c?.id != null) titleById.set(String(c.id), String(c.title ?? '').trim())
+  }
+  if (titleById.size === 0) return
+  const byProduct = new Map<string, string[]>()
+  for (const col of collects) {
+    const productId = String(col?.product_id ?? '')
+    const title = titleById.get(String(col?.collection_id ?? ''))
+    if (!productId || !title) continue
+    const list = byProduct.get(productId) ?? []
+    if (!list.includes(title)) list.push(title)
+    byProduct.set(productId, list)
+  }
+  if (byProduct.size === 0) return
+  store.products = store.products.map((p) => {
+    const titles = byProduct.get(String(p.id))
+    if (!titles || titles.length === 0) return p
+    // Keep the tag-derived collection as a fallback member so it never regresses.
+    const merged = [...titles]
+    if (p.collection && !merged.includes(p.collection)) merged.unshift(p.collection)
+    return { ...p, collection: merged.slice(0, 5).join(' | ') }
+  })
 }
 
 async function syncOrders(): Promise<number> {
@@ -464,6 +543,9 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
             status: 'active',
             vendor: p.vendor || existing.vendor,
             productType: p.productType || existing.productType,
+            // Shopify body_html is authoritative for descriptions coming from
+            // the storefront; keep local text when Shopify has none.
+            description: p.description ? p.description : existing.description,
             compareAtPrice: effectiveCompareAt ?? existing.compareAtPrice,
             image: p.image ?? existing.image,
             // Mirror Shopify's gallery; keep any local-only uploads that aren't
@@ -506,6 +588,7 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
           images: p.images.length > 0 ? p.images : null,
           vendor: p.vendor || null,
           productType: p.productType || null,
+          description: p.description || null,
           tags: null,
           trackInventory: true,
           // Set chargeOnTax from the product data (first sync) or preserve existing
@@ -848,6 +931,7 @@ interface LocalProductForPush {
   supplier: string | null
   vendor: string | null
   productType: string | null
+  description: string | null
   tags: string | null
   image: string | null
   images: string[] | null
@@ -931,7 +1015,7 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
   const body: Record<string, unknown> = {
     product: {
       title: local.name,
-      body_html: `<p>${escapeHtml(local.name)}</p>`,
+      body_html: toDescriptionHtml(local.description, local.name),
       vendor: local.vendor || local.supplier || 'Opal Line',
       product_type: local.collection || local.productType || local.category || '',
       tags,
@@ -1017,7 +1101,7 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
 
   const product: Record<string, unknown> = {
     title: local.name,
-    body_html: `<p>${escapeHtml(local.name)}</p>`,
+    body_html: toDescriptionHtml(local.description, local.name),
     vendor: local.vendor || local.supplier || 'Opal Line',
     product_type: local.collection || local.productType || local.category || '',
     tags: buildShopifyTags(local),

@@ -236,6 +236,15 @@ export default function ProductDetailPage() {
                 <InfoRow label="Created On" value={formatDate(product.createdAt)} />
                 <InfoRow label="Status" value={product.status ?? '—'} />
                 <InfoRow label="Shopify ID" value={product.shopifyId ?? 'Not listed'} mono />
+                {product.description ? (
+                  <div className="col-span-2 md:col-span-3">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Description</p>
+                    <div
+                      className="mt-1 text-sm text-foreground [&_b]:font-semibold [&_em]:italic [&_li]:ml-4 [&_li]:list-disc [&_p]:mb-1 [&_strong]:font-semibold [&_ul]:list-inside"
+                      dangerouslySetInnerHTML={{ __html: product.description }}
+                    />
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 

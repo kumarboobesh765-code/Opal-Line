@@ -265,6 +265,7 @@ export interface Product {
   images?: string[] | null
   vendor?: string | null
   productType?: string | null
+  description?: string | null
   tags?: string | null
   trackInventory?: boolean
   chargeOnTax?: boolean
