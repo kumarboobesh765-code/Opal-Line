@@ -34,6 +34,25 @@ import { dbApi, backupApi } from '@/lib/api'
 import type { AppSettings, Quotation } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { printDocument, mergePrintConfig } from '@/lib/printTemplate'
+
+// SKU → product photo for printed line-item thumbnails. Any stored image is
+// fine for printing (the CDN-skip policy only applies to pushing to Shopify).
+let quoteProductImages: Map<string, string> | null = null
+async function loadQuoteProductImages(): Promise<Map<string, string>> {
+  if (quoteProductImages) return quoteProductImages
+  const m = new Map<string, string>()
+  try {
+    const ps = await dbApi.getProducts()
+    for (const p of ps) {
+      const src = p.image?.trim()
+      if (src) m.set(p.sku, src)
+    }
+  } catch {
+    // printing simply falls back to no thumbnails
+  }
+  quoteProductImages = m
+  return m
+}
 import { printTemplatesApi } from '@/lib/api'
 import { PrintTemplatePicker } from '@/components/print-template-picker'
 
@@ -78,9 +97,10 @@ export default function QuotationsPage() {
     printTemplatesApi.getDefault('quotation').then((r) => setPrintConfig(r.config)).catch(() => {})
   }, [])
 
-  const printQuotation = (q: Quotation, configOverride?: unknown) => {
+  const printQuotation = async (q: Quotation, configOverride?: unknown) => {
     const items = q.items ?? []
     const validity = q.validUntil ? formatDate(q.validUntil) : '15 days from quotation date'
+    const imageBySku = await loadQuoteProductImages()
     printDocument(
       {
         number: q.number,
@@ -110,6 +130,7 @@ export default function QuotationsPage() {
           silverRate: i.silverRate,
           makingCharge: i.makingCharge,
           amount: i.amount,
+          image: imageBySku.get(i.sku),
         })),
       },
       // An explicit config comes from the saved-template picker; otherwise the
@@ -118,6 +139,7 @@ export default function QuotationsPage() {
       {
         docType: 'quotation',
         tagline: '92.5 Sterling Silver Jewellery',
+        showImages: true,
         extraBox: { label: 'Valid Until', value: validity },
         notes: q.notes ?? undefined,
         billToLabel: 'Prepared For',

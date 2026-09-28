@@ -357,12 +357,18 @@ export default function SalesOrdersPage() {
     })
   }
 
-  // Bulk print fulfilment docs: one print window per order, images included.
+  // Bulk print fulfilment docs: one print window per order with line items
+  // (itemless orders are skipped — a packing slip with no products is noise).
   const bulkPrintFulfilment = (docType: 'packing-slip' | 'pick-list') => {
     if (selectedOrders.length === 0) return
+    const withItems = selectedOrders.filter((o) => (o.lineItems ?? []).length > 0)
+    if (withItems.length === 0) {
+      toast.error('Selected orders have no line items to print.')
+      return
+    }
     const config = docType === 'packing-slip' ? packingConfig : pickConfig
     printDocuments(
-      selectedOrders.map((o) => ({
+      withItems.map((o) => ({
         doc: buildOrderPrintDoc(o),
         config,
         extras: {
@@ -373,6 +379,9 @@ export default function SalesOrdersPage() {
         },
       })),
     )
+    if (withItems.length < selectedOrders.length) {
+      toast.info(`${selectedOrders.length - withItems.length} order(s) without line items were skipped.`)
+    }
   }
 
   const cancelOrder = useCallback(async (o: SalesOrder) => {

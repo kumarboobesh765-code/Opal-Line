@@ -292,7 +292,12 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
 
   const itemRows = items
     .map((i, idx) => {
+      const imgSrc = typeof i.image === 'string' && i.image ? i.image : ''
+      const imgCell = extras.showImages && imgSrc
+        ? `<td style="padding:6px 8px;${cellBorder}width:56px;"><img src="${escapeHtml(imgSrc)}" alt="" style="width:48px;height:48px;object-fit:cover;border-radius:4px;border:1px solid #e5e7eb;" onerror="this.style.display='none'"/></td>`
+        : ''
       return `<tr style="${zebra(idx)}">
+          ${imgCell}
           <td style="padding:9px 10px;${cellBorder}font-size:11px;">${escapeHtml(String(i.product ?? ''))}<br/><span style="color:#8a8fa3;font-size:9px;">${escapeHtml(String(i.sku ?? ''))}</span></td>
           ${c.showHsn ? `<td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:center;">${escapeHtml(String(i.hsn ?? hsnDisplay))}</td>` : ''}
           <td style="padding:9px 10px;${cellBorder}font-size:11px;text-align:right;">${Number(i.qty) || 0}</td>
@@ -305,6 +310,7 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
     .join('')
 
   const headCols =
+    (extras.showImages ? `<th style="width:56px;"></th>` : '') +
     `<th>Product</th>` +
     (c.showHsn ? `<th style="text-align:center;">HSN</th>` : '') +
     `<th style="text-align:right;">Qty</th>` +
@@ -313,7 +319,7 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
     (c.showTax ? `<th style="text-align:right;">GST</th>` : '') +
     `<th style="text-align:right;">Amount (₹)</th>`
   const footSpans =
-    `<td colspan="${c.showHsn ? 2 : 1}" style="padding:9px 10px;border-top:2px solid ${c.accent};font-size:10px;">Total: ${totalQty} item(s)</td>` +
+    `<td colspan="${(extras.showImages ? 1 : 0) + (c.showHsn ? 2 : 1)}" style="padding:9px 10px;border-top:2px solid ${c.accent};font-size:10px;">Total: ${totalQty} item(s)</td>` +
     `<td style="padding:9px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:10px;">${totalQty}</td>` +
     (c.showWeight ? `<td style="padding:9px 10px;border-top:2px solid ${c.accent};text-align:right;font-size:10px;">${totalWeight.toFixed(2)} g</td>` : '') +
     (c.showRate ? `<td colspan="2"></td>` : '') +

@@ -1,0 +1,84 @@
+import { expect, test } from '@playwright/test'
+
+test.describe('bulk fulfilment printing and pipeline moves', () => {
+  test('bulk print packing slips renders one document per selected order with thumbnails', async ({ page }) => {
+    test.setTimeout(90_000)
+    // Capture the generated documents: printDocument writes the built HTML
+    // into a window opened via window.open. Stubbing it avoids racing the
+    // auto-print close while still asserting the real markup. Must be
+    // registered BEFORE the goto so the stub is installed at document-start.
+    await page.addInitScript(() => {
+      const realOpen = window.open.bind(window)
+      ;(window as unknown as { open: (url?: string | URL, target?: string, features?: string) => Window | null }).open = ((url?: string | URL, target?: string, features?: string) => {
+        const fake = {
+          closed: false,
+          opener: null,
+          document: {
+            open: () => fake.document,
+            write: (html: string) => {
+              ;(window as unknown as { __printedDocs?: string[] }).__printedDocs =
+                (window as unknown as { __printedDocs?: string[] }).__printedDocs ?? []
+              ;(window as unknown as { __printedDocs: string[] }).__printedDocs.push(html)
+            },
+            close: () => {},
+          },
+          focus: () => {},
+          print: () => {},
+          close: () => {},
+        }
+        return fake as unknown as Window
+      }) as typeof window.open
+      void realOpen
+      void url
+      void target
+      void features
+    })
+
+    await page.goto('/sales/orders')
+    await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
+
+    // Pick rows whose orders actually have line items (itemless orders are
+    // skipped by the bulk printer).
+    const rows = page
+      .locator('table tbody tr')
+      .filter({ hasNot: page.getByText(/0 item/) })
+    await expect(rows.first()).toBeVisible({ timeout: 20000 })
+
+    await rows.nth(0).locator('input[type="checkbox"]').check()
+    await rows.nth(1).locator('input[type="checkbox"]').check()
+    await expect(page.getByText('2 selected')).toBeVisible()
+    await page.getByRole('button', { name: /Print Packing Slips/i }).click()
+    await page.waitForTimeout(1500)
+
+    const printed = await page.evaluate(() => (window as unknown as { __printedDocs?: string[] }).__printedDocs ?? [])
+    expect(printed.length, 'one packing slip per selected order with items').toBe(2)
+    for (const html of printed) {
+      expect(html).toContain('PACKING SLIP')
+      expect(html).toContain('Deliver To')
+      expect(html).toContain('Packed By')
+    }
+    // At least one of the two must render a thumbnail <img> (the dev store
+    // products carry Shopify-hosted photos).
+    expect(printed.some((html) => html.includes('<img')), 'thumbnail img rendered for imaged products').toBe(true)
+  })
+
+  test('order pipeline supports checkbox selection and bulk move toolbar', async ({ page }) => {
+    test.setTimeout(90_000)
+    await page.goto('/sales/pipeline')
+    await expect(page.getByRole('heading', { name: 'Order Pipeline' })).toBeVisible({ timeout: 20000 })
+
+    const card = page.locator('input[type="checkbox"]').first()
+    await card.check({ timeout: 20000 })
+
+    // Bulk toolbar appears with a move button per stage (exact names — the
+    // column headers also render "Select all <stage> orders" buttons).
+    await expect(page.getByText('1 selected')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Confirmed', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Processing', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Fulfilled', exact: true })).toBeVisible()
+
+    // Clearing keeps everything intact without moving anything.
+    await page.getByRole('button', { name: 'Clear' }).click()
+    await expect(page.getByText('1 selected')).toHaveCount(0)
+  })
+})
