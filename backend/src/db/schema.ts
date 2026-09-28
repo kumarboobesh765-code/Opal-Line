@@ -530,6 +530,11 @@ export const rateLimitHits = pgTable('rate_limit_hits', {
   resetAt: timestamp('reset_at', { mode: 'string', withTimezone: true }),
 })
 
+export const webhookDeliveries = pgTable('webhook_deliveries', {
+  webhookId: text('webhook_id').primaryKey(),
+  seenAt: timestamp('seen_at', { mode: 'string', withTimezone: true }).notNull().defaultNow(),
+})
+
 export const quotations = pgTable('quotations', {
   id: text('id').primaryKey(),
   number: text('number').notNull().unique(),

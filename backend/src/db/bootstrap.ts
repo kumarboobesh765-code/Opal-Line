@@ -95,6 +95,13 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         reset_at timestamptz
       )`)
 
+    // Seen Shopify webhook delivery ids (replay/retry dedupe, 3-day window).
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        webhook_id text PRIMARY KEY,
+        seen_at timestamptz NOT NULL DEFAULT now()
+      )`)
+
     // ── Settings & rates ──────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS settings (
@@ -1200,6 +1207,11 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
         key text PRIMARY KEY,
         count integer NOT NULL DEFAULT 0,
         reset_at timestamptz
+      )`,
+      // Seen Shopify webhook delivery ids (replay/retry dedupe).
+      `CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        webhook_id text PRIMARY KEY,
+        seen_at timestamptz NOT NULL DEFAULT now()
       )`,
     ]
     for (const stmt of upgrades) {

@@ -26,7 +26,7 @@ import { logger } from './logger'
 import { CONSTANTS } from './constants'
 import { applyTrustProxy } from './proxyTrust'
 import { PgRateLimitStore, pruneExpiredRateLimits } from './pgRateLimitStore'
-import { verifyShopifyWebhook } from './webhooks'
+import { verifyShopifyWebhook, rejectReplayedWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup, startDailySummary } from './autoBackup'
 import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured, kickEmailIngest } from './orderEmailIngest'
@@ -262,7 +262,7 @@ app.get('/api/v1/health', async (_req, res) => {
   })
 })
 
-app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, async (req, res) => {
+app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, rejectReplayedWebhook, async (req, res) => {
   const topic = req.shopifyWebhook?.topic ?? ''
   logger.info({ topic, shopDomain: req.shopifyWebhook?.shopDomain, webhookId: req.shopifyWebhook?.webhookId }, 'Shopify webhook received')
 
