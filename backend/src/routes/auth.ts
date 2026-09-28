@@ -1,7 +1,7 @@
 import { Router, type Response } from 'express'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import argon2 from 'argon2'
-import { eq, or, sql } from 'drizzle-orm'
+import { and, eq, ne, or, sql } from 'drizzle-orm'
 import { db, schema } from '../db/client'
 import { computeUserPermissions } from '../rbac'
 import { recordActivity } from '../activity'
@@ -123,6 +123,34 @@ authRouter.post('/logout', requireAuth, async (req, res) => {
   } catch {
     clearSessionCookie(res)
     res.json({ ok: true })
+  }
+})
+
+// Security control: revoke every session for the current user except the
+// device making the request (Settings → "Log out other devices").
+authRouter.post('/sessions/logout-others', requireAuth, async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const userId = req.userId
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' })
+    const token = tokenFromRequest(req)
+    const removed = token
+      ? await db!
+          .delete(schema.sessions)
+          .where(and(eq(schema.sessions.userId, userId), ne(schema.sessions.token, token)))
+          .returning()
+      : await db!.delete(schema.sessions).where(eq(schema.sessions.userId, userId)).returning()
+    void recordActivity({
+      action: 'Sessions Revoked',
+      module: 'system',
+      entity: userId,
+      userId,
+      ip: req.ip ?? null,
+      details: `Logged out ${removed.length} other session(s)`,
+    })
+    res.json({ ok: true, revoked: removed.length })
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' })
   }
 })
 
