@@ -86,6 +86,15 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         last_attempt timestamp
       )`)
 
+    // Per-IP rate-limit counters (express-rate-limit store) — kept in the DB
+    // so restarts don't reset login/password-reset budgets.
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS rate_limit_hits (
+        key text PRIMARY KEY,
+        count integer NOT NULL DEFAULT 0,
+        reset_at timestamptz
+      )`)
+
     // ── Settings & rates ──────────────────────────────────────────────────
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS settings (
@@ -1186,6 +1195,12 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
         updated_at timestamp
       )`,
       `CREATE INDEX IF NOT EXISTS print_templates_doc_type_idx ON print_templates (doc_type)`,
+      // Per-IP rate-limit counters (express-rate-limit store).
+      `CREATE TABLE IF NOT EXISTS rate_limit_hits (
+        key text PRIMARY KEY,
+        count integer NOT NULL DEFAULT 0,
+        reset_at timestamptz
+      )`,
     ]
     for (const stmt of upgrades) {
       await sql.unsafe(stmt).catch(() => undefined)

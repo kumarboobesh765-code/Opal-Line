@@ -524,6 +524,12 @@ export const loginAttempts = pgTable('login_attempts', {
   lastAttempt: ts('last_attempt'),
 })
 
+export const rateLimitHits = pgTable('rate_limit_hits', {
+  key: text('key').primaryKey(),
+  count: integer('count').notNull().default(0),
+  resetAt: timestamp('reset_at', { mode: 'string', withTimezone: true }),
+})
+
 export const quotations = pgTable('quotations', {
   id: text('id').primaryKey(),
   number: text('number').notNull().unique(),
