@@ -1,5 +1,5 @@
 import { confirmDialog, toast } from '@/components/ui/confirm'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -36,6 +36,9 @@ export default function InvoiceDetailPage() {
   const [invoice, setInvoice] = useState<Invoice | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [printConfig, setPrintConfig] = useState<unknown>(null)
+  // SKU → product photo for printed line-item thumbnails. Any stored image is
+  // fine for printing (the CDN-skip policy only applies to pushing to Shopify).
+  const productImageBySku = useRef(new Map<string, string>())
   const [loading, setLoading] = useState(true)
   const [refunding, setRefunding] = useState(false)
   const [waSending, setWaSending] = useState(false)
@@ -55,6 +58,16 @@ export default function InvoiceDetailPage() {
       setLoading(false)
     }).catch(() => setLoading(false))
     dbApi.getSettings().then((s) => setSettings(s ?? null)).catch(() => {})
+    dbApi.getProducts()
+      .then((ps) => {
+        const m = new Map<string, string>()
+        for (const p of ps) {
+          const src = p.image?.trim()
+          if (src) m.set(p.sku, src)
+        }
+        productImageBySku.current = m
+      })
+      .catch(() => {})
     printTemplatesApi.getDefault('invoice').then((r) => setPrintConfig(r.config)).catch(() => {})
   }, [id])
 
@@ -127,6 +140,7 @@ export default function InvoiceDetailPage() {
         makingCharge: i.makingCharge,
         tax: i.tax,
         amount: i.amount,
+        image: productImageBySku.current.get(i.sku),
       })),
     }
     // An explicit config comes from the saved-template picker; otherwise the
@@ -137,6 +151,7 @@ export default function InvoiceDetailPage() {
     printDocument(doc, withQr, {
       docType: 'invoice',
       tagline: '92.5 Sterling Silver Jewellery',
+      showImages: true,
     })
   }
 
