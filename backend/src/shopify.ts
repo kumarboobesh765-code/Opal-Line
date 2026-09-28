@@ -6,6 +6,7 @@ import { db, schema } from './db/client'
 import type { SyncCustomer, SyncLogEntry, SyncOrder, SyncPrice, SyncProduct, SyncResource, SyncStore } from './types'
 import { CONSTANTS } from './constants'
 import { logger } from './logger'
+import { recordAudit } from './activity'
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -1841,8 +1842,7 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
     recomputed++
   }
 
-  await db.insert(schema.auditLogs).values({
-    id: randomUUID(),
+  await recordAudit({
     timestamp: now,
     user: 'Admin',
     action: `Silver rate updated to ₹${rate.toFixed(2)}/gm`,
