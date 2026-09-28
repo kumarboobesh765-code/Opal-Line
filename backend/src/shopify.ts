@@ -2328,6 +2328,10 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
     const raw = await paginate<any>('orders', 'status=any&fulfillment_status=any')
     const existing = await db.select({ shopifyId: schema.salesOrders.shopifyId }).from(schema.salesOrders)
     const knownShopifyIds = new Set(existing.map((r) => r.shopifyId).filter((x): x is string => Boolean(x)))
+    // In-batch guard: Shopify can return the same order twice across pages
+    // (concurrent edits between page fetches). Without this, the second copy
+    // would take the insert path and hit the unique index as an error.
+    const seenInBatch = new Set<string>()
 
     let customerStats = new Map<string, any>()
     try {
@@ -2345,6 +2349,9 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
       const orderNumber = String(o.name ?? '').replace(/^#/, '')
       const shopifyId = orderNumber ? `#${orderNumber}` : ''
       if (!shopifyId) continue
+      // Duplicate within this batch: update once, then skip the rest.
+      if (seenInBatch.has(shopifyId)) continue
+      seenInBatch.add(shopifyId)
 
       const customerId = o.customer?.id ? String(o.customer.id) : undefined
       // Shopify order REST API often has minimal customer object {id, email} without first_name/last_name.
@@ -2488,8 +2495,17 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
           const customerEmail = o.customer?.email ?? cust?.email ?? null
           const customerPhone = o.customer?.phone ?? cust?.phone ?? null
 
+          // Match the local customer by Shopify id FIRST — two distinct
+          // Shopify identities can share an email inbox (or a phone), and
+          // email-first matching would merge their stats into one row.
           let existingCustomer = null
-          if (customerEmail) {
+          const [byShopifyId] = await db
+            .select()
+            .from(schema.customers)
+            .where(eq(schema.customers.shopifyId, customerId))
+            .limit(1)
+          if (byShopifyId) existingCustomer = byShopifyId
+          if (!existingCustomer && customerEmail) {
             const [byEmail] = await db
               .select()
               .from(schema.customers)
@@ -2504,14 +2520,6 @@ export async function importShopifyOrders(): Promise<ShopifyOrdersImportResult> 
               .where(eq(schema.customers.phone, customerPhone))
               .limit(1)
             if (byPhone) existingCustomer = byPhone
-          }
-          if (!existingCustomer) {
-            const [byShopifyId] = await db
-              .select()
-              .from(schema.customers)
-              .where(eq(schema.customers.shopifyId, customerId))
-              .limit(1)
-            if (byShopifyId) existingCustomer = byShopifyId
           }
 
           if (existingCustomer) {
