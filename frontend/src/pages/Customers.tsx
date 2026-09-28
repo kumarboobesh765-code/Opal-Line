@@ -332,11 +332,11 @@ export default function CustomersPage() {
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" onClick={() => navigate('/sales/invoices')}>
+                <Button variant="ghost" size="icon-sm" onClick={() => navigate(`/sales/customers/${encodeURIComponent(c.name)}`)}>
                   <FileText className="h-3.5 w-3.5" />
                 </Button>
                 </TooltipTrigger>
-                <TooltipContent>Order history</TooltipContent>
+                <TooltipContent>Customer 360</TooltipContent>
               </Tooltip>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
