@@ -18,6 +18,7 @@ const QuotationsPage = lazy(() => import('@/pages/Quotations'))
 const ConnectionsPage = lazy(() => import('@/pages/Connections'))
 const InvoiceDetailPage = lazy(() => import('@/pages/InvoiceDetail'))
 const SalesOrdersPage = lazy(() => import('@/pages/SalesOrders'))
+const Customer360Page = lazy(() => import('@/pages/Customer360Page'))
 const OrderBoardPage = lazy(() => import('@/pages/OrderBoard'))
 const DispatchPage = lazy(() => import('@/pages/Dispatch'))
 const BookingsPage = lazy(() => import('@/pages/Bookings'))
@@ -121,6 +122,7 @@ function App() {
             <Route path="/sales/pipeline" element={guarded('sales', <OrderBoardPage />)} />
             <Route path="/sales/dispatch" element={guarded('sales', <DispatchPage />)} />
             <Route path="/sales/customers" element={guarded('sales', <CustomersPage />)} />
+            <Route path="/sales/customers/:name" element={guarded('sales', <Customer360Page />)} />
             <Route path="/sales/loyalty" element={guarded('sales', <LoyaltyPage />)} />
             <Route path="/sales/returns" element={guarded('sales', <ReturnsPage />)} />
             <Route path="/sales/bookings" element={guarded('sales', <BookingsPage />)} />
