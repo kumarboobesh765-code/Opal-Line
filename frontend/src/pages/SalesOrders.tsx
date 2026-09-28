@@ -1250,13 +1250,14 @@ export default function SalesOrdersPage() {
       </Dialog>
 
       <Dialog open={viewOrder !== null} onOpenChange={(open) => { if (!open) setViewOrder(null) }}>
-        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto print-dialog">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92vh] w-[calc(100vw-2rem)] max-w-2xl flex-col gap-0 overflow-visible p-0 print-dialog">
+          <DialogHeader className="shrink-0 space-y-1.5 border-b border-border/60 px-5 py-4 pr-12">
             <DialogTitle>Order {viewOrder?.shopifyId ?? ''}</DialogTitle>
             <DialogDescription>
               {viewOrder ? `${viewOrder.internalId} · placed on ${formatDateTime(viewOrder.date)}` : ''}
             </DialogDescription>
           </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {viewOrder ? (
             <div className="space-y-2 text-sm">
               {/* Customer contact: prefer the customer record, fall back to
@@ -1353,7 +1354,8 @@ export default function SalesOrdersPage() {
               <OrderTimeline orderId={viewOrder.id} />
             </div>
           ) : null}
-          <DialogFooter className="no-print mt-2">
+          </div>
+          <DialogFooter className="no-print shrink-0 flex-wrap gap-2 border-t border-border/60 px-5 py-3">
             <Button variant="outline" onClick={() => setViewOrder(null)}>Close</Button>
             <Button variant="outline" onClick={() => viewOrder && printOrder(viewOrder)}>
               <Printer className="h-4 w-4" /> Print / PDF
