@@ -45,6 +45,42 @@ test.describe('sales order details dialog', () => {
     await expect(dialog.getByText('Billing Address').or(dialog.getByText('Shipping Address')).first()).toBeVisible({ timeout: 10000 })
   })
 
+  test('dialog is responsive: fits desktop and mobile viewports with footer visible', async ({ page }) => {
+    test.setTimeout(60_000)
+
+    const openDialog = async () => {
+      await page.goto('/sales/orders')
+      await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
+      await page.getByRole('button', { name: /view order/i }).first().click({ timeout: 20000 })
+      const d = page.getByRole('dialog')
+      await expect(d.getByText('Customer', { exact: true })).toBeVisible({ timeout: 10000 })
+      return d
+    }
+
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport)
+      const dialog = await openDialog()
+      await page.waitForTimeout(250)
+
+      const geo = await dialog.evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        const body = el.querySelector('.overflow-y-auto')
+        const footer = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('Packing Slip'))
+        if (body) body.scrollTo(0, body.scrollHeight)
+        return {
+          fitsV: r.height <= window.innerHeight,
+          fitsH: r.width <= window.innerWidth,
+          footerVisible: footer ? footer.getBoundingClientRect().bottom <= window.innerHeight : null,
+        }
+      })
+      expect(geo.fitsV, `dialog fits vertically at ${viewport.width}px`).toBe(true)
+      expect(geo.fitsH, `dialog fits horizontally at ${viewport.width}px`).toBe(true)
+      expect(geo.footerVisible, `action footer visible after scroll at ${viewport.width}px`).toBe(true)
+      await page.keyboard.press('Escape')
+      await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 5000 })
+    }
+  })
+
   test('every order row opens a dialog without errors', async ({ page }) => {
     test.setTimeout(120_000)
     const pageErrors: string[] = []
