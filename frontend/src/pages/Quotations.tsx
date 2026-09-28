@@ -9,6 +9,7 @@ import {
   Plus,
   Printer,
   Search,
+  ShoppingBag,
   Trash2,
   Wallet,
 } from 'lucide-react'
@@ -216,6 +217,21 @@ export default function QuotationsPage() {
     }
   }
 
+  const convertToOrder = async (q: Quotation) => {
+    if (!(await confirmDialog({ title: `Convert ${q.number} into a sales order?`, description: 'Creates a confirmed order without stock movement — invoicing happens when the order is fulfilled.', confirmLabel: 'Convert' }))) return
+    setConvertingId(q.id)
+    setMessage(null)
+    try {
+      const r = await dbApi.convertQuotationToOrder(q.id)
+      setMessage({ ok: true, text: `${q.number} converted to sales order ${r.orderNumber}` })
+      load()
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Conversion failed' })
+    } finally {
+      setConvertingId(null)
+    }
+  }
+
   const removeQuote = async (id: string) => {
     if (!(await confirmDialog({ title: 'Delete this quotation?', danger: true, confirmLabel: 'Delete' }))) return
     const snapshot = quotes.find((r) => r.id === id)
@@ -324,6 +340,23 @@ export default function QuotationsPage() {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Convert to invoice</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status !== 'converted' && row.original.status !== 'cancelled' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={convertingId === row.original.id}
+                      onClick={() => convertToOrder(row.original)}
+                    >
+                      {convertingId === row.original.id
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <ShoppingBag className="h-3.5 w-3.5 text-info-600" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Convert to sales order</TooltipContent>
                 </Tooltip>
               )}
               {row.original.convertedInvoice && (
