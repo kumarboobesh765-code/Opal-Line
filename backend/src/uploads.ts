@@ -38,6 +38,31 @@ const ALLOWED_MIME: Record<string, string> = {
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024 // 8 MB per image
 
+/**
+ * Verify the file's magic bytes actually match the declared image type.
+ * The client-declared mime in a data URL is trivially spoofed; without this
+ * check a "PNG" could really be an HTML/SVG/EXE payload (stored-XSS or
+ * download-and-run risk when served from /uploads).
+ */
+export function matchesImageMagic(buf: Buffer, mime: string): boolean {
+  if (buf.length < 12) return false
+  switch (mime) {
+    case 'image/jpeg':
+      return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+    case 'image/png':
+      return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 && buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+    case 'image/gif':
+      return buf.subarray(0, 6).toString('latin1') === 'GIF87a' || buf.subarray(0, 6).toString('latin1') === 'GIF89a'
+    case 'image/webp':
+      return buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP'
+    case 'image/avif':
+      // ISO-BMFF: bytes 4..8 are 'ftyp', 8..12 is the brand (avic/avif/mif1…)
+      return buf.subarray(4, 8).toString('latin1') === 'ftyp' && /^(avic|avif|mif1|msf1|avis)$/.test(buf.subarray(8, 12).toString('latin1'))
+    default:
+      return false
+  }
+}
+
 export function ensureUploadsDir(): string {
   const dir = UPLOADS_DIR()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -59,6 +84,8 @@ export function saveUploadedImage(dataUrl: string): string | null {
   if (!ext) return null
   const buf = Buffer.from(base64, 'base64')
   if (buf.length === 0 || buf.length > MAX_UPLOAD_BYTES) return null
+  // Reject payloads whose bytes don't match the declared mime type.
+  if (!matchesImageMagic(buf, mime)) return null
   ensureUploadsDir()
   // Content-addressed name: same image uploaded twice stores once.
   const hash = createHash('sha1').update(buf).digest('hex').slice(0, 16)

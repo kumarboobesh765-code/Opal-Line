@@ -51,7 +51,8 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
+      // Allowlist: only Shopify's product CDN needs to load remotely.
+      imgSrc: ["'self'", 'data:', 'https://cdn.shopify.com'],
       connectSrc: ["'self'"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
@@ -223,6 +224,23 @@ app.use('/api/v1/auth/login', authLimiter)
 app.use('/api/v1/auth/forgot-password', passwordResetLimiter)
 app.use('/api/v1/auth/reset-password', passwordResetLimiter)
 app.use('/api/v1/auth/resend-verification', passwordResetLimiter)
+
+// Outbound email is a costly, spammable side effect. Throttle the send-heavy
+// routes per user so a compromised/rogue session can't turn the server into
+// a spam cannon (each send also hits Gmail/SMTP rate limits downstream).
+const emailSendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: { error: 'Too many email requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${req.userId ?? req.ip ?? 'unknown'}`,
+})
+app.use('/api/v1/backup/email', emailSendLimiter)
+app.use('/api/v1/backup/email-separate', emailSendLimiter)
+app.use('/api/v1/backup/notifications', emailSendLimiter)
+app.use('/api/v1/db/dues/email', emailSendLimiter)
+app.use('/api/v1/db/notifications/resend', emailSendLimiter)
 
 const resources: SyncResource[] = ['orders', 'products', 'customers', 'inventory', 'price']
 
