@@ -561,11 +561,12 @@ export default function QuotationsPage() {
 
       {/* View dialog */}
       <Dialog open={viewQuote !== null} onOpenChange={(open) => { if (!open) setViewQuote(null) }}>
-        <DialogContent className="max-h-[calc(100vh-4rem)] max-w-lg overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92vh] w-[calc(100vw-2rem)] max-w-2xl flex-col gap-0 overflow-visible p-0">
+          <DialogHeader className="shrink-0 space-y-1.5 border-b border-border/60 px-5 py-4 pr-12">
             <DialogTitle>Quotation {viewQuote?.number}</DialogTitle>
             <DialogDescription>{viewQuote ? formatDate(viewQuote.date) : ''}</DialogDescription>
           </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {viewQuote && (
             <div className="space-y-3 text-sm">
               <div className="flex justify-between"><span className="text-muted-foreground">Customer</span><span className="font-medium">{viewQuote.customer ?? '—'}</span></div>
@@ -593,20 +594,21 @@ export default function QuotationsPage() {
                 <div className="flex justify-between border-t pt-1.5 font-semibold"><span>Grand total</span><span>{formatCurrency(viewQuote.grandTotal)}</span></div>
               </div>
               {viewQuote.notes && <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">{viewQuote.notes}</p>}
-              {viewQuote.status !== 'converted' && viewQuote.status !== 'cancelled' && (
-                <div className="flex gap-2">
-                  <PrintTemplatePicker docType="quotation" onSelect={(config) => printQuotation(viewQuote, config)} />
-                  <Button variant="outline" className="flex-1" size="sm" onClick={() => printQuotation(viewQuote)}>
-                    <Printer className="h-4 w-4" /> Print / PDF
-                  </Button>
-                  <Button variant="outline" className="flex-1" size="sm" onClick={() => backupApi.downloadQuotationPDF(viewQuote.id)}>
-                    <Download className="h-4 w-4" /> Download PDF
-                  </Button>
-                  <Button className="flex-1" size="sm" disabled={convertingId === viewQuote.id} onClick={() => { const q = viewQuote; setViewQuote(null); convert(q) }}>
-                    <Wallet className="h-4 w-4" /> Convert to Invoice
-                  </Button>
-                </div>
-              )}
+            </div>
+          )}
+          </div>
+          {viewQuote && viewQuote.status !== 'converted' && viewQuote.status !== 'cancelled' && (
+            <div className="flex shrink-0 flex-wrap gap-2 border-t border-border/60 px-5 py-3">
+              <PrintTemplatePicker docType="quotation" onSelect={(config) => printQuotation(viewQuote, config)} />
+              <Button variant="outline" className="flex-1" size="sm" onClick={() => printQuotation(viewQuote)}>
+                <Printer className="h-4 w-4" /> Print / PDF
+              </Button>
+              <Button variant="outline" className="flex-1" size="sm" onClick={() => backupApi.downloadQuotationPDF(viewQuote.id)}>
+                <Download className="h-4 w-4" /> Download PDF
+              </Button>
+              <Button className="flex-1" size="sm" disabled={convertingId === viewQuote.id} onClick={() => { const q = viewQuote; setViewQuote(null); convert(q) }}>
+                <Wallet className="h-4 w-4" /> Convert to Invoice
+              </Button>
             </div>
           )}
         </DialogContent>

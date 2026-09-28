@@ -315,11 +315,12 @@ export default function SalesInvoicesPage() {
       </Card>
 
       <Dialog open={viewInvoice !== null} onOpenChange={(open) => { if (!open) setViewInvoice(null) }}>
-        <DialogContent className="max-w-lg print-dialog">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92vh] w-[calc(100vw-2rem)] max-w-2xl flex-col gap-0 overflow-visible p-0 print-dialog">
+          <DialogHeader className="shrink-0 space-y-1.5 border-b border-border/60 px-5 py-4 pr-12">
             <DialogTitle>{viewInvoice?.number}</DialogTitle>
             <DialogDescription>{viewInvoice ? `Linked order ${viewInvoice.shopifyOrder || '—'} · ${formatDate(viewInvoice.date ?? '')}` : ''}</DialogDescription>
           </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {viewInvoice ? (
             <div className="space-y-0.5 text-sm">
               <DetailRow label="Customer" value={viewInvoice.customer || '—'} />
@@ -359,7 +360,8 @@ export default function SalesInvoicesPage() {
               ) : null}
             </div>
           ) : null}
-          <DialogFooter className="no-print">
+          </div>
+          <DialogFooter className="no-print shrink-0 flex-wrap gap-2 border-t border-border/60 px-5 py-3">
             <Button variant="outline" onClick={() => setViewInvoice(null)}>Close</Button>
             <Button variant="outline" onClick={() => window.print()}>
               <Printer className="h-4 w-4" /> Print / PDF
@@ -385,7 +387,7 @@ export default function SalesInvoicesPage() {
                 </Button>
               )
             })()}
-            <Button asChild>
+            <Button asChild className="ml-auto">
               <Link to={`/sales/invoices/${viewInvoice?.id ?? ''}`}>
                 <Eye className="h-4 w-4" /> Open Full Page
               </Link>
