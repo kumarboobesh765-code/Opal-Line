@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Loader2, RefreshCw, GripVertical, Receipt, X, History, ExternalLink } from 'lucide-react'
+import { Loader2, RefreshCw, GripVertical, Receipt, X, History, ExternalLink, MoveRight } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { dbApi } from '@/lib/api'
 import { formatCurrency } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { confirmDialog, toast } from '@/components/ui/confirm'
 import type { SalesOrder } from '@/types'
 
 const COLUMNS: Array<{ key: SalesOrder['status']; label: string; accent: string }> = [
@@ -46,6 +47,8 @@ export default function OrderBoard() {
   const [panelOrder, setPanelOrder] = useState<SalesOrder | null>(null)
   const [events, setEvents] = useState<OrderEvent[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
   const navigate = useNavigate()
 
   const load = async () => {
@@ -103,6 +106,45 @@ export default function OrderBoard() {
     }
   }
 
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const toggleColumn = (_status: string, colOrders: SalesOrder[]) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      const allSelected = colOrders.length > 0 && colOrders.every((o) => next.has(o.id))
+      for (const o of colOrders) {
+        if (allSelected) next.delete(o.id)
+        else next.add(o.id)
+      }
+      return next
+    })
+
+  // Bulk stage move: one confirmed call per selection batch keeps the supply
+  // chain moving faster than dragging cards one by one.
+  const bulkMove = async (status: SalesOrder['status']) => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    const col = COLUMNS.find((c) => c.key === status)
+    if (!(await confirmDialog({ title: `Move ${ids.length} order(s) to "${col?.label ?? status}"?` }))) return
+    setBulkBusy(true)
+    try {
+      const r = await dbApi.bulkOrderStatus(ids, status)
+      toast.success(`${r.updated} order(s) moved to ${r.status}`)
+      setSelected(new Set())
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Bulk move failed')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-4 sm:space-y-5 sm:py-6 lg:px-6">
       <PageHeader
@@ -116,6 +158,18 @@ export default function OrderBoard() {
       />
 
       {error && <p className="rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-500 dark:text-red-400">{error}</p>}
+
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-2">
+          <span className="text-xs font-medium">{selected.size} selected</span>
+          {COLUMNS.filter((c) => c.key !== 'cancelled').map((c) => (
+            <Button key={c.key} size="sm" variant="outline" onClick={() => bulkMove(c.key)} disabled={bulkBusy}>
+              <MoveRight className="h-3.5 w-3.5" /> {c.label}
+            </Button>
+ ))}
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelected(new Set())}>Clear</Button>
+        </div>
+      )}
 
       {loading && orders.length === 0 ? (
         <div className="flex items-center justify-center py-24 text-muted-foreground">
@@ -141,6 +195,16 @@ export default function OrderBoard() {
                   <span className={cn('h-2 w-2 rounded-full', col.accent)} />
                   <span className="text-sm font-medium">{col.label}</span>
                   <Badge variant="secondary" className="ml-auto">{colOrders.length}</Badge>
+                  {colOrders.length > 0 && col.key !== 'cancelled' && (
+                    <button
+                      type="button"
+                      aria-label={`Select all ${col.label} orders`}
+                      className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      onClick={() => toggleColumn(col.key, colOrders)}
+                    >
+                      select
+                    </button>
+                  )}
                 </div>
                 <p className="px-3 pt-1.5 text-xs text-muted-foreground">{formatCurrency(total)}</p>
                 <div className="flex-1 space-y-2 p-2">
@@ -159,6 +223,14 @@ export default function OrderBoard() {
                       onClick={() => { if (!dragId) void openTimeline(o) }}
                     >
                       <div className="flex items-start gap-1.5">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select order ${o.internalId || o.shopifyId}`}
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer"
+                          checked={selected.has(o.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleSelect(o.id)}
+                        />
                         <GripVertical className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-xs font-medium">{o.customer || 'Walk-in'}</p>
