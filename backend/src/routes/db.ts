@@ -313,6 +313,28 @@ dbRouter.get('/products/duplicates', requirePermission('inventory', 'view'), asy
   }
 })
 
+// Duplicate customer-email detection (non-destructive advisory for the UI).
+// Two legitimate Shopify identities can share an inbox — the banner warns,
+// it never merges.
+dbRouter.get('/customers/duplicate-emails', requirePermission('sales', 'view'), async (_req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const rows = await db!.execute<Record<string, unknown>>(sql`
+      SELECT lower(email) AS email, count(*)::int AS cnt,
+             string_agg(name || ' (' || id || ')', ' | ') AS customers
+      FROM customers
+      WHERE email IS NOT NULL AND email <> ''
+      GROUP BY lower(email)
+      HAVING count(*) > 1
+      ORDER BY cnt DESC
+    `)
+    res.json({ data: rows })
+  } catch (err) {
+    logger.error({ err }, 'duplicate email check failed')
+    res.status(500).json({ error: 'Duplicate email check failed' })
+  }
+})
+
 dbRouter.get('/products/:id', oneOf(s.products, s.products.id))
 
 dbRouter.get('/customers', listOf(s.customers, s.customers.name))

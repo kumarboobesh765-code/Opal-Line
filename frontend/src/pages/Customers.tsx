@@ -41,11 +41,14 @@ export default function CustomersPage() {
   const [importing, setImporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [piiGap, setPiiGap] = useState(0)
+  const [duplicateEmails, setDuplicateEmails] = useState<Array<{ email: string; cnt: number; customers: string }>>([])
   const [exportLink, setExportLink] = useState<string | null>(null)
   const csvInputRef = useRef<HTMLInputElement>(null)
 
   const refreshPiiGap = useCallback(() => {
     shopifyApi.piiGap().then((r) => setPiiGap(r.missing)).catch(() => {})
+    // Advisory only: shared inboxes are warned about, never merged.
+    dbApi.getCustomerDuplicateEmails().then((r) => setDuplicateEmails(r.data)).catch(() => setDuplicateEmails([]))
   }, [])
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -408,6 +411,15 @@ export default function CustomersPage() {
               Open the export download page
             </a>
           ) : null}
+        </div>
+      ) : null}
+
+      {duplicateEmails.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-info-200 bg-info-50 px-4 py-2.5 text-sm text-info-800 dark:border-info-500/30 dark:bg-info-500/10 dark:text-info-200">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <b>{duplicateEmails.length}</b> email address{duplicateEmails.length === 1 ? '' : 'es'} shared by multiple customers ({duplicateEmails.map((d) => d.email).join(', ')}). These may be separate people sharing an inbox — review before emailing.
+          </span>
         </div>
       ) : null}
 
