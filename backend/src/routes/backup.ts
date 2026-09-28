@@ -11,6 +11,7 @@ import { pushRestoredDataToShopify } from '../shopify'
 import { getMasterKey } from '../lib/crypto'
 import { notifyBackupComplete, notifyLowStock, notifyDailySummary, notifyBackupFiles } from '../notifications'
 import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateWhatsApp, sendLowStockWhatsApp, sendPaymentReminderWhatsApp, isWhatsAppConfigured } from '../whatsapp'
+import { filterAttachableFiles, MAX_TOTAL_ATTACHMENT_MB } from '../mailAttachments'
 
 export const backupRouter = Router()
 
@@ -1277,7 +1278,8 @@ backupRouter.post('/notifications/daily-summary', requirePermission('system', 'e
 // EMAIL BACKUP FILES: send full-DB or per-scope backup files as attachments
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAX_EMAIL_ATTACHMENT_BYTES = 20 * 1024 * 1024 // stay under the 25 MB Gmail limit
+// Single shared budget for backup email attachments (see mailAttachments.ts).
+const MAX_EMAIL_ATTACHMENT_BYTES = MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024
 
 backupRouter.post('/email', requirePermission('system', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
@@ -1331,7 +1333,6 @@ backupRouter.post('/email-separate', requirePermission('system', 'edit'), async 
     const scopeKeys = BACKUP_SCOPES.filter((s) => s.key !== 'full').map((s) => s.key)
     const files: Array<{ fileName: string; content: Buffer; label: string; records: number }> = []
     const exportedAt = new Date().toISOString()
-    let totalRecords = 0
     let skipped: string[] = []
     for (const key of scopeKeys) {
       const result = await exportScopeData(key)
@@ -1345,17 +1346,26 @@ backupRouter.post('/email-separate', requirePermission('system', 'edit'), async 
         label: result.label,
         records: Object.values(result.data).reduce((a, rows) => a + (Array.isArray(rows) ? rows.length : 0), 0),
       })
-      totalRecords += files[files.length - 1].records
     }
     if (files.length === 0) return res.status(500).json({ error: 'No scope could be exported', skipped })
-    const totalBytes = files.reduce((a, f) => a + f.content.length, 0)
-    if (totalBytes > MAX_EMAIL_ATTACHMENT_BYTES) {
-      return res.status(413).json({ error: `All scopes together are ${(totalBytes / (1024 * 1024)).toFixed(1)} MB — too large for one email. Use Download instead.`, sizeBytes: totalBytes })
+    // Attachment budget: send what fits (shared helper), report the rest as
+    // skipped so the response stays truthful about what was emailed.
+    const budget = filterAttachableFiles(files)
+    if (budget.attachable.length === 0) {
+      return res.status(413).json({
+        error: `Exported files are too large for one email (20 MB limit). Use Download instead.`,
+        skipped: [...skipped, ...budget.skipped.map((s) => `${s.fileName}: ${s.reason}`)],
+      })
     }
+    for (const s of budget.skipped) skipped.push(`${s.fileName}: ${s.reason}`)
+    const totalRecords = budget.attachable.reduce(
+      (a, f) => a + (files.find((f2) => f2.fileName === f.fileName)?.records ?? 0),
+      0,
+    )
     const sent = await notifyBackupFiles(
       email,
-      files.map((f) => ({ fileName: f.fileName, content: f.content })),
-      { scopeLabel: 'All scopes (separate files)', tableCount: files.length, recordCount: totalRecords, note: skipped.length ? `Skipped: ${skipped.join('; ')}` : undefined },
+      budget.attachable,
+      { scopeLabel: 'All scopes (separate files)', tableCount: budget.attachable.length, recordCount: totalRecords, note: skipped.length ? `Skipped: ${skipped.join('; ')}` : undefined },
     )
     if (!sent) return res.status(502).json({ error: 'Email send failed — check notification settings' })
     const actor = actorFromRequest(req)
@@ -1367,7 +1377,7 @@ backupRouter.post('/email-separate', requirePermission('system', 'edit'), async 
       userId: actor.userId,
       ip: actor.ip,
     })
-    res.json({ ok: true, email, files: files.map((f) => f.fileName), totalBytes, skipped })
+    res.json({ ok: true, email, files: budget.attachable.map((f) => f.fileName), totalBytes: budget.totalMb * 1024 * 1024, skipped })
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'Backup email (separate) failed')
     res.status(500).json({ error: 'Backup email failed' })
