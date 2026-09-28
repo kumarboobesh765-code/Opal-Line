@@ -235,3 +235,46 @@ describe('reconcileListingImages (survivors-only write-back)', () => {
     assert.equal(calls.length, 0, 'no Shopify calls for an empty local gallery')
   })
 })
+
+const baseLocal = (over: Partial<Parameters<typeof shopify.buildShopifyImages>[0]> = {}) => ({
+  id: 'p1', name: 'Test Ring', sku: 'SKU1', barcode: null, huid: null, category: null,
+  collection: null, purity: null, supplier: null, vendor: null, productType: null,
+  description: null, tags: null, image: null, images: null, sellingPrice: null,
+  compareAtPrice: null, stock: null, trackInventory: null, chargeOnTax: null,
+  shopifyId: null, shopifyStatus: null, status: null,
+  ...over,
+})
+
+describe('buildShopifyImages (image policy: only user-provided images push)', () => {
+  test('keeps data URLs and external URLs', async () => {
+    const imgs = await shopify.buildShopifyImages(baseLocal({
+      images: ['data:image/png;base64,AAA', 'https://example.com/ring.jpg'],
+    }))
+    // data URL → attachment, external → src (uploads are disk-backed and are
+    // covered by the CDN-filter semantics, not testable without a real file)
+    assert.equal(imgs.length, 2)
+    assert.ok(imgs.every((i) => i.attachment || i.src))
+  })
+
+  test('never pushes cdn.shopify.com round-trip URLs', async () => {
+    const imgs = await shopify.buildShopifyImages(baseLocal({
+      image: 'https://cdn.shopify.com/s/files/1/0001/files/from-shopify.jpg?v=1',
+      images: [
+        'https://cdn.shopify.com/s/files/1/0001/files/gallery.jpg?v=2',
+        'data:image/jpeg;base64,BBB',
+      ],
+    }))
+    assert.equal(imgs.length, 1, 'only the user-provided data URL survives')
+    assert.ok(imgs[0].attachment)
+  })
+
+  test('all-CDN gallery pushes nothing (create stays imageless, no random images)', async () => {
+    const imgs = await shopify.buildShopifyImages(baseLocal({
+      id: 'p3',
+      sku: 'SKU3',
+      image: 'https://cdn.shopify.com/s/files/1/0001/files/a.jpg',
+      images: ['https://cdn.shopify.com/s/files/1/0001/files/b.jpg'],
+    }))
+    assert.deepEqual(imgs, [])
+  })
+})
