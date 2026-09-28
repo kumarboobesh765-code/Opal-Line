@@ -130,6 +130,14 @@ async function runAutoBackup(): Promise<void> {
         const recipient = process.env.NOTIFICATION_EMAIL?.trim()
         if (recipient) {
           const content = await readFile(path.join(autoBackupDirectory(), fileName))
+          // 20 MB attachment guard — oversize archives are skipped with a log
+          // instead of a failed 25+ MB SMTP send.
+          const { filterAttachableFiles } = await import('./mailAttachments')
+          const budget = filterAttachableFiles([{ fileName, content }])
+          if (budget.attachable.length === 0) {
+            logger.warn({ file: fileName, sizeMb: (content.length / (1024 * 1024)).toFixed(1) }, 'Auto-backup archive too large to email — skipped')
+            return
+          }
           const sent = await notifyBackupFiles(recipient, [{ fileName, content }], {
             scopeLabel: 'Full Backup (auto email)',
             tableCount: Object.keys(result.data).length,
