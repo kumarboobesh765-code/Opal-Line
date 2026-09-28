@@ -25,6 +25,7 @@ import { validate, createOrderSchema, updateOrderSchema, silverRateSchema, pushP
 import { logger } from './logger'
 import { CONSTANTS } from './constants'
 import { applyTrustProxy } from './proxyTrust'
+import { PgRateLimitStore, pruneExpiredRateLimits } from './pgRateLimitStore'
 import { verifyShopifyWebhook } from './webhooks'
 import { recountCustomerStats } from './customerStats'
 import { startAutoBackup, startDailySummary } from './autoBackup'
@@ -195,12 +196,16 @@ app.use((req, res, next) => {
 })
 app.use(express.urlencoded({ extended: true, limit: CONSTANTS.REQUEST_SIZE_LIMIT }))
 
+// Per-IP counters live in Postgres so backend restarts don't reset them
+// (memory store would let an attacker wait out or trigger a restart to get a
+// fresh budget). The account lockout in login_attempts is independent of this.
 const authLimiter = rateLimit({
   windowMs: CONSTANTS.RATE_LIMIT_AUTH_WINDOW_MS,
   max: CONSTANTS.RATE_LIMIT_AUTH_MAX,
   message: { error: 'Too many authentication attempts, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: new PgRateLimitStore('auth'),
   keyGenerator: (req) => ipKeyGenerator(req.ip ?? 'unknown'),
 })
 
@@ -210,6 +215,7 @@ const passwordResetLimiter = rateLimit({
   message: { error: 'Too many password reset attempts, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
+  store: new PgRateLimitStore('pwreset'),
   keyGenerator: (req) => ipKeyGenerator(req.ip ?? 'unknown'),
 })
 
@@ -2055,6 +2061,9 @@ async function startServer() {
     void import('./productAutoSync').then((m) => m.startProductAutoSync())
     // Daily business summary email (9:00 AM IST).
     startDailySummary()
+    // Hourly sweep of expired per-IP rate-limit rows.
+    const rateLimitPruneTimer = setInterval(() => void pruneExpiredRateLimits(), 60 * 60 * 1000)
+    rateLimitPruneTimer.unref()
     // Monthly customer statements (1st, 08:30) and due-date reminders (daily 09:15).
     void import('./monthlyStatements').then((m) => m.startMonthlyStatements())
     void import('./dueReminders').then((d) => d.startDueReminders())
