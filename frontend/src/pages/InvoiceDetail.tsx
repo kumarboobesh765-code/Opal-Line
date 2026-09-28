@@ -19,6 +19,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { PrintTemplatePicker } from '@/components/print-template-picker'
 import { printDocument, mergePrintConfig, type PrintDoc } from '@/lib/printTemplate'
 import { printTemplatesApi } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
@@ -88,7 +89,7 @@ export default function InvoiceDetailPage() {
     return <div className="px-6 py-6 text-sm text-muted-foreground">Invoice not found.</div>
   }
 
-  const printInvoice = () => {
+  const printInvoice = (configOverride?: unknown) => {
     // Settings (GSTIN/address/phone) win over values stamped on the invoice row.
     const business = {
       businessName: settings?.businessName || invoice.businessName,
@@ -128,7 +129,9 @@ export default function InvoiceDetailPage() {
         amount: i.amount,
       })),
     }
-    const merged = mergePrintConfig(printConfig)
+    // An explicit config comes from the saved-template picker; otherwise the
+    // saved default (or stock layout) applies.
+    const merged = mergePrintConfig(configOverride ?? printConfig)
     // Prefer a manually-uploaded QR design; otherwise use the auto UPI QR.
     const withQr = merged.qrDataUrl ? merged : { ...merged, showQr: upiQr !== null, qrDataUrl: upiQr, qrCaption: 'Scan to pay via UPI' }
     printDocument(doc, withQr, {
@@ -241,7 +244,8 @@ export default function InvoiceDetailPage() {
         subtitle={`${invoice.shopifyOrder ? `Shopify Order ${invoice.shopifyOrder}` : 'Manual / Booking invoice'} · ${formatDateTime(invoice.date)}`}
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={printInvoice}><Printer className="h-3.5 w-3.5" /> Print</Button>
+            <PrintTemplatePicker docType="invoice" onSelect={(config) => printInvoice(config)} />
+            <Button variant="outline" size="sm" onClick={() => printInvoice()}><Printer className="h-3.5 w-3.5" /> Print</Button>
             <Button variant="outline" size="sm" onClick={printInvoice}><Download className="h-3.5 w-3.5" /> Save as PDF</Button>
             <Button variant="outline" size="sm" onClick={emailInvoice} disabled={emailSending}><Mail className="h-3.5 w-3.5" /> {emailSending ? 'Sending…' : 'Email'}</Button>
             {invoice.customerPhone ? (

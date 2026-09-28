@@ -35,6 +35,7 @@ import type { AppSettings, Quotation } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { printDocument, mergePrintConfig } from '@/lib/printTemplate'
 import { printTemplatesApi } from '@/lib/api'
+import { PrintTemplatePicker } from '@/components/print-template-picker'
 
 const statusBadge: Record<string, { label: string; variant: 'success' | 'warning' | 'info' | 'muted' }> = {
   draft: { label: 'Draft', variant: 'info' },
@@ -77,7 +78,7 @@ export default function QuotationsPage() {
     printTemplatesApi.getDefault('quotation').then((r) => setPrintConfig(r.config)).catch(() => {})
   }, [])
 
-  const printQuotation = (q: Quotation) => {
+  const printQuotation = (q: Quotation, configOverride?: unknown) => {
     const items = q.items ?? []
     const validity = q.validUntil ? formatDate(q.validUntil) : '15 days from quotation date'
     printDocument(
@@ -111,7 +112,9 @@ export default function QuotationsPage() {
           amount: i.amount,
         })),
       },
-      mergePrintConfig(printConfig),
+      // An explicit config comes from the saved-template picker; otherwise the
+      // saved default (or stock layout) applies.
+      mergePrintConfig(configOverride ?? printConfig),
       {
         docType: 'quotation',
         tagline: '92.5 Sterling Silver Jewellery',
@@ -592,6 +595,7 @@ export default function QuotationsPage() {
               {viewQuote.notes && <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">{viewQuote.notes}</p>}
               {viewQuote.status !== 'converted' && viewQuote.status !== 'cancelled' && (
                 <div className="flex gap-2">
+                  <PrintTemplatePicker docType="quotation" onSelect={(config) => printQuotation(viewQuote, config)} />
                   <Button variant="outline" className="flex-1" size="sm" onClick={() => printQuotation(viewQuote)}>
                     <Printer className="h-4 w-4" /> Print / PDF
                   </Button>
