@@ -1,6 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const BASE_URL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:47192'
+// Dev stack runs the web UI on 47195 (Vite) and the installed app on 47192.
+// Default to the dev server — override with E2E_BASE_URL for other targets.
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:47195'
 
 export default defineConfig({
   testDir: './e2e',

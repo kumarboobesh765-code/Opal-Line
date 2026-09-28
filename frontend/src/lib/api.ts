@@ -630,6 +630,7 @@ export const dbApi = {
   resendNotification: (id: string) =>
     request<{ ok: boolean }>('/db/notifications/resend', { method: 'POST', body: JSON.stringify({ id }) }),
   getProductDuplicates: () => request<{ data: Array<{ sku: string; cnt: number; products: string }> }>('/db/products/duplicates'),
+  getCustomerDuplicateEmails: () => request<{ data: Array<{ email: string; cnt: number; customers: string }> }>('/db/customers/duplicate-emails'),
   scanProduct: (code: string) =>
     request<{ data: { id: string; name: string; sku: string; barcode: string | null; stock: number | null; category: string | null } }>(
       `/db/products/scan?code=${encodeURIComponent(code)}`,
