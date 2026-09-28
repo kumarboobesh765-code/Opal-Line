@@ -26,6 +26,9 @@ interface RouteRegistrar {
  *   DELETE /quotations/:id        delete
  *   POST   /quotations/:id/convert  convert into a real tax invoice (no stock movement
  *                                  until conversion; conversion mirrors manual invoices)
+ *   POST   /quotations/:id/convert-order  convert into a confirmed sales order
+ *                                  (no stock movement; fulfilment still happens
+ *                                  on the order — for pre-orders/productions)
  */
 
 const QUOTE_PREFIX = 'QT-'
@@ -297,6 +300,87 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       if (msg.includes('Insufficient stock')) { res.status(400).json({ error: msg }); return }
       res.status(500).json({ error: 'Failed to convert quotation' })
+    }
+  })
+
+  // Convert an approved quotation into a confirmed local sales order — for
+  // pre-orders and made-to-order production where fulfilment (and invoicing)
+  // happens later on the order. No stock movement here; stock is only
+  // deducted when the order is invoiced or a Shopify draft is fulfilled.
+  router.post('/quotations/:id/convert-order', requirePermission('sales', 'create'), async (req: Request, res: Response) => {
+    if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
+    try {
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      if (!quote) { res.status(404).json({ error: 'Not found' }); return }
+      if (quote.convertedInvoice) {
+        res.status(400).json({ error: `Already converted to ${quote.convertedInvoice}` })
+        return
+      }
+      const items = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, quote.id))
+      if (items.length === 0) { res.status(400).json({ error: 'Quotation has no line items' }); return }
+
+      const lineItems = items.map((it) => {
+        const qty = Math.max(1, Number(it.qty ?? 1))
+        return {
+          title: it.product ?? '',
+          sku: it.sku ?? '',
+          quantity: Math.max(0, Number(it.qty ?? 0)),
+          price: round2(Number(it.amount ?? 0) / qty),
+        }
+      })
+
+      const now = new Date()
+      const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+      let internalId = ''
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const candidate = `SO${ym}-${Math.floor(100000 + Math.random() * 900000)}`
+        const [clash] = await db.select({ id: s.salesOrders.id }).from(s.salesOrders).where(eq(s.salesOrders.internalId, candidate)).limit(1)
+        if (!clash) { internalId = candidate; break }
+      }
+      if (!internalId) { res.status(500).json({ error: 'Could not generate order number' }); return }
+
+      const discount = num(quote.discount, 0)
+      const value = round2(quote.grandTotal ?? items.reduce((a, it) => a + Number(it.amount ?? 0), 0))
+      const orderId = randomUUID()
+
+      await db.transaction(async (tx) => {
+        await tx.insert(s.salesOrders).values({
+          id: orderId,
+          internalId,
+          customer: quote.customer,
+          customerEmail: quote.customerEmail ?? undefined,
+          customerPhone: quote.customerPhone ?? undefined,
+          value,
+          payment: 'pending',
+          fulfillment: 'pending',
+          status: 'confirmed',
+          date: now.toISOString(),
+          items: lineItems.reduce((a, it) => a + it.quantity, 0),
+          tags: `from-quotation:${quote.number}`,
+          currency: 'INR',
+          discount,
+          lineItems,
+          // sales_orders carries addresses as jsonb, not flattened columns.
+          shippingAddress: (quote.customerAddress || quote.customerCity || quote.customerState || quote.customerPincode)
+            ? {
+                address1: quote.customerAddress ?? '',
+                city: quote.customerCity ?? '',
+                province: quote.customerState ?? '',
+                zip: quote.customerPincode ?? '',
+                phone: quote.customerPhone ?? '',
+              }
+            : undefined,
+        })
+        await tx.update(s.quotations).set({
+          status: 'converted',
+          convertedInvoice: internalId,
+          convertedAt: now.toISOString(),
+        }).where(eq(s.quotations.id, quote.id))
+      })
+
+      res.status(201).json({ ok: true, orderNumber: internalId, orderId })
+    } catch {
+      res.status(500).json({ error: 'Failed to convert quotation to order' })
     }
   })
 }

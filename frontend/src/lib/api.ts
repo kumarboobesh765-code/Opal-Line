@@ -673,6 +673,8 @@ export const dbApi = {
   deleteQuotation: (id: string) => request<{ ok: boolean }>(`/db/quotations/${id}`, { method: 'DELETE' }),
   convertQuotation: (id: string) =>
     request<{ ok: boolean; invoiceNumber: string; invoiceId: string }>(`/db/quotations/${id}/convert`, { method: 'POST' }),
+  convertQuotationToOrder: (id: string) =>
+    request<{ ok: boolean; orderNumber: string; orderId: string }>(`/db/quotations/${id}/convert-order`, { method: 'POST' }),
   getPurchaseInvoices: () => list<PurchaseInvoice>('/db/purchase-invoices', PAGED),
   getSalesReturns: () => list<SalesReturn>('/db/sales-returns', PAGED),
   getPurchaseReturns: () => list<PurchaseReturn>('/db/purchase-returns', PAGED),
