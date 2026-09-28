@@ -966,10 +966,16 @@ function buildShopifyTags(local: LocalProductForPush): string {
  * stable `alt` marker (filename or content hash) so a re-push can recognise
  * images already on the Shopify product instead of duplicating them.
  */
-async function buildShopifyImages(local: LocalProductForPush): Promise<Array<Record<string, string>>> {
+export async function buildShopifyImages(local: LocalProductForPush): Promise<Array<Record<string, string>>> {
   const imageSrcs = Array.from(new Set([...(local.images ?? []).filter(Boolean), local.image].filter(Boolean) as string[]))
+  // IMAGE POLICY: only images the user actually provided (uploads, data URLs,
+  // external URLs) are pushed to Shopify. cdn.shopify.com URLs are sync
+  // artifacts written back into local rows after earlier pushes/imports —
+  // re-attaching them would duplicate or reshuffle listings with images the
+  // user never chose, so they are always skipped here.
+  const pushable = imageSrcs.filter((src) => !/^https?:\/\/[^/]*cdn\.shopify\.com\//i.test(src))
   const images: Array<Record<string, string>> = []
-  for (const src of imageSrcs.slice(0, 20)) {
+  for (const src of pushable.slice(0, 20)) {
     if (/^data:image\//i.test(src)) {
       const base64 = src.slice(src.indexOf(',') + 1)
       if (base64) {
