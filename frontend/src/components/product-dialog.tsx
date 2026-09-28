@@ -30,6 +30,7 @@ export interface ProductDialogProps {
 
 interface ProductForm {
   name: string
+  description: string
   sku: string
   barcode: string
   huid: string
@@ -74,6 +75,7 @@ const CATEGORIES = [
 
 const EMPTY_FORM: ProductForm = {
   name: '',
+  description: '',
   sku: '',
   barcode: '',
   huid: '',
@@ -104,6 +106,7 @@ const EMPTY_FORM: ProductForm = {
 function fromProduct(p: Product): ProductForm {
   return {
     name: p.name ?? '',
+    description: p.description ?? '',
     sku: p.sku ?? '',
     barcode: p.barcode ?? '',
     huid: p.huid ?? '',
@@ -144,6 +147,7 @@ function computePrice(form: ProductForm): number {
 function buildBody(form: ProductForm, silverRate: number, sellingPrice: number) {
   return {
     name: form.name.trim(),
+    description: form.description.trim() || null,
     sku: form.sku.trim(),
     barcode: form.barcode.trim() || null,
     huid: form.huid.trim() || null,
@@ -370,6 +374,16 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
             <div className="grid grid-cols-2 gap-3">
               <Field label="Title *" className="col-span-2">
                 <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Silver Classic Ring" />
+              </Field>
+              <Field label="Description" className="col-span-2">
+                <textarea
+                  className="min-h-[90px] w-full resize-y rounded-md border bg-transparent p-2 text-sm outline-none focus:ring-1 focus:ring-primary-400"
+                  value={form.description}
+                  onChange={(e) => set('description', e.target.value)}
+                  placeholder="Product description shown on the Shopify listing — features, dimensions, care instructions…"
+                  rows={4}
+                />
+                <p className="text-[11px] text-muted-foreground">Synced to Shopify body_html when the product is pushed.</p>
               </Field>
               <Field label="SKU *">
                 <Input value={form.sku} onChange={(e) => set('sku', e.target.value)} placeholder="e.g. SLV-RNG-00001" />

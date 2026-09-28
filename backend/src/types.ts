@@ -5,6 +5,7 @@ export interface SyncProduct {
   handle: string
   vendor: string
   productType: string
+  description: string
   collection: string
   chargeOnTax: boolean
   status: string

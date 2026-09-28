@@ -62,6 +62,7 @@ export const products = pgTable('products', {
   images: jsonb('images'),
   vendor: text('vendor'),
   productType: text('product_type'),
+  description: text('description'),
   tags: text('tags'),
   trackInventory: boolean('track_inventory').notNull().default(true),
   chargeOnTax: boolean('charge_on_tax').notNull().default(true),
