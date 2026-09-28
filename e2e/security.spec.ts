@@ -74,6 +74,13 @@ test.describe('anonymous requests', () => {
     expect(body.error ?? '').toMatch(/csrf/i)
   })
 
+  test('anonymous PATCH/DELETE are also rejected without a CSRF token', async ({ request }) => {
+    const res = await request.patch('/api/v1/db/customers/000000000000000000', { data: { name: 'x' } })
+    expect([403], `anonymous PATCH returned HTTP ${res.status()}`).toContain(res.status())
+    const del = await request.delete('/api/v1/print-templates/000000000000000000')
+    expect([403], `anonymous DELETE returned HTTP ${del.status()}`).toContain(del.status())
+  })
+
   test('new mutation endpoints reject unauthenticated calls', async ({ request }) => {
     for (const path of PROTECTED_POST_NO_CSRF) {
       const res = await request.post(path, { data: { scope: 'customers' } })
@@ -173,6 +180,26 @@ test.describe('authenticated requests', () => {
     expect(session, 'session cookie missing — did global-setup log in?').toBeTruthy()
     expect(session!.httpOnly).toBe(true)
     expect(session!.sameSite).toBe('Strict')
+  })
+
+  test('authenticated PATCH/DELETE without a CSRF token are rejected', async ({ request }) => {
+    // The CSRF middleware runs before auth and routing, so these must return
+    // 403 (not 404/401) — proving the check fires for every mutating verb,
+    // not just POST. IDs are dummy; a valid id must not change the outcome.
+    const probes: Array<{ path: string; method: 'patch' | 'delete' }> = [
+      { path: '/api/v1/db/customers/000000000000000000', method: 'patch' },
+      { path: '/api/v1/print-templates/000000000000000000', method: 'patch' },
+      { path: '/api/v1/print-templates/000000000000000000', method: 'delete' },
+      { path: '/api/v1/db/quotations/000000000000000000', method: 'delete' },
+    ]
+    for (const { path, method } of probes) {
+      const res = method === 'patch'
+        ? await request.patch(path, { data: { name: 'csrf-probe' } })
+        : await request.delete(path)
+      expect(res.status(), `${method.toUpperCase()} ${path} returned HTTP ${res.status()}`).toBe(403)
+      const body = (await res.json()) as { error?: string }
+      expect(body.error ?? '').toMatch(/csrf/i)
+    }
   })
 
   test('env-config never returns raw secret values', async ({ request }) => {

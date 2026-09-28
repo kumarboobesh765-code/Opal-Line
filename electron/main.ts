@@ -429,6 +429,30 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
   mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
+  // Defence-in-depth: the renderer must only ever be the app's own UI. Block
+  // navigations to anything else (a compromised renderer or a stray target=
+  // _self link must not turn the main window into an arbitrary website).
+  const appOrigins = new Set([
+    isDev ? 'http://localhost:47195' : `http://localhost:${BACKEND_PORT}`,
+    'http://127.0.0.1:47195',
+    `http://127.0.0.1:${BACKEND_PORT}`,
+    '[::1]:47195',
+  ])
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let origin = ''
+    try {
+      const parsed = new URL(url)
+      origin = parsed.host ? `${parsed.protocol}//${parsed.host}` : ''
+    } catch { /* unparseable → treat as foreign */ }
+    const sameApp = origin !== '' && Array.from(appOrigins).some((o) => {
+      try { return new URL(o).host === new URL(url).host && new URL(o).protocol === new URL(url).protocol } catch { return false }
+    })
+    if (!sameApp) {
+      event.preventDefault()
+      // Surface genuine external links in the user's browser instead.
+      if (/^https?:/i.test(url)) shell.openExternal(url)
+    }
+  })
   mainWindow.on('closed', () => { mainWindow = null })
 }
 
