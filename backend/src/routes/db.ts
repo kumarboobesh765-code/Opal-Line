@@ -2220,6 +2220,40 @@ dbRouter.get('/dues', requirePermission('sales', 'view'), async (_req, res) => {
   }
 })
 
+// Bulk payment reminders: one email per customer with outstanding dues.
+// Recipients come from the customers table (matched by name); customers
+// without an email on file are counted as skipped.
+dbRouter.post('/dues/remind', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    const { collectDues } = await import('../statements')
+    const dues = await collectDues()
+    if (dues.length === 0) return res.status(200).json({ sent: 0, skipped: 0, reason: 'No outstanding dues' })
+    const customers = await db!.select({ name: schema.customers.name, email: schema.customers.email }).from(schema.customers)
+    const emailByName = new Map(customers.filter((c) => c.email).map((c) => [c.name.toLowerCase(), c.email as string]))
+    const { sendEmail } = await import('../notifications')
+    let sent = 0
+    let skipped = 0
+    const failures: string[] = []
+    for (const d of dues) {
+      const to = emailByName.get((d.customer ?? '').toLowerCase())
+      if (!to) { skipped++; continue }
+      const invoiceList = d.invoiceNumbers.slice(0, 8).map((n) => `• ${escapeHtml(n)}`).join('<br/>')
+      const ok = await sendEmail({
+        to,
+        subject: `Payment reminder — ${d.invoiceCount} outstanding invoice${d.invoiceCount === 1 ? '' : 's'} (₹${d.total.toLocaleString('en-IN')})`,
+        html: `<p>Dear ${escapeHtml(d.customer)},</p><p>Our records show <strong>${d.invoiceCount}</strong> unpaid invoice${d.invoiceCount === 1 ? '' : 's'} totalling <strong>₹${d.total.toLocaleString('en-IN')}</strong>:</p><p style="font-family: monospace; font-size: 12px;">${invoiceList}</p><p>Please arrange payment at your earliest convenience. Reply to this email or call us if you have already paid or need a copy of any invoice.</p><p>— Opal Line Jewels LLP</p>`,
+      })
+      if (ok) sent++
+      else failures.push(d.customer ?? 'unknown')
+    }
+    logger.info({ sent, skipped }, 'Bulk payment reminders processed')
+    res.json({ sent, skipped, failures })
+  } catch (err) {
+    logger.error({ err }, 'payment reminders failed')
+    res.status(500).json({ error: 'Failed to send payment reminders' })
+  }
+})
+
 dbRouter.post('/dues/email', requirePermission('sales', 'view'), async (req, res) => {
   try {
     const [settingsRow] = await db!.select().from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)

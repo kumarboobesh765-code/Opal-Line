@@ -479,6 +479,8 @@ export const dbApi = {
   },
   getLowStock: (): Promise<LowStockItem[]> => request('/db/dashboard/low-stock'),
   getRecentActivities: (): Promise<Activity[]> => request('/db/dashboard/activities'),
+  getDashboardSecurity: (): Promise<{ failedLogins24h: number; lockedAccounts: number; recent: Array<{ entity: string | null; details: string | null; timestamp: string | null }> }> =>
+    request('/db/dashboard/security'),
   getNotificationFeed: () =>
     request<{ items: Array<{ type: string; title: string; detail: string | null; at: string | null; href: string }>; counts: { total: number; lowStock: number; alerts: number } }>('/db/notifications/feed'),
   getAnalyticsStats: (): Promise<AnalyticsStat[]> => request('/db/dashboard/analytics'),
@@ -658,6 +660,8 @@ export const dbApi = {
       method: 'POST',
       body: JSON.stringify({ to }),
     }),
+  sendPaymentReminders: (): Promise<{ sent: number; skipped: number; failures?: string[]; reason?: string }> =>
+    request('/db/dues/remind', { method: 'POST' }),
   recordPayment: (payload: { customer: string; amount: number; method: string }) =>
     request<{ ok: boolean; ref: string; settled: string[]; remainingOutstanding: number }>('/db/dues/pay', {
       method: 'POST',
@@ -867,6 +871,9 @@ export const backupApi = {
     request('/settings/auto-backup/encrypted', { method: 'POST', body: JSON.stringify({ encrypted }) }),
   verifyAllBackups: (): Promise<{ checked: number; ok: number; corrupt: Array<{ fileName: string; error: string }>; verifiedAt: string }> =>
     request('/backup/verify-all', { method: 'POST' }),
+  getBackupAutoEmail: (): Promise<{ enabled: boolean }> => request('/backup/auto-email'),
+  setBackupAutoEmail: (enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> =>
+    request('/backup/auto-email', { method: 'POST', body: JSON.stringify({ enabled }) }),
   diff: (file1: string, file2: string): Promise<BackupDiffResult> =>
     request<BackupDiffResult>('/backup/diff', {
       method: 'POST',

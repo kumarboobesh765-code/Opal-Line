@@ -19,6 +19,7 @@ import {
   PackageX,
   Plus,
   Repeat,
+  ShieldAlert,
   ShoppingBag,
   ShoppingCart,
   Sparkles,
@@ -110,6 +111,7 @@ export default function DashboardPage() {
   const [silverHistory, setSilverHistory] = useState<SilverRatePoint[]>([])
   const [lowStock, setLowStock] = useState<LowStockItem[]>([])
   const [activities, setActivities] = useState<Activity[]>([])
+  const [security, setSecurity] = useState<{ failedLogins24h: number; lockedAccounts: number; recent: Array<{ entity: string | null; details: string | null; timestamp: string | null }> } | null>(null)
   const [analytics, setAnalytics] = useState<AnalyticsStat[]>([])
   const [shopifyStatus, setShopifyStatus] = useState<ShopifyStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -128,8 +130,9 @@ export default function DashboardPage() {
       dbApi.getLowStock().catch(() => []),
       dbApi.getRecentActivities().catch(() => []),
       dbApi.getAnalyticsStats().catch(() => []),
+      dbApi.getDashboardSecurity().catch(() => null),
       shopifyApi.getStatus().catch(() => null),
-    ]).then(([k, s, tp, ps, sr, sh, ls, ac, an, ss]) => {
+    ]).then(([k, s, tp, ps, sr, sh, ls, ac, an, sec, ss]) => {
       if (cancelled) return
       setKpis(k)
       setSummary(s)
@@ -140,6 +143,7 @@ export default function DashboardPage() {
       setLowStock(ls)
       setActivities(ac)
       setAnalytics(an)
+      setSecurity(sec)
       setShopifyStatus(ss)
       setLoading(false)
     }).catch(() => {
@@ -364,6 +368,45 @@ export default function DashboardPage() {
                     ))}
                   </TableBody>
                 </Table>
+              </CardContent>
+            </Card>
+
+            <Card className="xl:col-span-1">
+              <CardHeader>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-muted-foreground" /> Security (24h)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {security ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-lg border p-3">
+                        <p className="text-2xl font-bold text-foreground">{security.failedLogins24h}</p>
+                        <p className="text-[11px] text-muted-foreground">Failed logins (24h)</p>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <p className={`text-2xl font-bold ${security.lockedAccounts > 0 ? 'text-destructive' : 'text-foreground'}`}>{security.lockedAccounts}</p>
+                        <p className="text-[11px] text-muted-foreground">Locked accounts</p>
+                      </div>
+                    </div>
+                    {security.recent.length > 0 ? (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Recent failures</p>
+                        {security.recent.map((r, i) => (
+                          <div key={i} className="flex items-center justify-between gap-2 text-[12px]">
+                            <span className="truncate font-medium text-foreground">{r.entity || 'Unknown user'}</span>
+                            <span className="shrink-0 text-muted-foreground">{r.timestamp ? new Date(r.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[12px] text-muted-foreground">No failed logins recorded.</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Security snapshot unavailable.</p>
+                )}
               </CardContent>
             </Card>
 

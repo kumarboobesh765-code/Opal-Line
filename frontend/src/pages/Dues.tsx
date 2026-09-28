@@ -1,6 +1,6 @@
 import { confirmDialog, toast } from '@/components/ui/confirm'
 import { useEffect, useMemo, useState } from 'react'
-import { IndianRupee, Mail, MessageCircle, RefreshCw, Wallet } from 'lucide-react'
+import { BellRing, IndianRupee, Mail, MessageCircle, RefreshCw, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -51,6 +51,7 @@ export default function DuesPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [emailing, setEmailing] = useState(false)
+  const [reminding, setReminding] = useState(false)
   const [customers, setCustomers] = useState<Array<{ name: string; phone?: string | null }>>([])
   const [payFor, setPayFor] = useState<CustomerDue | null>(null)
   const [payAmount, setPayAmount] = useState('')
@@ -85,6 +86,20 @@ export default function DuesPage() {
       toast.error(err instanceof Error ? err.message : 'Email failed')
     } finally {
       setEmailing(false)
+    }
+  }
+
+  const remindAll = async () => {
+    if (!(await confirmDialog({ title: 'Email a payment reminder to every customer with dues?', description: 'Customers without an email on file are skipped. Rate-limited to prevent spam.', confirmLabel: 'Send reminders' }))) return
+    setReminding(true)
+    try {
+      const res = await dbApi.sendPaymentReminders()
+      if (res.reason) toast.info(res.reason)
+      else toast.success(`${res.sent} reminder${res.sent === 1 ? '' : 's'} sent${res.skipped ? `, ${res.skipped} skipped (no email)` : ''}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Reminders failed')
+    } finally {
+      setReminding(false)
     }
   }
 
@@ -127,6 +142,9 @@ export default function DuesPage() {
             </Button>
             <Button variant="outline" size="sm" onClick={emailStatement} disabled={emailing || !data || data.dues.length === 0}>
               <Mail className="h-3.5 w-3.5" /> Email Statement
+            </Button>
+            <Button variant="outline" size="sm" onClick={remindAll} disabled={reminding || !data || data.dues.length === 0}>
+              <BellRing className={`h-3.5 w-3.5 ${reminding ? 'animate-pulse' : ''}`} /> Remind All
             </Button>
           </>
         }

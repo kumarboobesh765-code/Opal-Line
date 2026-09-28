@@ -37,6 +37,8 @@ function BackupRestoreContent() {
   const [diffResult, setDiffResult] = useState<BackupDiffResult | null>(null)
   const [autoEnc, setAutoEnc] = useState<boolean | null>(null)
   const [autoEncBusy, setAutoEncBusy] = useState(false)
+  const [autoEmail, setAutoEmail] = useState<boolean | null>(null)
+  const [autoEmailBusy, setAutoEmailBusy] = useState(false)
   const [verifyBusy, setVerifyBusy] = useState(false)
   const [verifyResult, setVerifyResult] = useState<{ checked: number; ok: number; corrupt: Array<{ fileName: string; error: string }> } | null>(null)
   const [restoreOpts, setRestoreOpts] = useState<{ restoreSilverRate: boolean; skipShopify: boolean; createSafetyBackup: boolean; tables: string[] }>({ restoreSilverRate: false, skipShopify: false, createSafetyBackup: true, tables: [] })
@@ -60,6 +62,7 @@ function BackupRestoreContent() {
     backupApi.getScopes().then(setScopes).catch(() => {})
     backupApi.getAutoBackupStatus().then(setAutoStatus).catch(() => setAutoStatus(null))
     backupApi.autoBackupSettings().then((s) => setAutoEnc(s.encrypted)).catch(() => setAutoEnc(null))
+    backupApi.getBackupAutoEmail().then((s) => setAutoEmail(s.enabled)).catch(() => setAutoEmail(null))
     reloadHistory()
     reloadFiles()
   }, [reloadHistory, reloadFiles])
@@ -74,6 +77,19 @@ function BackupRestoreContent() {
       showMsg(false, e instanceof Error ? e.message : 'Failed to update setting')
     } finally {
       setAutoEncBusy(false)
+    }
+  }
+
+  const toggleAutoEmail = async (value: boolean) => {
+    setAutoEmailBusy(true)
+    try {
+      await backupApi.setBackupAutoEmail(value)
+      setAutoEmail(value)
+      showMsg(true, value ? 'The 7 PM auto backup will now be emailed to the notification address (files over 20 MB are skipped).' : 'Auto backup emails turned off — backups stay on the server only.')
+    } catch (e) {
+      showMsg(false, e instanceof Error ? e.message : 'Failed to update setting')
+    } finally {
+      setAutoEmailBusy(false)
     }
   }
 
@@ -378,6 +394,13 @@ function BackupRestoreContent() {
               <div className="text-xs text-muted-foreground">Writes the 7 PM auto backup as AES-256-GCM encrypted file</div>
             </div>
             <Switch checked={autoEnc === true} disabled={autoEncBusy || autoEnc === null} onCheckedChange={(v) => void toggleAutoEnc(v)} />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <div className="text-sm font-medium">Email the nightly auto backup</div>
+              <div className="text-xs text-muted-foreground">Attaches the fresh archive to an email after the 7 PM run (files over 20 MB are skipped)</div>
+            </div>
+            <Switch checked={autoEmail === true} disabled={autoEmailBusy || autoEmail === null} onCheckedChange={(v) => void toggleAutoEmail(v)} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" onClick={runVerifyAll} disabled={verifyBusy}>

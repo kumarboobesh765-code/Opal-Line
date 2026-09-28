@@ -713,6 +713,27 @@ backupRouter.get('/auto-status', requirePermission('system', 'view'), async (_re
   }
 })
 
+// Auto-email toggle: when on, the 7 PM auto-backup attaches the fresh archive
+// to an email (subject to the 20 MB attachment guard inside the send path).
+backupRouter.get('/auto-email', requirePermission('system', 'view'), async (_req, res) => {
+  try {
+    const { isBackupEmailEnabled } = await import('../autoBackup')
+    res.json({ enabled: await isBackupEmailEnabled() })
+  } catch {
+    res.status(500).json({ error: 'Could not load auto email setting' })
+  }
+})
+
+backupRouter.post('/auto-email', requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const { setBackupEmailEnabled } = await import('../autoBackup')
+    await setBackupEmailEnabled(req.body?.enabled === true)
+    res.json({ ok: true, enabled: req.body?.enabled === true })
+  } catch {
+    res.status(500).json({ error: 'Could not save auto email setting' })
+  }
+})
+
 backupRouter.get('/history', requirePermission('system', 'view'), async (_req, res) => {
   const client = getRawClient()
   if (!client) return res.status(503).json({ error: 'Service temporarily unavailable' })
