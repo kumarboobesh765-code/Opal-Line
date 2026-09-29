@@ -99,40 +99,44 @@ jobs:
         # installer; allow 15 minutes before treating the install as stuck.
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1 -InstallTimeoutSec 900
 
-      - name: Read first-run admin credentials
-        id: creds
+      # The generated first-run credential is surfaced through a desktop
+      # dialog, which headless sessions may never show (the app then deletes
+      # the credentials JSON in its finally block). Rather than scraping logs,
+      # stop the smoke-test stack, reset the admin's password directly in the
+      # bundled PostgreSQL and relaunch the app.
+      - name: Reset admin password for the e2e suite
         shell: pwsh
         run: |
-          $credFile = Join-Path $env:APPDATA 'Opal Line Billing\data\first-run-credentials.json'
+          Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill(); $_.WaitForExit(5000) | Out-Null } catch {} }
+          foreach ($port in 47192, 47193) {
+            Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } catch {} }
+          }
+          Start-Sleep -Seconds 3
+          $hash = node -e "require('argon2').hash('Opal@2026').then(h => console.log(h))"
+          if (-not $hash) { Write-Error 'argon2 hash generation failed.'; exit 1 }
+          $pgDir = Join-Path $env:LOCALAPPDATA 'Programs\Opal Line Billing\resources\pgsql\bin'
+          $pgdata = Join-Path $env:APPDATA 'Opal Line Billing\pgdata'
+          $env:PGPASSWORD = (Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\.pg-password') -Raw).TrimEnd()
+          & (Join-Path $pgDir 'pg_ctl.exe') start -D $pgdata -w -t 60
+          if ($LASTEXITCODE -ne 0) { Write-Error 'pg_ctl start failed.'; exit 1 }
+          & (Join-Path $pgDir 'psql.exe') -h 127.0.0.1 -p 47193 -U postgres -d opal_line -v ON_ERROR_STOP=1 -c "UPDATE users SET password_hash = '$hash', require_password_change = false WHERE username = 'admin';"
+          if ($LASTEXITCODE -ne 0) { Write-Error 'psql password reset failed.'; exit 1 }
+          & (Join-Path $pgDir 'pg_ctl.exe') stop -D $pgdata -m fast -w -t 60
+          Remove-Item Env:PGPASSWORD
+
+      - name: Relaunch the app for Playwright
+        shell: pwsh
+        run: |
+          Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'Programs\Opal Line Billing\Opal Line Billing.exe')
           $deadline = (Get-Date).AddSeconds(120)
-          while (-not (Test-Path $credFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-          $password = $null
-          if (Test-Path $credFile) {
-            $creds = Get-Content $credFile -Raw | ConvertFrom-Json
-            $password = $creds.password
-          } else {
-            # Headless sessions may prevent the first-run dialog from showing,
-            # in which case the app deletes the JSON without displaying it.
-            # The bootstrap also prints the credential into the app log -
-            # recover it from there instead.
-            Write-Warning 'first-run-credentials.json not found; falling back to the app log banner.'
-            $log = Join-Path $env:APPDATA 'Opal Line Billing\logs\app.log'
-            if (Test-Path $log) {
-              $line = Select-String -Path $log -Pattern 'Password: (\S+)' | Select-Object -Last 1
-              if ($line) { $password = $line.Matches[0].Groups[1].Value }
-            }
+          $ok = $false
+          while ((Get-Date) -lt $deadline -and -not $ok) {
+            try {
+              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47192/api/v1/health' -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200) { $ok = $true }
+            } catch { Start-Sleep -Seconds 2 }
           }
-          if (-not $password) {
-            Write-Host '--- diagnostics: app data dir ---'
-            Get-ChildItem (Join-Path $env:APPDATA 'Opal Line Billing') -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object FullName | ForEach-Object { Write-Host $_.FullName }
-            Write-Host '--- diagnostics: app.log tail ---'
-            Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\logs\app.log') -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-            Write-Error 'Could not determine the generated admin password from the credentials file or the app log.'
-            exit 1
-          }
-          # Mask so the generated password never leaks into job logs.
-          Write-Host "::add-mask::$password"
-          "password=$password" >> $env:GITHUB_OUTPUT
+          if (-not $ok) { Write-Error 'App did not come back healthy after relaunch.'; exit 1 }
 
       - name: Install Playwright chromium
         run: npx playwright install chromium
@@ -142,7 +146,7 @@ jobs:
         env:
           E2E_BASE_URL: http://127.0.0.1:47192
           E2E_USER: admin
-          E2E_PASSWORD: ${{ steps.creds.outputs.password }}
+          E2E_PASSWORD: Opal@2026
         run: npx playwright test
 
       - name: Upload Playwright artifacts on failure
