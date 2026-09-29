@@ -103,10 +103,10 @@ if (-not $exited) {
   try { $proc.Kill() } catch {}
   # Some environments (GitHub windows runners) keep the silent installer
   # process alive while the app it launched keeps running. Completion is
-  # judged by the extracted-tree + registry checks below — only fail the
+  # judged by the extracted-tree + registry checks below; only fail the
   # timeout when nothing was installed.
   if (Test-Path $appExe) {
-    Write-Warning "Installer did not exit within $InstallTimeoutSec s but the app tree is present — continuing."
+    Write-Warning "Installer did not exit within $InstallTimeoutSec s but the app tree is present - continuing."
   } else {
     Report 'Installer finished' $false "timed out after $InstallTimeoutSec s and no app tree"
   }
