@@ -106,18 +106,33 @@ jobs:
           $credFile = Join-Path $env:APPDATA 'Opal Line Billing\data\first-run-credentials.json'
           $deadline = (Get-Date).AddSeconds(120)
           while (-not (Test-Path $credFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-          if (-not (Test-Path $credFile)) {
-            Write-Error "First-run credentials file not found at $credFile — the backend bootstrap did not create an admin."
-            exit 1
+          $password = $null
+          if (Test-Path $credFile) {
+            $creds = Get-Content $credFile -Raw | ConvertFrom-Json
+            $password = $creds.password
+          } else {
+            # Headless sessions may prevent the first-run dialog from showing,
+            # in which case the app deletes the JSON without displaying it.
+            # The bootstrap also prints the credential into the app log -
+            # recover it from there instead.
+            Write-Warning 'first-run-credentials.json not found; falling back to the app log banner.'
+            $log = Join-Path $env:APPDATA 'Opal Line Billing\logs\app.log'
+            if (Test-Path $log) {
+              $line = Select-String -Path $log -Pattern 'Password: (\S+)' | Select-Object -Last 1
+              if ($line) { $password = $line.Matches[0].Groups[1].Value }
+            }
           }
-          $creds = Get-Content $credFile -Raw | ConvertFrom-Json
-          if (-not $creds.password) {
-            Write-Error 'first-run-credentials.json has no password field.'
+          if (-not $password) {
+            Write-Host '--- diagnostics: app data dir ---'
+            Get-ChildItem (Join-Path $env:APPDATA 'Opal Line Billing') -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object FullName | ForEach-Object { Write-Host $_.FullName }
+            Write-Host '--- diagnostics: app.log tail ---'
+            Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\logs\app.log') -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Write-Error 'Could not determine the generated admin password from the credentials file or the app log.'
             exit 1
           }
           # Mask so the generated password never leaks into job logs.
-          Write-Host "::add-mask::$($creds.password)"
-          "password=$($creds.password)" >> $env:GITHUB_OUTPUT
+          Write-Host "::add-mask::$password"
+          "password=$password" >> $env:GITHUB_OUTPUT
 
       - name: Install Playwright chromium
         run: npx playwright install chromium
