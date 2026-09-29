@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
         env:
-          # CI never builds the desktop app; skip the ~100 MB Electron download.
+          # CI never builds the desktop app here; skip the ~100 MB Electron download.
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
       - name: Lint (frontend, oxlint)
@@ -33,3 +33,108 @@ jobs:
 
       - name: Build frontend (tsc -b && vite build)
         run: npm run build
+
+  desktop-e2e:
+    name: Desktop installer e2e (Windows)
+    # Builds the signed installer exactly like release.yml does, silent-installs
+    # it, boots the app and runs the full Playwright suite against the INSTALLED
+    # app — the only environment where the bundled-PostgreSQL bootstrap and the
+    # packaged backend actually execute.
+    runs-on: windows-latest
+    needs: checks
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # No ELECTRON_SKIP_BINARY_DOWNLOAD here — electron-builder packages the
+      # Electron runtime into the installer.
+      - name: Install dependencies
+        run: npm ci
+
+      # Same certificate dance as release.yml: the build hard-fails without a
+      # cert whose subject contains "Opal Line Billing". Never import into
+      # CurrentUser\Root on a headless runner — the confirmation dialog hangs
+      # the job; the machine stores never prompt (runners are elevated).
+      - name: Import code-signing certificate
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WIN_SIGNING_PFX_B64 }}
+          PFX_PASSWORD: ${{ secrets.WIN_SIGNING_PFX_PASSWORD }}
+        run: |
+          if (-not $env:PFX_B64) {
+            Write-Error 'Missing repository secret WIN_SIGNING_PFX_B64 (base64 PFX of the "Opal Line Billing" code-signing cert). See .github/workflows/release.yml for how to create it.'
+            exit 1
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'code-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
+          $sec = if ($env:PFX_PASSWORD) { ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force } else { New-Object System.Security.SecureString }
+          $cert = Import-PfxCertificate -FilePath $pfx -Password $sec -CertStoreLocation 'Cert:\CurrentUser\My'
+          Remove-Item $pfx -Force
+          if ($cert.Subject -notlike '*Opal Line Billing*') {
+            Write-Error "Unexpected certificate subject: $($cert.Subject) (expected CN=Opal Line Billing)"
+            exit 1
+          }
+          $cer = Join-Path $env:RUNNER_TEMP 'signing-cert.cer'
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          certutil -f -addstore Root $cer
+          certutil -f -addstore TrustedPublisher $cer
+          Remove-Item $cer -Force
+          Write-Host "Imported $($cert.Subject) thumbprint=$($cert.Thumbprint)"
+
+      - name: Build signed Windows installer
+        run: npm run electron:build
+
+      # Installs silently, verifies the extracted tree + signature + uninstall
+      # entry, boots the app and probes PG 47193 / API 47192. Deliberately run
+      # WITHOUT -StopAtEnd so the app keeps serving the Playwright suite below.
+      - name: Installer smoke test (install + boot the app)
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1
+
+      - name: Read first-run admin credentials
+        id: creds
+        shell: pwsh
+        run: |
+          $credFile = Join-Path $env:APPDATA 'Opal Line Billing\data\first-run-credentials.json'
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not (Test-Path $credFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (-not (Test-Path $credFile)) {
+            Write-Error "First-run credentials file not found at $credFile — the backend bootstrap did not create an admin."
+            exit 1
+          }
+          $creds = Get-Content $credFile -Raw | ConvertFrom-Json
+          if (-not $creds.password) {
+            Write-Error 'first-run-credentials.json has no password field.'
+            exit 1
+          }
+          # Mask so the generated password never leaks into job logs.
+          Write-Host "::add-mask::$($creds.password)"
+          "password=$($creds.password)" >> $env:GITHUB_OUTPUT
+
+      - name: Install Playwright chromium
+        run: npx playwright install chromium
+
+      - name: Playwright suite against the installed app
+        shell: bash
+        env:
+          E2E_BASE_URL: http://127.0.0.1:47192
+          E2E_USER: admin
+          E2E_PASSWORD: ${{ steps.creds.outputs.password }}
+        run: npx playwright test
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-desktop-e2e
+          path: |
+            test-results/
+            e2e/.auth/
+          retention-days: 7
+          if-no-files-found: ignore

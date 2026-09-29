@@ -279,6 +279,14 @@ backend 47192 probes):
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1 -StopAtEnd
 ```
 
+CI goes further on every push (the `desktop-e2e` job in
+`.github/workflows/ci.yml`): it builds the signed installer, silent-installs
+it, boots the app and runs the full Playwright suite against the installed
+backend using the generated first-run admin credentials. The first-run
+bootstrap has also been verified on a clean machine (install dir, `%APPDATA%`
+data and uninstall keys wiped first): bundled PostgreSQL initializes, the
+schema bootstraps, and the generated admin can log in.
+
 Note: NSIS remembers the last chosen install directory from earlier runs — if
 the smoke test fails on path checks, uninstall via the existing
 *Uninstall Opal Line Billing* entry first, then re-run. End-user install steps
