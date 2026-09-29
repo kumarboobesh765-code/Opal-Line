@@ -107,17 +107,27 @@ page, or build it yourself (last subsection).
 1. Run `Opal-Line-Billing-Setup-<version>.exe`. It is code-signed — SmartScreen
    shows **Opal Line Jewels LLP** as the verified publisher, and no UAC prompt
    appears.
-2. Choose the install folder (default
-   `%LOCALAPPDATA%\Programs\Opal Line Billing`).
-3. Keep **Create desktop shortcut** and **Create Start Menu shortcut** ticked,
-   then click *Install*.
-4. Leave **Run Opal Line Billing** ticked and click *Finish*. First launch
-   automatically:
+2. On **Choose Installation Options**, pick "Anyone who uses this computer"
+   or "Only for me" — either way no admin rights are needed. Click *Next*.
+
+   ![Installation options](docs/screenshots/installer/installer-step1-options.png)
+
+3. The wizard copies the app, the bundled backend and PostgreSQL
+   (~145 MB, about half a minute).
+
+   ![Installing](docs/screenshots/installer/installer-step2-installing.png)
+
+4. Click *Finish* on the completion page. **Run Opal Line Billing** is ticked
+   by default — leave it to launch straight away. First launch automatically:
    - initializes the bundled PostgreSQL 16.4 into
      `%APPDATA%\Opal Line Billing\pgdata` (port **47193**),
    - starts the backend API (port **47192**) and applies the schema + seed
-     roles and the admin user.
-5. Log in with **admin / Opal@2026** and change the password in
+     roles, then shows a one-time dialog with the generated **admin**
+     password (store it — it is displayed only once).
+
+   ![Finish](docs/screenshots/installer/installer-step3-finish.png)
+
+5. Log in as **admin** with the generated password and change it in
    *System → Users & Roles*.
 
 ### What's inside
@@ -151,6 +161,15 @@ boots the app and probes ports 47192/47193:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1 -StopAtEnd
+```
+
+The full Playwright suite can also run against the **installed app** (it must
+be running). Pass its port and the generated admin password (shown once on
+first launch):
+
+```bash
+E2E_BASE_URL=http://127.0.0.1:47192 E2E_PASSWORD=<generated-password> npx playwright test
+# 52 pass, 1 skips — the repaired-demo-order test needs dev-store data
 ```
 
 Note: NSIS remembers the last chosen install directory (e.g. from a previous

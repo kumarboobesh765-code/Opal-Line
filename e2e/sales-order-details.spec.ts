@@ -32,8 +32,14 @@ test.describe('sales order details dialog', () => {
     await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible({ timeout: 20000 })
 
     // Find the row for a PII-recovered order (Kavya Reddy, order #1030 on the
-    // dev store) and open its dialog.
+    // dev store) and open its dialog. The repaired row is dev-store data —
+    // skip on installations whose database doesn't contain it (e.g. the
+    // desktop app with a fresh seeded database).
     const row = page.locator('table tbody tr', { hasText: 'Kavya Reddy' }).first()
+    if ((await row.count()) === 0) {
+      test.skip(true, 'repaired demo order (Kavya Reddy) not present in this database')
+      return
+    }
     await row.getByRole('button', { name: /view order/i }).click({ timeout: 20000 })
 
     const dialog = page.getByRole('dialog')

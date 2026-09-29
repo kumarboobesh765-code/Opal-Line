@@ -107,6 +107,9 @@ export async function testEmailIngestConnection(): Promise<MailboxTestResult> {
     logger: false,
     emitLogs: false,
   })
+  // Transient socket errors must not surface as uncaughtException — the
+  // connection test reports failure through its return value instead.
+  client.on('error', () => {})
   try {
     await client.connect()
     const box = await client.mailboxOpen(cfg.folder)
@@ -926,6 +929,11 @@ export async function pollCustomerExport(): Promise<CustomerExportResult> {
     logger: false,
     emitLogs: false,
   })
+  // Socket errors (DNS failures, TLS resets) can fire on the underlying
+  // socket outside the awaited connect() call — without a listener they
+  // escape as uncaughtException and kill the whole backend. Poll failures
+  // are already reported through res.errors / the catch below.
+  client.on('error', () => {})
   try {
     await client.connect()
     await client.mailboxOpen(cfg.folder)
@@ -1067,6 +1075,9 @@ export async function pollOrderMailbox(): Promise<IngestResult> {
     logger: false,
     emitLogs: false,
   })
+  // Same guard as the customer-export poller: without an 'error' listener a
+  // stray socket reset (DNS flap, TLS reset) crashes the backend process.
+  client.on('error', () => {})
   try {
     await client.connect()
     await client.mailboxOpen(cfg.folder)

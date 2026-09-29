@@ -1,5 +1,11 @@
 # Opal Line ERP — Deployment Guide
 
+> **Shipping the desktop app to end users?** The signed Windows installer
+> needs no Node.js, no PostgreSQL and no admin rights on the target machine —
+> see **[README → Install the desktop app](README.md#install-the-desktop-app-windows-installer)**
+> for the user-facing install guide, and the reserved **47191–47198 port map**
+> in [README → Ports](README.md#ports).
+
 ## Prerequisites
 
 - **Node.js** 18+ (recommended: 20 LTS)
@@ -75,6 +81,9 @@ npm run dev
 cd backend && npm run dev   # :47191
 cd frontend && npm run dev  # :47195
 ```
+
+The full dev/desktop/Docker port assignments live in
+[README → Ports](README.md#ports).
 
 ## 4. Production Build
 
@@ -203,6 +212,10 @@ Requires a [Resend](https://resend.com) account (free tier: 100 emails/day):
 curl http://localhost:47191/api/v1/health
 ```
 
+For database + Shopify sync verification commands (authenticated
+`/shopify/status` and `/shopify/sync` calls with expected responses), see
+**[README → Verify database & Shopify sync](README.md#verify-database--shopify-sync)**.
+
 ### Logs
 
 ```bash
@@ -257,6 +270,19 @@ The workflow lints/tests, imports the code-signing cert, builds the NSIS
 installer (frontend + bundled backend + portable PostgreSQL), verifies the
 Authenticode signature, and attaches `Opal.Line.Billing-Setup-<ver>.exe` +
 `.blockmap` to a GitHub Release. Builds take ~20-25 min.
+
+Before attaching an installer to a release, run the committed smoke test
+(silent install, extracted-tree + signature checks, app boot, PG 47193 /
+backend 47192 probes):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1 -StopAtEnd
+```
+
+Note: NSIS remembers the last chosen install directory from earlier runs — if
+the smoke test fails on path checks, uninstall via the existing
+*Uninstall Opal Line Billing* entry first, then re-run. End-user install steps
+are documented in [README → Install the desktop app](README.md#install-the-desktop-app-windows-installer).
 
 ### One-time setup: signing certificate
 
