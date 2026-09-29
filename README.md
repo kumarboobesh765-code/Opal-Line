@@ -19,13 +19,24 @@ PostgreSQL (postgres.js) · **Desktop** Electron (Windows NSIS installer, signed
 | **Printing** | Print Designer (5 doc types: invoice, quotation, order, packing slip, pick list), saved templates with defaults, design import/export (`.opal-print.json`), auto UPI QR on invoices |
 | **Ops & security** | RBAC (per-user permissions), audit + activity logs, encrypted backups with auto-email & off-site push (S3-compatible), session controls (log out other devices), rate limiting persisted in Postgres, webhook replay protection, magic-byte upload validation |
 
+## Screenshots
+
+| | |
+|---|---|
+| **Dashboard** — KPIs, silver rate, low-stock alerts | **Sales orders** — bulk packing slips / pick lists with product thumbnails |
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Sales orders](docs/screenshots/sales-orders.png) |
+| **Invoices** — GST billing with UPI QR | **Invoice detail** — print / PDF with product images |
+| ![Invoices](docs/screenshots/sales-invoices.png) | ![Invoice detail](docs/screenshots/invoice-detail.png) |
+| **Quotations** — validity terms, one-click print | **Products** — catalogue with Shopify sync status |
+| ![Quotations](docs/screenshots/quotations.png) | ![Products](docs/screenshots/products.png) |
+
 ## Repository layout
 
 ```
 frontend/           React + Vite + Tailwind UI (billing software)
 backend/            Express + Drizzle + PostgreSQL API, Shopify sync, pricing
 electron/           Electron main/preload + electron-builder config
-e2e/                Playwright end-to-end tests (51)
+e2e/                Playwright end-to-end tests (53)
 docs/               Guides (Flow webhook, release notes draft)
 scripts/            Build, desktop packaging and maintenance utilities
 ```
