@@ -95,7 +95,9 @@ jobs:
       # WITHOUT -StopAtEnd so the app keeps serving the Playwright suite below.
       - name: Installer smoke test (install + boot the app)
         shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1
+        # Runners can be slow on the first Defender scan of the 145 MB
+        # installer; allow 15 minutes before treating the install as stuck.
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-install.ps1 -InstallTimeoutSec 900
 
       - name: Read first-run admin credentials
         id: creds
