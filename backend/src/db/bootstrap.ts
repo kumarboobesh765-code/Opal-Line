@@ -272,8 +272,6 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         shipping_address jsonb,
         is_booking boolean,
         advance_paid numeric,
-        customer_email text,
-        customer_phone text,
         note text,
         created_at timestamp DEFAULT now(),
         updated_at timestamp
@@ -960,13 +958,35 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
     if (!hasUsers) {
       logger.info('Bootstrap: fresh database detected — creating schema')
       await createSchema(sql)
+      // Bring the fresh schema fully up to date BEFORE seeding defaults —
+      // seedDefaults inserts columns (settings.pan, TDS/UPI flags, …) that
+      // createSchema's baseline DDL does not include yet.
+      await applyUpgrades(sql)
       const drizzleDb = drizzle(sql, { schema })
       const seeded = await seedDefaults(drizzleDb)
       return { ran: true, tablesCreated: true, adminPassword: seeded.adminPassword }
     }
 
     // Existing DB: apply idempotent additions for upgrades
-    const upgrades: string[] = [
+    await applyUpgrades(sql)
+    const upgradeDb = drizzle(sql, { schema })
+    await repairAdminRolePermissions(upgradeDb).catch(() => undefined)
+    await repairAdminUserOverride(upgradeDb).catch(() => undefined)
+    return { ran: true, tablesCreated: false }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+/**
+ * Idempotent schema additions applied on EVERY bootstrap. Runs on existing
+ * databases to upgrade them in place, and on freshly created schemas so a
+ * brand-new install is on the latest shape before defaults are seeded
+ * (createSchema's baseline DDL can lag behind what seedDefaults inserts —
+ * e.g. the settings TDS/UPI columns were only ever added here).
+ */
+async function applyUpgrades(sql: postgres.Sql): Promise<void> {
+  const upgrades: string[] = [
       `CREATE TABLE IF NOT EXISTS loyalty_transactions (
         id text PRIMARY KEY,
         customer_id text NOT NULL,
@@ -1220,11 +1240,4 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
     await sql.unsafe(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS customer_shopify_id text`).catch(() => undefined)
     await sql.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_customer_shopify_id_idx ON sales_orders (customer_shopify_id)`).catch(() => undefined)
     await sql.unsafe(`CREATE INDEX IF NOT EXISTS sales_orders_customer_email_idx ON sales_orders (customer_email)`).catch(() => undefined)
-    const upgradeDb = drizzle(sql, { schema })
-    await repairAdminRolePermissions(upgradeDb).catch(() => undefined)
-    await repairAdminUserOverride(upgradeDb).catch(() => undefined)
-    return { ran: true, tablesCreated: false }
-  } finally {
-    await sql.end({ timeout: 5 })
-  }
 }

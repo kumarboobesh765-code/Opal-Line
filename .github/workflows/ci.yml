@@ -134,7 +134,7 @@ jobs:
               # pg_ctl's stdout handle and PowerShell waits for EOF.
               $pgctlLog = Join-Path $env:RUNNER_TEMP 'pgctl.log'
               foreach ($mode in @(@('stop', '-m', 'fast'), @('start'))) {
-                $args = @($mode[0]) + ($mode | Select-Object -Skip 1) + @('-D', $pgdata, '-w', '-t', '120')
+                $args = @($mode[0]) + ($mode | Select-Object -Skip 1) + @('-D', "\"$pgdata\"", '-w', '-t', '120')
                 Start-Process -FilePath (Join-Path $pgDir 'pg_ctl.exe') -ArgumentList $args -Wait -NoNewWindow -RedirectStandardOutput $pgctlLog -RedirectStandardError "$pgctlLog.err"
                 Get-Content $pgctlLog, "$pgctlLog.err" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "pg_ctl $($mode[0]): $_" }
               }
