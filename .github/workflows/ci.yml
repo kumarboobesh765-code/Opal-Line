@@ -111,12 +111,36 @@ jobs:
           $hash = node -e "require('argon2').hash('Opal@2026').then(h => console.log(h))"
           if (-not $hash) { Write-Error 'argon2 hash generation failed.'; exit 1 }
           $pgDir = Join-Path $env:LOCALAPPDATA 'Programs\Opal Line Billing\resources\pgsql\bin'
+          $pgdata = Join-Path $env:APPDATA 'Opal Line Billing\pgdata'
           $env:PGPASSWORD = (Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\.pg-password') -Raw).TrimEnd()
+          $psql = Join-Path $pgDir 'psql.exe'
+          $qArgs = @('-h', '127.0.0.1', '-p', '47193', '-U', 'postgres', '-d', 'opal_line', '-v', 'ON_ERROR_STOP=1', '-Atc')
           # Single-quote the SQL so PowerShell does not expand the argon2
           # hash's $-segments as variables; double any SQL single quotes.
           $sql = 'UPDATE users SET password_hash = ''' + $hash.Replace("'", "''") + ''', require_password_change = false WHERE username = ''admin'';'
-          & (Join-Path $pgDir 'psql.exe') -h 127.0.0.1 -p 47193 -U postgres -d opal_line -v ON_ERROR_STOP=1 -c $sql
-          if ($LASTEXITCODE -ne 0) { Write-Error 'psql password reset failed.'; exit 1 }
+          $updated = $false
+          foreach ($attempt in 1..5) {
+            $out = & $psql @qArgs $sql 2>&1
+            if ($LASTEXITCODE -eq 0) { $updated = $true; Write-Host "psql: $out"; break }
+            Write-Warning "attempt ${attempt}: $out"
+            if ("$out" -match 'does not exist') {
+              # The startup bootstrap has not completed on this (slow, headless)
+              # runner. Show what the backend logged, restart the stack cleanly
+              # (never SIGKILL PostgreSQL - stale postmaster.pid) and retry.
+              Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\logs\app.log') -Tail 60 -ErrorAction SilentlyContinue | Select-String -Pattern 'Bootstrap|bootstrap|error|ERROR' | ForEach-Object { Write-Host "app.log: $_" }
+              Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill(); $_.WaitForExit(5000) | Out-Null } catch {} }
+              & (Join-Path $pgDir 'pg_ctl.exe') stop -D $pgdata -m fast -w -t 60 2>&1 | ForEach-Object { Write-Host "pg_ctl: $_" }
+              & (Join-Path $pgDir 'pg_ctl.exe') start -D $pgdata -w -t 120 2>&1 | ForEach-Object { Write-Host "pg_ctl: $_" }
+              Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'Programs\Opal Line Billing\Opal Line Billing.exe')
+              $deadline = (Get-Date).AddSeconds(240)
+              while ((Get-Date) -lt $deadline) {
+                try { if ((Invoke-WebRequest -Uri 'http://127.0.0.1:47192/api/v1/health' -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200) { break } } catch { Start-Sleep -Seconds 3 }
+              }
+            } else {
+              break
+            }
+          }
+          if (-not $updated) { Write-Error 'psql password reset never succeeded.'; exit 1 }
           Remove-Item Env:PGPASSWORD
           try {
             $health = Invoke-WebRequest -Uri 'http://127.0.0.1:47192/api/v1/health' -UseBasicParsing -TimeoutSec 10
