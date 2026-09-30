@@ -129,8 +129,15 @@ jobs:
               # (never SIGKILL PostgreSQL - stale postmaster.pid) and retry.
               Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\logs\app.log') -Tail 60 -ErrorAction SilentlyContinue | Select-String -Pattern 'Bootstrap|bootstrap|error|ERROR' | ForEach-Object { Write-Host "app.log: $_" }
               Get-Process -Name 'Opal Line Billing' -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill(); $_.WaitForExit(5000) | Out-Null } catch {} }
-              & (Join-Path $pgDir 'pg_ctl.exe') stop -D $pgdata -m fast -w -t 60 2>&1 | ForEach-Object { Write-Host "pg_ctl: $_" }
-              & (Join-Path $pgDir 'pg_ctl.exe') start -D $pgdata -w -t 120 2>&1 | ForEach-Object { Write-Host "pg_ctl: $_" }
+              # Invoke pg_ctl via Start-Process: a plain pipeline stays open
+              # forever after a SUCCESSFUL start because postgres.exe inherits
+              # pg_ctl's stdout handle and PowerShell waits for EOF.
+              $pgctlLog = Join-Path $env:RUNNER_TEMP 'pgctl.log'
+              foreach ($mode in @(@('stop', '-m', 'fast'), @('start'))) {
+                $args = @($mode[0]) + ($mode | Select-Object -Skip 1) + @('-D', $pgdata, '-w', '-t', '120')
+                Start-Process -FilePath (Join-Path $pgDir 'pg_ctl.exe') -ArgumentList $args -Wait -NoNewWindow -RedirectStandardOutput $pgctlLog -RedirectStandardError "$pgctlLog.err"
+                Get-Content $pgctlLog, "$pgctlLog.err" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "pg_ctl $($mode[0]): $_" }
+              }
               Start-Process -FilePath (Join-Path $env:LOCALAPPDATA 'Programs\Opal Line Billing\Opal Line Billing.exe')
               $deadline = (Get-Date).AddSeconds(240)
               while ((Get-Date) -lt $deadline) {
