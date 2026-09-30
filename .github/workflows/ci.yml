@@ -112,7 +112,10 @@ jobs:
           if (-not $hash) { Write-Error 'argon2 hash generation failed.'; exit 1 }
           $pgDir = Join-Path $env:LOCALAPPDATA 'Programs\Opal Line Billing\resources\pgsql\bin'
           $env:PGPASSWORD = (Get-Content (Join-Path $env:APPDATA 'Opal Line Billing\.pg-password') -Raw).TrimEnd()
-          & (Join-Path $pgDir 'psql.exe') -h 127.0.0.1 -p 47193 -U postgres -d opal_line -v ON_ERROR_STOP=1 -c "UPDATE users SET password_hash = '$hash', require_password_change = false WHERE username = 'admin';"
+          # Single-quote the SQL so PowerShell does not expand the argon2
+          # hash's $-segments as variables; double any SQL single quotes.
+          $sql = 'UPDATE users SET password_hash = ''' + $hash.Replace("'", "''") + ''', require_password_change = false WHERE username = ''admin'';'
+          & (Join-Path $pgDir 'psql.exe') -h 127.0.0.1 -p 47193 -U postgres -d opal_line -v ON_ERROR_STOP=1 -c $sql
           if ($LASTEXITCODE -ne 0) { Write-Error 'psql password reset failed.'; exit 1 }
           Remove-Item Env:PGPASSWORD
           try {
