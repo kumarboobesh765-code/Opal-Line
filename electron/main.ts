@@ -668,6 +668,26 @@ function isNewerVersion(current: string, latest: string): boolean {
   return false
 }
 
+/**
+ * Fetch the latest-release metadata with limited retry/backoff. Transient
+ * network failures (DNS flap, captive portal, TLS resets) are common on shop
+ * Wi-Fi; one failure shouldn't surface as an update error.
+ */
+async function fetchLatestRelease(): Promise<{ status: number; body: string }> {
+  const url = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`
+  const headers = { 'User-Agent': 'opal-line-updater', Accept: 'application/vnd.github+json' }
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await httpsGetBody(url, headers, 20000)
+    } catch (err) {
+      lastErr = err
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 3000))
+    }
+  }
+  throw lastErr
+}
+
 async function checkForUpdates(opts: { announce: boolean }): Promise<UpdateState & { current: string }> {
   if (!app.isPackaged) {
     updateState = { ...updateState, phase: 'up-to-date' }
@@ -676,11 +696,7 @@ async function checkForUpdates(opts: { announce: boolean }): Promise<UpdateState
   if (updateState.phase === 'checking' || updateState.phase === 'downloading') return publicUpdateState()
   updateState = { ...updateState, phase: 'checking', error: null }
   try {
-    const { status, body } = await httpsGetBody(
-      `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`,
-      { 'User-Agent': 'opal-line-updater', Accept: 'application/vnd.github+json' },
-      20000,
-    )
+    const { status, body } = await fetchLatestRelease()
     if (status !== 200) throw new Error(`GitHub API returned HTTP ${status}`)
     const release = JSON.parse(body) as {
       tag_name?: string

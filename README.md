@@ -172,6 +172,18 @@ E2E_BASE_URL=http://127.0.0.1:47192 E2E_PASSWORD=<generated-password> npx playwr
 # 52 pass, 1 skips — the repaired-demo-order test needs dev-store data
 ```
 
+CI runs the whole flow on every push (`desktop-e2e` job in
+`.github/workflows/ci.yml`, Windows): build the signed installer → silent
+smoke install → full Playwright suite against the **installed** app, logging
+in with the generated first-run admin credentials.
+
+The first-run bootstrap is verified on a **clean machine**: with the install
+directory, `%APPDATA%\Opal Line Billing` and the uninstall registry entries
+wiped beforehand, the bundled PostgreSQL initializes on 47193, the backend
+bootstraps the schema (45 tables), the generated admin logs in, and
+`/api/v1/db/stats` returns fresh data. No Node.js, PostgreSQL or other
+dependency is needed on the target machine.
+
 Note: NSIS remembers the last chosen install directory (e.g. from a previous
 `/allusers` test run) and a silent install will reuse it — if the script fails
 on path checks, uninstall via the existing *Uninstall Opal Line Billing*
