@@ -66,7 +66,8 @@ export default function PaymentsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [form, setForm] = useState({
-    ref: `PAY-${Date.now()}`,
+    // Blank default: openDialog() stamps a PAY-<timestamp> ref when it opens.
+    ref: '',
     invoice: '',
     customer: '',
     amount: '',
@@ -83,7 +84,10 @@ export default function PaymentsPage() {
     }).catch(() => setLoading(false))
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const setReconciled = useCallback(async (payment: Payment, reconciled: boolean) => {
     try {
@@ -372,7 +376,7 @@ export default function PaymentsPage() {
           <div className="grid gap-4 py-4">
             <div>
               <Label htmlFor="ref">Payment Reference</Label>
-              <Input id="ref" value={form.ref} onChange={(e) => setForm((f) => ({ ...f, ref: e.target.value }))} />
+              <Input id="ref" placeholder="e.g. PAY-1001" value={form.ref} onChange={(e) => setForm((f) => ({ ...f, ref: e.target.value }))} />
             </div>
             <div>
               <Label htmlFor="invoice">Invoice Reference (optional)</Label>

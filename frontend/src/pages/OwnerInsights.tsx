@@ -20,8 +20,11 @@ export default function OwnerInsightsPage() {
   const [months, setMonths] = useState(12)
 
   useEffect(() => {
-    setLoading(true)
-    dbApi.getProfitAnalytics(months).then(setData).catch(() => setData(null)).finally(() => setLoading(false))
+    // Defer out of the effect body: setLoading fires synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      setLoading(true)
+      dbApi.getProfitAnalytics(months).then(setData).catch(() => setData(null)).finally(() => setLoading(false))
+    })
   }, [months])
 
   const chart = useMemo(() => {

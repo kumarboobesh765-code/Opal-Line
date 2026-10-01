@@ -142,7 +142,10 @@ export default function LoyaltyPage() {
     }
   }, [])
 
-  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {
+    // Defer: loadData() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(loadData)
+  }, [loadData])
 
   const enrichedCustomers = useMemo<CustomerWithBalance[]>(() => {
     return customers

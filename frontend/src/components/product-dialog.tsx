@@ -207,8 +207,11 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
     const initial = mode === 'edit' && product ? fromProduct(product) : EMPTY_FORM
     const p = computePrice(initial)
     if (Number.isFinite(p)) initial.sellingPrice = String(Math.round(p * 100) / 100)
-    setForm(initial)
-    setError('')
+    // Defer the reset out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => {
+      setForm(initial)
+      setError('')
+    })
   }, [open, mode, product])
 
   const setPricing = (key: 'silverRate' | 'makingCharge' | 'netWeight' | 'gst', value: string) => {

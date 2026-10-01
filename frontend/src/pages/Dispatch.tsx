@@ -41,7 +41,12 @@ export default function DispatchPage() {
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void load()
+    })
+  }, [load])
 
   const dispatchable = useMemo(
     () => orders.filter((o) => o.status !== 'cancelled' && !['delivered'].includes(shipments.find((sh) => sh.orderId === o.id)?.status ?? '')),

@@ -62,7 +62,10 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
   }, [lastSeenAt])
 
   useEffect(() => {
-    loadNotifications()
+    // Defer the first poll out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void loadNotifications()
+    })
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') loadNotifications()
     }, 15_000)

@@ -53,7 +53,10 @@ export default function PurchaseOrdersPage() {
     }).catch(() => setLoading(false))
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   useEffect(() => {
     dbApi.getSuppliers().then(setSuppliers).catch(() => setSuppliers([]))

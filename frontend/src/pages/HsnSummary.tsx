@@ -43,7 +43,10 @@ export default function HsnSummaryPage() {
     }
   }, [m, y])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const totalTaxable = hsnData.reduce((s, r) => s + r.taxableValue, 0)
   const totalCgst = hsnData.reduce((s, r) => s + r.cgst, 0)

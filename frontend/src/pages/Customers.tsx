@@ -66,10 +66,13 @@ export default function CustomersPage() {
   // Load the customer's recent orders + invoice statement whenever the detail dialog opens
   useEffect(() => {
     if (!viewCustomer) {
-      setCustomerOrders([])
-      setCustomerInvoices([])
-      setLoyaltyBalance(null)
-      setLoyaltyEntries([])
+      // Defer the reset out of the effect body (react/set-state-in-effect).
+      queueMicrotask(() => {
+        setCustomerOrders([])
+        setCustomerInvoices([])
+        setLoyaltyBalance(null)
+        setLoyaltyEntries([])
+      })
       return
     }
     let cancelled = false

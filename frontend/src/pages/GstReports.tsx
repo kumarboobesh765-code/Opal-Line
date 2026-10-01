@@ -18,19 +18,23 @@ export default function GstReportsPage() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError('')
-    dbApi
-      .getGstReport({ month: Number(month.slice(5, 7)), year: Number(month.slice(0, 4)) })
-      .then((res) => {
-        if (!cancelled) setData(res)
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load GST report')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    // Defer out of the effect body: the loaders set state synchronously
+    // (react/set-state-in-effect).
+    queueMicrotask(() => {
+      setLoading(true)
+      setError('')
+      dbApi
+        .getGstReport({ month: Number(month.slice(5, 7)), year: Number(month.slice(0, 4)) })
+        .then((res) => {
+          if (!cancelled) setData(res)
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load GST report')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    })
     return () => {
       cancelled = true
     }

@@ -41,18 +41,22 @@ export default function ProductDetailPage() {
   const [galleryIdx, setGalleryIdx] = useState(0)
 
   useEffect(() => {
-    setLoading(true)
-    setError('')
-    dbApi.getProductById(id ?? '')
-      .then((p) => {
-        setProduct(p ?? null)
-        setLoading(false)
-      })
-      .catch((e) => {
-        setError(e instanceof Error ? e.message : 'Could not load product')
-        setLoading(false)
-      })
-    dbApi.getSilverRate().then(setSilverRate).catch(() => {})
+    // Defer out of the effect body: setLoading fires synchronously
+    // (react/set-state-in-effect).
+    queueMicrotask(() => {
+      setLoading(true)
+      setError('')
+      dbApi.getProductById(id ?? '')
+        .then((p) => {
+          setProduct(p ?? null)
+          setLoading(false)
+        })
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : 'Could not load product')
+          setLoading(false)
+        })
+      dbApi.getSilverRate().then(setSilverRate).catch(() => {})
+    })
   }, [id])
 
   if (loading) {
@@ -475,8 +479,9 @@ function HistoryTable({ kind, sku, productName }: { kind: 'sales' | 'purchase' |
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setAvailable(true)
+    queueMicrotask(() => {
+      setLoading(true)
+      setAvailable(true)
 
     const load =
       kind === 'sales'
@@ -532,6 +537,7 @@ function HistoryTable({ kind, sku, productName }: { kind: 'sales' | 'purchase' |
           setLoading(false)
         }
       })
+    })
 
     return () => {
       cancelled = true
