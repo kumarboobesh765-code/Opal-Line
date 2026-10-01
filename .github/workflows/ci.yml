@@ -7,7 +7,9 @@ on:
 jobs:
   checks:
     name: Lint, typecheck, test, build
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest migrates to Ubuntu 26 on 2026-10-19
+    # (actions/runner-images#14748); keep the checks job on a stable image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
