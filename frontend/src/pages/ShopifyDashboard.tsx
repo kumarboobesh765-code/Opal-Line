@@ -48,7 +48,8 @@ export default function ShopifyDashboardPage() {
   }, [])
 
   useEffect(() => {
-    load()
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
   }, [load])
 
   const handleSync = async () => {

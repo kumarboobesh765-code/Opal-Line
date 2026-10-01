@@ -71,7 +71,8 @@ export default function DayBookPage() {
   }, [date])
 
   useEffect(() => {
-    load()
+    // Defer out of the effect body: load() flips loading state synchronously.
+    queueMicrotask(load)
   }, [load])
 
   const totals = data?.totals

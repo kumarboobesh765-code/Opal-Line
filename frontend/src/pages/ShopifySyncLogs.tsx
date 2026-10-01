@@ -52,7 +52,8 @@ export default function ShopifySyncLogsPage() {
   }
 
   useEffect(() => {
-    load()
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
   }, [])
 
   const filtered = useMemo(() => {

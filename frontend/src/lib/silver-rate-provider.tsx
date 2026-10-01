@@ -20,7 +20,10 @@ export function SilverRateProvider({ children }: { children: React.ReactNode }) 
 
   useEffect(() => {
     mounted.current = true
-    refresh()
+    // Kick the first refresh off after the effect body (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void refresh()
+    })
 
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') refresh()

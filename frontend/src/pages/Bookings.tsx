@@ -49,7 +49,12 @@ export default function Bookings() {
     }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void load()
+    })
+  }, [])
 
   const stats = useMemo(() => {
     const totalValue = bookings.reduce((a, o) => a + Number(o.value ?? 0), 0)

@@ -75,7 +75,10 @@ function TrialBalanceTab() {
     }
   }, [dateFrom, dateTo])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   return (
     <div className="space-y-4">
@@ -183,7 +186,10 @@ function ProfitLossTab() {
     }
   }, [dateFrom, dateTo])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   return (
     <div className="space-y-4">
@@ -533,7 +539,10 @@ function JournalEntriesTab() {
     }
   }, [dateFrom, dateTo])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   return (
     <div className="space-y-4">

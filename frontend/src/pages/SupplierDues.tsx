@@ -56,7 +56,10 @@ export default function SupplierDuesPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

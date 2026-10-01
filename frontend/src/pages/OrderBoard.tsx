@@ -63,7 +63,12 @@ export default function OrderBoard() {
     }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void load()
+    })
+  }, [])
 
   const openTimeline = async (o: SalesOrder) => {
     setPanelOrder(o)

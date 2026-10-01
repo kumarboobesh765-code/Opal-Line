@@ -88,8 +88,11 @@ export default function BusinessReportsPage() {
     }).catch(() => {})
   }, [period])
 
+  // Wall-clock snapshot: Date.now() is impure, so capture it once (via the
+  // state initializer) instead of calling it inside a render-time helper.
+  const [nowMs] = useState(() => Date.now())
   const bucketOf = (dateStr: string) => {
-    const ageDays = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000)
+    const ageDays = Math.floor((nowMs - new Date(dateStr).getTime()) / 86_400_000)
     return ageDays <= 30 ? '0–30 days' : ageDays <= 60 ? '31–60 days' : ageDays <= 90 ? '61–90 days' : '90+ days'
   }
 

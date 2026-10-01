@@ -144,7 +144,10 @@ export function EnvConfigSection() {
     })
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const save = async () => {
     setSaving(true)

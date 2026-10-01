@@ -84,7 +84,10 @@ export default function UsersPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const roleNames = useMemo(() => roles.map((r) => r.name), [roles])
 

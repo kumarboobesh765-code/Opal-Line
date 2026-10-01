@@ -60,7 +60,10 @@ export default function SyncComparePage() {
   }, [])
 
   useEffect(() => {
-    void loadAuto()
+    // Defer: loadAuto() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void loadAuto()
+    })
   }, [loadAuto])
 
   const saveInterval = async () => {
@@ -113,7 +116,10 @@ export default function SyncComparePage() {
   }, [])
 
   useEffect(() => {
-    void load()
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void load()
+    })
   }, [load])
 
   const counts = useMemo(() => {

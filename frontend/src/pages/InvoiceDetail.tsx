@@ -52,23 +52,27 @@ export default function InvoiceDetailPage() {
   const [returning, setReturning] = useState(false)
 
   useEffect(() => {
-    setLoading(true)
-    dbApi.getInvoiceById(id ?? '').then((inv) => {
-      setInvoice(inv ?? null)
-      setLoading(false)
-    }).catch(() => setLoading(false))
-    dbApi.getSettings().then((s) => setSettings(s ?? null)).catch(() => {})
-    dbApi.getProducts()
-      .then((ps) => {
-        const m = new Map<string, string>()
-        for (const p of ps) {
-          const src = p.image?.trim()
-          if (src) m.set(p.sku, src)
-        }
-        productImageBySku.current = m
-      })
-      .catch(() => {})
-    printTemplatesApi.getDefault('invoice').then((r) => setPrintConfig(r.config)).catch(() => {})
+    // Defer out of the effect body: setLoading fires synchronously
+    // (react/set-state-in-effect).
+    queueMicrotask(() => {
+      setLoading(true)
+      dbApi.getInvoiceById(id ?? '').then((inv) => {
+        setInvoice(inv ?? null)
+        setLoading(false)
+      }).catch(() => setLoading(false))
+      dbApi.getSettings().then((s) => setSettings(s ?? null)).catch(() => {})
+      dbApi.getProducts()
+        .then((ps) => {
+          const m = new Map<string, string>()
+          for (const p of ps) {
+            const src = p.image?.trim()
+            if (src) m.set(p.sku, src)
+          }
+          productImageBySku.current = m
+        })
+        .catch(() => {})
+      printTemplatesApi.getDefault('invoice').then((r) => setPrintConfig(r.config)).catch(() => {})
+    })
   }, [id])
 
   // Fetch the UPI QR once the invoice total is known; silently absent when

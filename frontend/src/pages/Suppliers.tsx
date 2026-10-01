@@ -45,7 +45,10 @@ export default function SuppliersPage() {
     }).catch(() => setLoading(false))
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

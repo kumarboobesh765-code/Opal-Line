@@ -73,9 +73,9 @@ export function AppShell() {
   }, [location.pathname])
 
   useEffect(() => {
-    if (isMobile) {
-      setCollapsed(false)
-    }
+    if (!isMobile) return
+    // Defer the collapse sync out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => setCollapsed(false))
   }, [isMobile])
 
   return (

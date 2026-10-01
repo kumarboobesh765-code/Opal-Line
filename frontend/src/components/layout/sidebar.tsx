@@ -43,9 +43,9 @@ export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
     const section = visibleSections.find((s) =>
       s.items.some((i) => i.path !== '/' && isPathActive(i.path)),
     )
-    if (section) {
-      setExpanded((prev) => ({ ...prev, [section.label]: true }))
-    }
+    if (!section) return
+    // Defer the expand out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => setExpanded((prev) => ({ ...prev, [section.label]: true })))
   }, [location.pathname, visibleSections, isPathActive])
 
   const isActive = isPathActive

@@ -131,7 +131,8 @@ jobs:
           }
 
       - name: Create GitHub Release with installer
-        uses: softprops/action-gh-release@v2
+        # v3 runs on Node 24 — v2 is stuck on the deprecated Node 20 runtime.
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist-electron/*Setup-*.exe

@@ -53,7 +53,10 @@ export default function ExpensesPage() {
     }).catch(() => setLoading(false))
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const openDialog = () => {
     setForm({ category: '', description: '', amount: '', paymentMethod: 'UPI' })

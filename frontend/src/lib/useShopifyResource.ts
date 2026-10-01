@@ -58,7 +58,8 @@ export function useShopifyResource<T>(
   }, [resource, load])
 
   useEffect(() => {
-    load()
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
   }, [load])
 
   return { data, syncedAt, loading, syncing, error, configured, load, syncNow }

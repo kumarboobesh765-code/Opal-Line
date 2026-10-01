@@ -48,21 +48,25 @@ export function SearchCommand({ open, onOpenChange }: SearchCommandProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    // Defer the dialog reset out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => {
       setQuery('')
       setActiveIndex(0)
       setTimeout(() => inputRef.current?.focus(), 30)
-    }
+    })
   }, [open])
 
   useEffect(() => {
-    setActiveIndex(0)
+    // Defer out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => setActiveIndex(0))
   }, [query])
 
   useEffect(() => {
     const q = query.trim()
     if (!q) {
-      setResults(null)
+      // Defer the clear out of the effect body (react/set-state-in-effect).
+      queueMicrotask(() => setResults(null))
       return
     }
     let cancelled = false

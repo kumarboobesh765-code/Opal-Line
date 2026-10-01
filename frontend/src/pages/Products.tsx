@@ -132,7 +132,10 @@ export default function ProductsPage() {
       .catch(() => setDuplicates([]))
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [load])
 
   const syncShopify = async () => {
     setSyncing(true)

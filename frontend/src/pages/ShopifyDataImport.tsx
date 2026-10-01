@@ -23,8 +23,18 @@ export default function ShopifyDataImportPage() {
   const [emailStatus, setEmailStatus] = useState<{ configured: boolean; mailbox: string | null; host: string } | null>(null)
   const [emailResult, setEmailResult] = useState<{ ok: boolean; scanned: number; parsed: number; updated: number; created: number; errors: string[] } | null>(null)
 
+  const loadEmailStatus = async () => {
+    try {
+      const res = await backupApi.emailIngestStatus()
+      setEmailStatus(res)
+    } catch { setEmailStatus({ configured: false, mailbox: null, host: 'imap.gmail.com' }) }
+  }
+
   useEffect(() => {
-    loadEmailStatus()
+    // Defer out of the effect body: loadEmailStatus sets state after awaiting.
+    queueMicrotask(() => {
+      void loadEmailStatus()
+    })
   }, [])
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,13 +92,6 @@ export default function ShopifyDataImportPage() {
     } finally {
       setBusy(null)
     }
-  }
-
-  const loadEmailStatus = async () => {
-    try {
-      const res = await backupApi.emailIngestStatus()
-      setEmailStatus(res)
-    } catch { setEmailStatus({ configured: false, mailbox: null, host: 'imap.gmail.com' }) }
   }
 
   const doPollEmails = async () => {

@@ -67,7 +67,10 @@ export default function DuesPage() {
     dbApi.getCustomers().then(setCustomers).catch(() => undefined)
   }
 
-  useEffect(load, [])
+  useEffect(() => {
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(load)
+  }, [])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

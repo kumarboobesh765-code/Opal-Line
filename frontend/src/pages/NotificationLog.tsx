@@ -40,7 +40,10 @@ export default function NotificationLogPage() {
   }, [])
 
   useEffect(() => {
-    void load()
+    // Defer: load() sets loading state synchronously (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void load()
+    })
   }, [load])
 
   const resend = async (id: string) => {

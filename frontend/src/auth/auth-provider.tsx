@@ -56,9 +56,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [load])
 
   useEffect(() => {
-    load()
-      .catch(() => logout())
-      .finally(() => setLoading(false))
+    // Kick the session probe off after the effect body (react/set-state-in-effect).
+    queueMicrotask(() => {
+      load()
+        .catch(() => logout())
+        .finally(() => setLoading(false))
+    })
   }, [load, logout])
 
   const hasPermission = useCallback(
