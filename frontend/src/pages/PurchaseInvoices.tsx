@@ -151,7 +151,7 @@ export default function PurchaseInvoicesPage() {
     setFormOpen(true)
   }
 
-  const openEdit = async (invoice: PurchaseInvoice) => {
+  const openEdit = useCallback(async (invoice: PurchaseInvoice) => {
     try {
       const detail = await dbApi.getPurchaseInvoiceWithItems(invoice.id)
       setEditing(detail)
@@ -179,7 +179,7 @@ export default function PurchaseInvoicesPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not open the invoice')
     }
-  }
+  }, [])
 
   const pickProduct = (index: number, sku: string) => {
     setLines((prev) =>
