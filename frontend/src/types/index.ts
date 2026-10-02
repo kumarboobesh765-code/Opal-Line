@@ -165,6 +165,21 @@ export interface PaymentStatusSegment {
   count: number
 }
 
+export interface AgingBucket {
+  key: 'current' | 'd1_30' | 'd31_60' | 'd60plus'
+  label: string
+  value: number
+  count: number
+}
+
+export interface ReceivablesAging {
+  buckets: AgingBucket[]
+  total: number
+  invoiceCount: number
+  overdueTotal: number
+  overdueCount: number
+}
+
 export interface SilverRatePoint {
   date: string
   rate: number
