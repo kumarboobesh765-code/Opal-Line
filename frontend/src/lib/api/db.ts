@@ -1,7 +1,14 @@
 import type {
   Activity,
   ActivityLogEntry,
+  AgingBucket,
+  AgingInvoice,
   AnalyticsStat,
+  SilverRateAutoStatus,
+  SilverRateRequestRow,
+  SilverRateRequestsResponse,
+  SilverRateRow,
+  SilverRateSubmitResponse,
   Quotation,
   AppSettings,
   AuditLogEntry,
@@ -66,6 +73,21 @@ export const dbApi = {
       '/silver/update',
       { method: 'POST', body: JSON.stringify({ rate, syncFirst }) },
     ),
+  /** Submit a rate change: applies directly for admins / when approval is
+   * disabled, otherwise queues a request for admin approval. */
+  submitSilverRateRequest: (rate: number, syncFirst = false): Promise<SilverRateSubmitResponse> =>
+    request('/silver/requests', { method: 'POST', body: JSON.stringify({ rate, syncFirst }) }),
+  getSilverRateRequests: (): Promise<SilverRateRequestsResponse> => request('/silver/requests'),
+  approveSilverRateRequest: (id: string, note?: string): Promise<{ ok: boolean; request: SilverRateRequestRow }> =>
+    request(`/silver/requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+  rejectSilverRateRequest: (id: string, note?: string): Promise<{ ok: boolean; request: SilverRateRequestRow }> =>
+    request(`/silver/requests/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+  getSilverRateRows: (): Promise<{ data: SilverRateRow[] }> => request('/db/silver-rates?limit=100'),
+  getSilverRateAutoStatus: (): Promise<SilverRateAutoStatus> => request('/silver/auto-rate/status'),
+  fetchSilverRateNow: (): Promise<{ ok: boolean; rate: number | null; repriced?: number; pushed?: number; error?: string | null }> =>
+    request('/silver/auto-rate/fetch-now', { method: 'POST' }),
+  toggleSilverRateAuto: (enabled: boolean): Promise<{ ok: boolean; enabled: boolean }> =>
+    request('/silver/auto-rate/toggle', { method: 'POST', body: JSON.stringify({ enabled }) }),
   getDashboardKpis: async (): Promise<KpiCardData[]> => {
     const rows = await request<
       Array<{ key: string; label: string; value: string; delta: string | null; deltaLabel: string | null; icon: string; trend: 'up' | 'down' | 'flat'; accent: string }>
@@ -108,6 +130,8 @@ export const dbApi = {
   getPaymentStatus: (): Promise<{ segments: PaymentStatusSegment[]; total: number }> =>
     request('/db/dashboard/payment-status'),
   getReceivablesAging: (): Promise<ReceivablesAging> => request('/db/dashboard/aging'),
+  getAgingInvoices: (bucket: AgingBucket['key']): Promise<{ bucket: string; invoices: AgingInvoice[] }> =>
+    request(`/db/dashboard/aging/invoices?bucket=${encodeURIComponent(bucket)}`),
   getSilverRateHistory: async (): Promise<SilverRatePoint[]> => {
     const res = await request<{ data: Array<{ updatedAt: string; rate: number }> }>('/db/silver-rates?limit=100')
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']

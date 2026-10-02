@@ -454,8 +454,39 @@ export const silverRates = pgTable('silver_rates', {
   change: numericNumber('change'),
   changePercent: numericNumber('change_percent'),
   currency: text('currency'),
+  /** Display name of who applied the change (admin, scheduler, or approver). */
+  updatedBy: text('updated_by'),
+  /** How the change was applied: manual | auto | approval. */
+  source: text('source'),
+  /** Shopify push outcome for this change: synced | skipped | failed. */
+  syncStatus: text('sync_status'),
+  /** Admin/superadmin who approved a staff request (approval source only). */
+  approvedBy: text('approved_by'),
 }, (table) => ({
   updatedAtIdx: index('silver_rates_updated_at_idx').on(table.updatedAt),
+}))
+
+// Staff silver-rate change requests awaiting Admin / Super Admin approval.
+export const silverRateRequests = pgTable('silver_rate_requests', {
+  id: text('id').primaryKey(),
+  rate: numericNumber('rate'),
+  previousRate: numericNumber('previous_rate'),
+  /** pending | approved | rejected */
+  status: text('status').notNull().default('pending'),
+  syncFirst: boolean('sync_first').notNull().default(false),
+  requestedBy: text('requested_by'),
+  requestedById: text('requested_by_id'),
+  requestedByRole: text('requested_by_role'),
+  requestedAt: ts('requested_at'),
+  decidedBy: text('decided_by'),
+  decidedById: text('decided_by_id'),
+  decidedAt: ts('decided_at'),
+  decisionNote: text('decision_note'),
+  /** What happened when the request was applied (repriced/pushed counts or errors). */
+  resultNote: text('result_note'),
+}, (table) => ({
+  statusIdx: index('silver_rate_requests_status_idx').on(table.status),
+  requestedAtIdx: index('silver_rate_requests_requested_at_idx').on(table.requestedAt),
 }))
 
 export const goldRates = pgTable('gold_rates', {

@@ -146,9 +146,32 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         updated_at timestamp,
         change numeric,
         change_percent numeric,
-        currency text
+        currency text,
+        updated_by text,
+        source text,
+        sync_status text,
+        approved_by text
       )`)
     await tx.unsafe(`CREATE INDEX IF NOT EXISTS silver_rates_updated_at_idx ON silver_rates (updated_at)`)
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS silver_rate_requests (
+        id text PRIMARY KEY,
+        rate numeric,
+        previous_rate numeric,
+        status text NOT NULL DEFAULT 'pending',
+        sync_first boolean NOT NULL DEFAULT false,
+        requested_by text,
+        requested_by_id text,
+        requested_by_role text,
+        requested_at timestamp,
+        decided_by text,
+        decided_by_id text,
+        decided_at timestamp,
+        decision_note text,
+        result_note text
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS silver_rate_requests_status_idx ON silver_rate_requests (status)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS silver_rate_requests_requested_at_idx ON silver_rate_requests (requested_at)`)
 
     await tx.unsafe(`
       CREATE TABLE IF NOT EXISTS gold_rates (
@@ -1233,6 +1256,32 @@ async function applyUpgrades(sql: postgres.Sql): Promise<void> {
         webhook_id text PRIMARY KEY,
         seen_at timestamptz NOT NULL DEFAULT now()
       )`,
+      // Silver rate audit fields + staff rate-change approval workflow.
+      `ALTER TABLE silver_rates ADD COLUMN IF NOT EXISTS updated_by text`,
+      `ALTER TABLE silver_rates ADD COLUMN IF NOT EXISTS source text`,
+      `ALTER TABLE silver_rates ADD COLUMN IF NOT EXISTS sync_status text`,
+      `ALTER TABLE silver_rates ADD COLUMN IF NOT EXISTS approved_by text`,
+      `CREATE TABLE IF NOT EXISTS silver_rate_requests (
+        id text PRIMARY KEY,
+        rate numeric,
+        previous_rate numeric,
+        status text NOT NULL DEFAULT 'pending',
+        sync_first boolean NOT NULL DEFAULT false,
+        requested_by text,
+        requested_by_id text,
+        requested_by_role text,
+        requested_at timestamp,
+        decided_by text,
+        decided_by_id text,
+        decided_at timestamp,
+        decision_note text,
+        result_note text
+      )`,
+      `CREATE INDEX IF NOT EXISTS silver_rate_requests_status_idx ON silver_rate_requests (status)`,
+      `CREATE INDEX IF NOT EXISTS silver_rate_requests_requested_at_idx ON silver_rate_requests (requested_at)`,
+      // The Settings toggles existed in the UI but not on older databases.
+      `ALTER TABLE settings ADD COLUMN IF NOT EXISTS require_rate_approval boolean DEFAULT true`,
+      `ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_update_mcx boolean DEFAULT false`,
     ]
     for (const stmt of upgrades) {
       await sql.unsafe(stmt).catch(() => undefined)

@@ -15,6 +15,8 @@ import {
   ShieldCheck,
   Tag,
   TrendingUp,
+  Undo2,
+  XCircle,
   type LucideIcon,
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -35,7 +37,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { dbApi, shopifyApi } from '@/lib/api'
 import { useSilverRate } from '@/lib/silver-rate-context'
-import type { Product, SilverRate, SilverRatePoint } from '@/types'
+import type { Product, SilverRate, SilverRateAutoStatus, SilverRateRequestRow, SilverRateRow } from '@/types'
 import { formatCurrency, formatDateTime, formatWeight } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -75,16 +77,31 @@ export default function SilverRatePage() {
   const [products, setProducts] = useState<Product[]>([])
   const [syncFirst, setSyncFirst] = useState(true)
   const [currentRate, setCurrentRate] = useState<SilverRate>({ purity: 92.5, rate: 0, previousRate: 0, updatedAt: '', change: 0, changePercent: 0, currency: '₹' })
-  const [history, setHistory] = useState<SilverRatePoint[]>([])
+  const [history, setHistory] = useState<SilverRateRow[]>([])
   const [result, setResult] = useState<SilverUpdateResult | null>(null)
+  const [pendingResult, setPendingResult] = useState<{ message: string; rate: number } | null>(null)
   const [syncingProducts, setSyncingProducts] = useState(false)
   const [syncResult, setSyncResult] = useState<{ ok: boolean; synced: number; created: number; updated: number; removed: number; errors: string[] } | null>(null)
+  const [requests, setRequests] = useState<SilverRateRequestRow[]>([])
+  const [isApprover, setIsApprover] = useState(false)
+  const [autoStatus, setAutoStatus] = useState<SilverRateAutoStatus | null>(null)
+  const [togglingAuto, setTogglingAuto] = useState(false)
+  const [fetchingNow, setFetchingNow] = useState(false)
+  const [fetchNowResult, setFetchNowResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const loadAll = useCallback(() => {
     refreshSilverRate()
     dbApi.getSilverRate().then(setCurrentRate).catch(() => {})
     dbApi.getProducts().then(setProducts).catch(() => setProducts([]))
-    dbApi.getSilverRateHistory().then(setHistory).catch(() => {})
+    dbApi.getSilverRateRows().then((r) => setHistory(r.data ?? [])).catch(() => setHistory([]))
+    dbApi.getSilverRateRequests().then((r) => {
+      setRequests(r.requests ?? [])
+      setIsApprover(r.isApprover)
+    }).catch(() => {
+      setRequests([])
+      setIsApprover(false)
+    })
+    dbApi.getSilverRateAutoStatus().then(setAutoStatus).catch(() => setAutoStatus(null))
   }, [refreshSilverRate])
 
   useEffect(() => {
@@ -143,22 +160,69 @@ export default function SilverRatePage() {
     setProcessing(true)
     setError('')
     try {
-      const res = await dbApi.updateSilverRate(rateValue, syncFirst)
-      setResult(res)
-      if (!res.ok) {
-        setError(res.errors.join(' ') || res.message || 'Failed to update silver rate')
+      const res = await dbApi.submitSilverRateRequest(rateValue, syncFirst)
+      if (res.direct) {
+        setResult(res)
+      } else {
+        setPendingResult({ message: res.message, rate: rateValue })
       }
       setStep(3)
-      refreshSilverRate()
-      dbApi.getSilverRate().then(setCurrentRate).catch(() => {})
-      dbApi.getProducts().then(setProducts).catch(() => {})
-      dbApi.getSilverRateHistory().then(setHistory).catch(() => {})
+      loadAll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update silver rate')
     } finally {
       setProcessing(false)
     }
   }
+
+  const decide = async (id: string, decision: 'approve' | 'reject') => {
+    try {
+      if (decision === 'approve') await dbApi.approveSilverRateRequest(id)
+      else await dbApi.rejectSilverRateRequest(id)
+      loadAll()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : `Failed to ${decision} request`)
+    }
+  }
+
+  const toggleAuto = async () => {
+    if (!autoStatus) return
+    setTogglingAuto(true)
+    try {
+      await dbApi.toggleSilverRateAuto(!autoStatus.enabled)
+      const fresh = await dbApi.getSilverRateAutoStatus()
+      setAutoStatus(fresh)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to toggle auto rate')
+    } finally {
+      setTogglingAuto(false)
+    }
+  }
+
+  const fetchNow = async () => {
+    setFetchingNow(true)
+    setFetchNowResult(null)
+    try {
+      const res = await dbApi.fetchSilverRateNow()
+      setFetchNowResult({
+        ok: res.ok,
+        message: res.ok ? `Fetched ₹${(res.rate ?? 0).toFixed(2)}/gm — ${(res.repriced ?? 0).toLocaleString('en-IN')} products repriced` : res.error ?? 'Fetch failed',
+      })
+      loadAll()
+    } catch (e) {
+      setFetchNowResult({ ok: false, message: e instanceof Error ? e.message : 'Fetch failed' })
+    } finally {
+      setFetchingNow(false)
+    }
+  }
+
+  const rollbackTo = (rate: number) => {
+    setNewRate(String(rate))
+    setStep(1)
+    setDialogOpen(true)
+  }
+
+  const pendingCount = useMemo(() => requests.filter((r) => r.status === 'pending').length, [requests])
 
   return (
     <div className="mx-auto w-full max-w-[1400px] space-y-5 px-4 py-4 sm:py-6 lg:px-6">
@@ -202,6 +266,136 @@ export default function SilverRatePage() {
           </div>
         </div>
       ) : null}
+
+      {fetchNowResult ? (
+        <div
+          className={cn(
+            'flex items-start gap-2.5 rounded-lg border px-4 py-3 text-sm',
+            fetchNowResult.ok ? 'border-success-100 bg-success-50/60 text-success-700' : 'border-red-200 bg-red-50/60 text-red-700',
+          )}
+        >
+          {fetchNowResult.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+          <div>
+            <p className="font-semibold">{fetchNowResult.ok ? 'Spot rate fetched' : 'Spot rate fetch failed'}</p>
+            <p className="text-[13px]">{fetchNowResult.message}</p>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm">Rate Change Approvals</CardTitle>
+            </div>
+            {pendingCount > 0 ? <Badge variant="warning" className="text-[10px]">{pendingCount} pending</Badge> : <Badge variant="muted" className="text-[10px]">{autoStatus?.approvalRequired === false ? 'Approval off' : 'None pending'}</Badge>}
+          </CardHeader>
+          <CardContent>
+            {requests.length === 0 ? (
+              <p className="py-4 text-center text-[13px] text-muted-foreground">
+                {autoStatus?.approvalRequired === false
+                  ? 'Approval is disabled in Settings — all rate changes apply immediately.'
+                  : 'No rate change requests. Staff submissions will appear here for approval.'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {requests.map((r) => (
+                  <div key={r.id} className="rounded-lg border p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold tabular-nums text-foreground">₹{(r.rate ?? 0).toFixed(2)} / gm</span>
+                      <Badge variant={r.status === 'pending' ? 'warning' : r.status === 'approved' ? 'success' : 'danger'} dot>
+                        {r.status}
+                      </Badge>
+                      {r.previousRate != null ? (
+                        <span className="text-[11px] text-muted-foreground">from ₹{r.previousRate.toFixed(2)}</span>
+                      ) : null}
+                      <span className="ml-auto text-[11px] text-muted-foreground">
+                        {r.requestedBy ?? 'Unknown'}
+                        {r.requestedByRole ? ` · ${r.requestedByRole}` : ''} · {formatDateTime(r.requestedAt)}
+                      </span>
+                    </div>
+                    {r.decidedBy ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {r.status === 'approved' ? 'Approved' : 'Rejected'} by {r.decidedBy} · {formatDateTime(r.decidedAt)}
+                        {r.decisionNote ? ` — "${r.decisionNote}"` : ''}
+                      </p>
+                    ) : null}
+                    {r.resultNote ? <p className="mt-1 text-[11px] text-muted-foreground">{r.resultNote}</p> : null}
+                    {isApprover && r.status === 'pending' ? (
+                      <div className="mt-2 flex gap-2">
+                        <Button size="sm" variant="success" className="gap-1" onClick={() => decide(r.id, 'approve')}>
+                          <Check className="h-3.5 w-3.5" /> Approve &amp; Apply
+                        </Button>
+                        <Button size="sm" variant="outline" className="gap-1" onClick={() => decide(r.id, 'reject')}>
+                          <XCircle className="h-3.5 w-3.5" /> Reject
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm">Auto Silver Rate</CardTitle>
+            </div>
+            <Badge variant={autoStatus?.enabled ? 'success' : 'muted'} dot>
+              {autoStatus?.enabled ? 'Enabled' : 'Disabled'}
+            </Badge>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {autoStatus ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-lg border p-3">
+                    <p className="text-[10.5px] uppercase tracking-wide text-muted-foreground">Schedule</p>
+                    <p className="mt-0.5 text-[13px] font-semibold text-foreground">Daily {autoStatus.schedule}</p>
+                    <p className="text-[11px] text-muted-foreground">Next: {formatDateTime(autoStatus.nextRunAt)}</p>
+                  </div>
+                  <div className="rounded-lg border p-3">
+                    <p className="text-[10.5px] uppercase tracking-wide text-muted-foreground">Last fetch</p>
+                    <p className="mt-0.5 text-[13px] font-semibold text-foreground">
+                      {autoStatus.lastRate != null ? `₹${autoStatus.lastRate.toFixed(2)} / gm` : autoStatus.lastResult ?? '—'}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {autoStatus.lastRunAt ? formatDateTime(autoStatus.lastRunAt) : 'Never run'}
+                      {autoStatus.lastResult ? ` · ${autoStatus.lastResult}` : ''}
+                    </p>
+                  </div>
+                </div>
+                {autoStatus.lastError ? (
+                  <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50/60 px-3 py-2 text-xs text-red-700">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{autoStatus.lastError}</span>
+                  </div>
+                ) : null}
+                {!autoStatus.apiUrlConfigured ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Rate source not configured — set <code className="rounded bg-muted px-1">SILVER_RATE_API_URL</code> to enable spot-rate fetching.
+                  </p>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" className="gap-1.5" onClick={fetchNow} disabled={fetchingNow || !autoStatus.apiUrlConfigured}>
+                    <RefreshCw className={cn('h-3.5 w-3.5', fetchingNow && 'animate-spin')} />
+                    {fetchingNow ? 'Fetching…' : 'Fetch spot rate now'}
+                  </Button>
+                  <Button size="sm" variant={autoStatus.enabled ? 'outline' : 'soft-primary'} onClick={toggleAuto} disabled={togglingAuto}>
+                    {togglingAuto ? 'Saving…' : autoStatus.enabled ? 'Disable auto rate' : 'Enable auto rate'}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="py-4 text-center text-[13px] text-muted-foreground">Auto-rate status unavailable.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card className="overflow-hidden border-primary-100 bg-gradient-to-br from-primary-700 to-primary-900 text-white lg:col-span-1">
@@ -271,7 +465,7 @@ export default function SilverRatePage() {
                 <TableHead>Change</TableHead>
                 <TableHead>Approved By</TableHead>
                 <TableHead className="text-center">Shopify Sync</TableHead>
-                <TableHead className="text-center">Status</TableHead>
+                <TableHead className="text-center">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -282,12 +476,14 @@ export default function SilverRatePage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                history.map((h, i) => {
-                  const prev = history[i + 1]?.rate ?? (i === 0 ? currentRate.previousRate : 0)
+                history.map((h) => {
+                  const prev = h.previousRate ?? currentRate.previousRate
                   const diff = Math.round((h.rate - prev) * 100) / 100
+                  const source = h.source ?? 'legacy'
+                  const sourceLabel = source === 'auto' ? 'Auto fetch' : source === 'approval' ? 'Approved request' : source === 'manual' ? 'Manual' : 'Legacy entry'
                   return (
-                    <TableRow key={`${h.date}-${i}`}>
-                      <TableCell className="font-medium">{h.date}</TableCell>
+                    <TableRow key={h.id}>
+                      <TableCell className="font-medium">{formatDateTime(h.updatedAt)}</TableCell>
                       <TableCell className="tabular-nums">₹{prev.toFixed(2)}</TableCell>
                       <TableCell className="tabular-nums font-semibold">₹{h.rate.toFixed(2)}</TableCell>
                       <TableCell>
@@ -295,9 +491,29 @@ export default function SilverRatePage() {
                           {diff > 0 ? '+' : diff < 0 ? '−' : ''}₹{Math.abs(diff).toFixed(2)}
                         </Badge>
                       </TableCell>
-                      <TableCell>Admin</TableCell>
-                      <TableCell className="text-center"><Badge variant="success" dot>Synced</Badge></TableCell>
-                      <TableCell className="text-center"><Badge variant="success">Approved</Badge></TableCell>
+                      <TableCell>
+                        <div className="leading-tight">
+                          <p className="font-medium text-foreground">{h.updatedBy ?? 'Unknown'}</p>
+                          <p className="text-[10.5px] text-muted-foreground">
+                            {sourceLabel}
+                            {h.approvedBy && h.approvedBy !== h.updatedBy ? ` · approved by ${h.approvedBy}` : ''}
+                          </p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Badge variant={h.syncStatus === 'synced' ? 'success' : h.syncStatus === 'failed' ? 'danger' : 'muted'} dot>
+                          {h.syncStatus === 'synced' ? 'Synced' : h.syncStatus === 'failed' ? 'Failed' : h.syncStatus === 'skipped' ? 'Skipped' : '—'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {h.rate !== currentRate.rate ? (
+                          <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-primary" onClick={() => rollbackTo(h.rate)}>
+                            <Undo2 className="h-3.5 w-3.5" /> Restore
+                          </Button>
+                        ) : (
+                          <Badge variant="muted" className="text-[10px]">Current</Badge>
+                        )}
+                      </TableCell>
                     </TableRow>
                   )
                 })
@@ -478,9 +694,18 @@ export default function SilverRatePage() {
               <div className={cn('flex h-14 w-14 items-center justify-center rounded-full', result && !result.ok ? 'bg-red-50 text-red-600 dark:text-red-400' : 'bg-success-50 text-success-700')}>
                 {result && !result.ok ? <AlertTriangle className="h-7 w-7" /> : <CheckCircle2 className="h-7 w-7" />}
               </div>
-              <p className="text-base font-semibold text-foreground">
-                {result && !result.ok ? 'Silver rate saved, but Shopify sync had errors' : 'Price update approved & synced'}
-              </p>
+              {pendingResult ? (
+                <>
+                  <p className="text-base font-semibold text-foreground">Request submitted for approval</p>
+                  <p className="max-w-sm text-sm text-muted-foreground">
+                    {pendingResult.message} You asked for ₹{pendingResult.rate.toFixed(2)}/gm — an Admin or Super Admin must approve it before prices change.
+                  </p>
+                </>
+              ) : (
+                <p className="text-base font-semibold text-foreground">
+                  {result && !result.ok ? 'Silver rate saved, but Shopify sync had errors' : 'Price update approved & synced'}
+                </p>
+              )}
               {result?.steps && result.steps.length > 0 ? (
                 <div className="w-full max-w-md space-y-2 py-2 text-left">
                   {result.steps.map((s) => (

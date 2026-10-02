@@ -46,6 +46,8 @@ import { dbApi } from '@/lib/api'
 import { shopifyApi } from '@/lib/api'
 import type {
   Activity,
+  AgingBucket,
+  AgingInvoice,
   AnalyticsStat,
   KpiCardData,
   LowStockItem,
@@ -57,7 +59,7 @@ import type {
   TopProduct,
 } from '@/types'
 import type { ShopifyStatus } from '@/types/shopify'
-import { compactCurrency, formatCurrency, formatDateTime, formatPieces, formatWeight } from '@/lib/format'
+import { compactCurrency, formatCurrency, formatDate, formatDateTime, formatPieces, formatWeight } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 const kpiIcons: Record<string, LucideIcon> = {
@@ -116,6 +118,8 @@ export default function DashboardPage() {
   const [activities, setActivities] = useState<Activity[]>([])
   const [security, setSecurity] = useState<{ failedLogins24h: number; lockedAccounts: number; recent: Array<{ entity: string | null; details: string | null; timestamp: string | null }> } | null>(null)
   const [aging, setAging] = useState<ReceivablesAging | null>(null)
+  const [expandedBucket, setExpandedBucket] = useState<AgingBucket['key'] | null>(null)
+  const [bucketInvoices, setBucketInvoices] = useState<Partial<Record<AgingBucket['key'], AgingInvoice[] | 'loading'>>>({})
   const [analytics, setAnalytics] = useState<AnalyticsStat[]>([])
   const [shopifyStatus, setShopifyStatus] = useState<ShopifyStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -187,6 +191,22 @@ export default function DashboardPage() {
     }
     window.addEventListener('afterprint', cleanup)
     window.print()
+  }
+
+  // Receivables aging drill-down: lazily fetch (and cache) the invoices behind
+  // a bucket the first time it is expanded.
+  const toggleBucket = (key: AgingBucket['key']) => {
+    if (expandedBucket === key) {
+      setExpandedBucket(null)
+      return
+    }
+    setExpandedBucket(key)
+    if (bucketInvoices[key]) return
+    setBucketInvoices((prev) => ({ ...prev, [key]: 'loading' }))
+    dbApi
+      .getAgingInvoices(key)
+      .then((r) => setBucketInvoices((prev) => ({ ...prev, [key]: r.invoices })))
+      .catch(() => setBucketInvoices((prev) => ({ ...prev, [key]: [] })))
   }
 
   return (
@@ -482,36 +502,75 @@ export default function DashboardPage() {
                   aging.invoiceCount > 0 ? (
                     <>
                       <div className="space-y-3">
-                        {aging.buckets.map((b) => (
-                          <div key={b.key}>
-                            <div className="flex items-center gap-2 text-[12px]">
-                              <span
-                                className={cn(
-                                  'h-2 w-2 rounded-full',
-                                  b.key === 'current' && 'bg-success',
-                                  b.key === 'd1_30' && 'bg-amber-500',
-                                  b.key === 'd31_60' && 'bg-orange-500',
-                                  b.key === 'd60plus' && 'bg-destructive',
-                                )}
-                              />
-                              <span className="text-muted-foreground">{b.label}</span>
-                              <span className="ml-auto font-semibold tabular-nums text-foreground">{compactCurrency(b.value)}</span>
-                              <span className="w-14 text-right tabular-nums text-muted-foreground">{b.count} inv</span>
+                        {aging.buckets.map((b) => {
+                          const list = bucketInvoices[b.key]
+                          const expanded = expandedBucket === b.key
+                          return (
+                            <div key={b.key}>
+                              <button
+                                type="button"
+                                onClick={() => toggleBucket(b.key)}
+                                aria-expanded={expanded}
+                                className="flex w-full items-center gap-2 rounded-sm text-left text-[12px] hover:bg-muted/50"
+                              >
+                                <span
+                                  className={cn(
+                                    'h-2 w-2 rounded-full',
+                                    b.key === 'current' && 'bg-success',
+                                    b.key === 'd1_30' && 'bg-amber-500',
+                                    b.key === 'd31_60' && 'bg-orange-500',
+                                    b.key === 'd60plus' && 'bg-destructive',
+                                  )}
+                                />
+                                <span className="text-muted-foreground">{b.label}</span>
+                                <span className="ml-auto font-semibold tabular-nums text-foreground">{compactCurrency(b.value)}</span>
+                                <span className="w-14 text-right tabular-nums text-muted-foreground">{b.count} inv</span>
+                                <ChevronDown className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', expanded ? '' : '-rotate-90')} />
+                              </button>
+                              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={cn(
+                                    'h-full rounded-full',
+                                    b.key === 'current' && 'bg-success',
+                                    b.key === 'd1_30' && 'bg-amber-500',
+                                    b.key === 'd31_60' && 'bg-orange-500',
+                                    b.key === 'd60plus' && 'bg-destructive',
+                                  )}
+                                  style={{ width: `${aging.total > 0 ? Math.max(2, Math.round((b.value / aging.total) * 100)) : 0}%` }}
+                                />
+                              </div>
+                              {expanded ? (
+                                <div className="mt-2 space-y-1.5 rounded-md border bg-muted/30 p-2">
+                                  {list === 'loading' ? (
+                                    <p className="py-1 text-center text-[11.5px] text-muted-foreground">Loading invoices…</p>
+                                  ) : list && list.length > 0 ? (
+                                    list.map((inv) => (
+                                      <div key={inv.id} className="flex items-center justify-between gap-2 text-[11.5px]">
+                                        <div className="min-w-0">
+                                          <p className="truncate font-medium text-foreground">{inv.customer || inv.number}</p>
+                                          <p className="truncate text-muted-foreground">
+                                            {inv.number}
+                                            {inv.dueDate ? ` · due ${formatDate(inv.dueDate)}` : ' · no due date'}
+                                          </p>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                          <p className="font-semibold tabular-nums text-foreground">{compactCurrency(inv.grandTotal)}</p>
+                                          {inv.daysOverdue > 0 ? (
+                                            <p className="text-[10.5px] font-medium text-red-600 dark:text-red-400">{inv.daysOverdue}d overdue</p>
+                                          ) : (
+                                            <p className="text-[10.5px] text-muted-foreground">not due</p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="py-1 text-center text-[11.5px] text-muted-foreground">No invoices in this bucket.</p>
+                                  )}
+                                </div>
+                              ) : null}
                             </div>
-                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className={cn(
-                                  'h-full rounded-full',
-                                  b.key === 'current' && 'bg-success',
-                                  b.key === 'd1_30' && 'bg-amber-500',
-                                  b.key === 'd31_60' && 'bg-orange-500',
-                                  b.key === 'd60plus' && 'bg-destructive',
-                                )}
-                                style={{ width: `${aging.total > 0 ? Math.max(2, Math.round((b.value / aging.total) * 100)) : 0}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                       <Button variant="soft-primary" className="mt-4 w-full" size="sm" onClick={() => navigate('/reports/dues')}>
                         View Dues
