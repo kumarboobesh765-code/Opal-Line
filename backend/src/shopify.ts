@@ -1789,7 +1789,10 @@ export async function getLatestSilverRate(): Promise<{ rate: number; purity: num
   }
 }
 
-export async function applySilverRate(rate: number, options?: { syncFirst?: boolean }): Promise<SilverUpdateResult> {
+export async function applySilverRate(
+  rate: number,
+  options?: { syncFirst?: boolean; source?: 'manual' | 'auto' | 'approval'; actorName?: string | null },
+): Promise<SilverUpdateResult> {
   const previous = await getLatestSilverRate()
   const previousRate = previous?.rate ?? 92.8
 
@@ -1818,6 +1821,9 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
   const change = round2(rate - previousRate)
   const changePercent = previousRate > 0 ? round2((change / previousRate) * 100) : 0
   const now = new Date().toISOString()
+  // Who/what applied the change (for the history table + audit trail).
+  const actorName = options?.actorName?.trim() || 'Admin'
+  const source = options?.source ?? 'manual'
 
   try {
     await db.insert(schema.silverRates).values({
@@ -1829,6 +1835,9 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
       change,
       changePercent,
       currency: 'INR',
+      updatedBy: actorName,
+      source,
+      approvedBy: source === 'approval' ? actorName : null,
     })
   } catch (err) {
     return { ok: false, rate, previousRate, affected: 0, matched: 0, updated: 0, skipped: 0, errors: [err instanceof Error ? err.message : 'Failed to save silver rate'] }
@@ -1850,11 +1859,11 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
 
   await recordAudit({
     timestamp: now,
-    user: 'Admin',
+    user: actorName,
     action: `Silver rate updated to ₹${rate.toFixed(2)}/gm`,
     module: 'Silver',
     entity: 'silver_rates',
-    changes: `previous=${previousRate}, rate=${rate}`,
+    changes: `previous=${previousRate}, rate=${rate}, source=${source}`,
     ip: null,
   })
 
@@ -1897,6 +1906,21 @@ export async function applySilverRate(rate: number, options?: { syncFirst?: bool
   } else {
     steps.push({ key: 'push', label: 'Push prices to Shopify', status: 'skipped', detail: 'Shopify is not configured — prices updated locally only' })
     await persistLog({ entity: 'Silver', direction: 'in', action: 'Rate Update (Shopify not configured)', status: 'success' })
+  }
+
+  // Record the Shopify push outcome on the rate row for the history table.
+  const syncStatus = !isConfigured() ? 'skipped' : errors.length === 0 ? 'synced' : 'failed'
+  if (db) {
+    try {
+      const [latestRow] = await db
+        .select({ id: schema.silverRates.id })
+        .from(schema.silverRates)
+        .orderBy(desc(schema.silverRates.updatedAt))
+        .limit(1)
+      if (latestRow) await db.update(schema.silverRates).set({ syncStatus }).where(eq(schema.silverRates.id, latestRow.id))
+    } catch {
+      // History annotation is best-effort.
+    }
   }
 
   return {

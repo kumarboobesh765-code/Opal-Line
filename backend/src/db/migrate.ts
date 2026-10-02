@@ -39,6 +39,34 @@ async function main() {
   await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_state" text;`)
   await client.unsafe(`ALTER TABLE "sales_invoices" ADD COLUMN IF NOT EXISTS "customer_pincode" text;`)
 
+  // Silver rate audit fields + staff rate-change approval workflow
+  console.log('Ensuring silver rate audit columns and rate request table...')
+  await client.unsafe(`ALTER TABLE "silver_rates" ADD COLUMN IF NOT EXISTS "updated_by" text;`)
+  await client.unsafe(`ALTER TABLE "silver_rates" ADD COLUMN IF NOT EXISTS "source" text;`)
+  await client.unsafe(`ALTER TABLE "silver_rates" ADD COLUMN IF NOT EXISTS "sync_status" text;`)
+  await client.unsafe(`ALTER TABLE "silver_rates" ADD COLUMN IF NOT EXISTS "approved_by" text;`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "silver_rate_requests" (
+      "id" text PRIMARY KEY,
+      "rate" numeric,
+      "previous_rate" numeric,
+      "status" text NOT NULL DEFAULT 'pending',
+      "sync_first" boolean NOT NULL DEFAULT false,
+      "requested_by" text,
+      "requested_by_id" text,
+      "requested_by_role" text,
+      "requested_at" timestamp,
+      "decided_by" text,
+      "decided_by_id" text,
+      "decided_at" timestamp,
+      "decision_note" text,
+      "result_note" text
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "silver_rate_requests_status_idx" ON "silver_rate_requests" ("status");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "silver_rate_requests_requested_at_idx" ON "silver_rate_requests" ("requested_at");`)
+  await client.unsafe(`ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "require_rate_approval" boolean DEFAULT true;`)
+  await client.unsafe(`ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "auto_update_mcx" boolean DEFAULT false;`)
+
   console.log('Seeding default roles (idempotent)...')
   for (const [i, name] of roleNames.entries()) {
     const existing = await db.select().from(schema.roles).where(eq(schema.roles.name, name)).limit(1)

@@ -180,9 +180,89 @@ export interface ReceivablesAging {
   overdueCount: number
 }
 
+export interface AgingInvoice {
+  id: string
+  number: string
+  customer: string
+  date: string | null
+  dueDate: string | null
+  grandTotal: number
+  paymentStatus: string
+  status: string
+  daysOverdue: number
+}
+
 export interface SilverRatePoint {
   date: string
   rate: number
+}
+
+/** A row of the silver rate history table (audit-enriched). */
+export interface SilverRateRow {
+  id: string
+  rate: number
+  previousRate: number | null
+  updatedAt: string | null
+  change: number | null
+  changePercent: number | null
+  updatedBy: string | null
+  /** manual | auto | approval (null on legacy rows) */
+  source: string | null
+  /** synced | skipped | failed (null on legacy rows) */
+  syncStatus: string | null
+  approvedBy: string | null
+}
+
+/** Staff silver-rate change request awaiting admin approval. */
+export interface SilverRateRequestRow {
+  id: string
+  rate: number | null
+  previousRate: number | null
+  status: 'pending' | 'approved' | 'rejected'
+  syncFirst: boolean
+  requestedBy: string | null
+  requestedByRole: string | null
+  requestedAt: string | null
+  decidedBy: string | null
+  decidedAt: string | null
+  decisionNote: string | null
+  resultNote: string | null
+}
+
+export interface SilverRateRequestsResponse {
+  isApprover: boolean
+  requests: SilverRateRequestRow[]
+}
+
+export interface SilverRateUpdateResult {
+  ok: boolean
+  rate: number
+  previousRate: number
+  affected: number
+  matched: number
+  updated: number
+  skipped: number
+  errors: string[]
+  message?: string
+  steps?: Array<{ key: string; label: string; status: 'done' | 'failed' | 'skipped'; detail?: string }>
+}
+
+/** Submitting a rate change either applies it directly or queues a request. */
+export type SilverRateSubmitResponse =
+  | ({ direct: true } & SilverRateUpdateResult)
+  | { direct: false; ok: true; request: SilverRateRequestRow; message: string }
+
+export interface SilverRateAutoStatus {
+  enabled: boolean
+  nextRunAt: string
+  lastRunAt: string | null
+  lastResult: 'success' | 'failed' | 'skipped' | null
+  lastRate: number | null
+  lastError: string | null
+  fetching: boolean
+  schedule: string
+  apiUrlConfigured: boolean
+  approvalRequired: boolean
 }
 
 export interface LowStockItem {

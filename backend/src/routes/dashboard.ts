@@ -52,11 +52,10 @@ const num = (v: unknown): number => Number(v ?? 0) || 0
 // the string-format quirks ('T' vs ' ') that JS-side string compares had.
 const OUTSTANDING_WHERE = sql`(payment_status in ('pending','partial') or status = 'overdue')`
 
-// Legacy full-table load still used by the heavier report endpoints below
-// (profit, collections, GST); the dashboard page endpoints no longer call it.
-async function loadInvoices() {
-  return db!.select().from(schema.salesInvoices).where(sql`true`).limit(10000)
-}
+// B2B vs B2C GST split heuristic. The JS pattern is the original matcher; the
+// string form runs the same alternation in Postgres via case-insensitive ~*.
+const BUSINESS_NAME_PATTERN = /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i
+const BUSINESS_NAME_RE = 'house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp'
 
 function pct(part: number, whole: number) {
   if (!whole) return '—'
@@ -635,6 +634,59 @@ dashboardRouter.get('/dashboard/aging', async (_req, res) => {
   }
 })
 
+// Per-bucket drill-down for the receivables aging widget: the invoices behind
+// each bucket, oldest due date first (50 rows max).
+dashboardRouter.get('/dashboard/aging/invoices', async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const bucket = String(req.query.bucket ?? 'current')
+    const today = localDayStart(0)
+    const predicates: Record<string, SQL> = {
+      current: sql`(${schema.salesInvoices.dueDate} is null or ${schema.salesInvoices.dueDate} > ${today})`,
+      d1_30: sql`${schema.salesInvoices.dueDate} is not null and ${schema.salesInvoices.dueDate} <= ${today} and ${schema.salesInvoices.dueDate} > (${today}::timestamp - interval '30 days')`,
+      d31_60: sql`${schema.salesInvoices.dueDate} is not null and ${schema.salesInvoices.dueDate} <= (${today}::timestamp - interval '30 days') and ${schema.salesInvoices.dueDate} > (${today}::timestamp - interval '60 days')`,
+      d60plus: sql`${schema.salesInvoices.dueDate} is not null and ${schema.salesInvoices.dueDate} <= (${today}::timestamp - interval '60 days')`,
+    }
+    const predicate = predicates[bucket]
+    if (!predicate) return res.status(400).json({ error: 'Unknown bucket' })
+
+    const rows = await db!
+      .select({
+        id: schema.salesInvoices.id,
+        number: schema.salesInvoices.number,
+        customer: schema.salesInvoices.customer,
+        date: schema.salesInvoices.date,
+        dueDate: schema.salesInvoices.dueDate,
+        grandTotal: schema.salesInvoices.grandTotal,
+        paymentStatus: schema.salesInvoices.paymentStatus,
+        status: schema.salesInvoices.status,
+        daysOverdue: sql<number>`greatest(0, floor(extract(epoch from (${today}::timestamp - ${schema.salesInvoices.dueDate})) / 86400))::int`,
+      })
+      .from(schema.salesInvoices)
+      .where(and(OUTSTANDING_WHERE, predicate))
+      .orderBy(sql`${schema.salesInvoices.dueDate} asc nulls last`, sql`${schema.salesInvoices.number} asc`)
+      .limit(50)
+
+    res.json({
+      bucket,
+      invoices: rows.map((r) => ({
+        id: r.id,
+        number: r.number,
+        customer: r.customer ?? '',
+        date: r.date,
+        dueDate: r.dueDate,
+        grandTotal: round2(num(r.grandTotal)),
+        paymentStatus: r.paymentStatus ?? '',
+        status: r.status ?? '',
+        daysOverdue: r.dueDate ? Number(r.daysOverdue ?? 0) : 0,
+      })),
+    })
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : 'Unknown error' }, 'dashboard aging drill-down failed')
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PROFIT ANALYTICS: owner-level profit trends, best sellers, expenses netting
 // ─────────────────────────────────────────────────────────────────────────────
@@ -643,9 +695,6 @@ dashboardRouter.get('/dashboard/profit', async (req, res) => {
   if (!requireDb(res)) return
   try {
     const months = Math.min(24, Math.max(3, Number(req.query.months) || 12))
-    const invoices = await loadInvoices()
-    const expenses = await db!.select({ amount: schema.expenses.amount, date: schema.expenses.date, category: schema.expenses.category }).from(schema.expenses)
-    const purchaseInvoices = await db!.select({ cost: schema.purchaseInvoices.cost, date: schema.purchaseInvoices.date }).from(schema.purchaseInvoices)
 
     // Build the last N months (oldest first) keyed by YYYY-MM in IST
     const monthKeys: string[] = []
@@ -655,22 +704,66 @@ dashboardRouter.get('/dashboard/profit', async (req, res) => {
       d.setMonth(d.getMonth() - i)
       monthKeys.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`)
     }
-    const monthOf = (dateVal: unknown) => String(dateVal ?? '').slice(0, 7)
+    // Aggregated in SQL: monthly revenue/COGS, returns, purchases and the
+    // expense breakdown are grouped server-side, so the profit report no
+    // longer scans every invoice, expense and purchase row in JS.
+    const firstMonth = `${monthKeys[0]}-01T00:00:00`
+    const lastMonth = monthKeys[monthKeys.length - 1]
+    const invoiceMonth = sql<string>`to_char(${schema.salesInvoices.date}, 'YYYY-MM')`
+    const returnMonth = sql<string>`to_char(${schema.salesReturns.date}, 'YYYY-MM')`
+    const expenseMonth = sql<string>`to_char(${schema.expenses.date}, 'YYYY-MM')`
+    const purchaseMonth = sql<string>`to_char(${schema.purchaseInvoices.date}, 'YYYY-MM')`
 
-    // Revenue net of returns; COGS approximated from silver value + making charge
-    const returnsByMonth = new Map<string, number>()
-    const returns = await db!.select({ amount: schema.salesReturns.amount, date: schema.salesReturns.date }).from(schema.salesReturns)
-    for (const r of returns) {
-      const m = monthOf(r.date)
-      returnsByMonth.set(m, (returnsByMonth.get(m) ?? 0) + num(r.amount))
+    const [invoiceRows, returnRows, expenseRows, purchaseRows] = await Promise.all([
+      db!
+        .select({
+          m: invoiceMonth,
+          revenue: sql<number>`coalesce(sum(grand_total), 0)`,
+          cogs: sql<number>`coalesce(sum(coalesce(silver_value, 0) + coalesce(making_charge, 0)), 0)`,
+          count: sql<number>`count(*)`,
+        })
+        .from(schema.salesInvoices)
+        .where(and(gte(schema.salesInvoices.date, firstMonth), sql`${invoiceMonth} <= ${lastMonth}`))
+        .groupBy(invoiceMonth),
+      db!
+        .select({ m: returnMonth, amount: sql<number>`coalesce(sum(coalesce(amount, 0)), 0)` })
+        .from(schema.salesReturns)
+        .where(gte(schema.salesReturns.date, firstMonth))
+        .groupBy(returnMonth),
+      db!
+        .select({
+          m: expenseMonth,
+          category: sql<string>`coalesce(${schema.expenses.category}, 'Other')`,
+          amount: sql<number>`coalesce(sum(coalesce(amount, 0)), 0)`,
+        })
+        .from(schema.expenses)
+        .where(gte(schema.expenses.date, firstMonth))
+        .groupBy(expenseMonth, sql`coalesce(${schema.expenses.category}, 'Other')`),
+      db!
+        .select({ m: purchaseMonth, cost: sql<number>`coalesce(sum(coalesce(cost, 0)), 0)` })
+        .from(schema.purchaseInvoices)
+        .where(gte(schema.purchaseInvoices.date, firstMonth))
+        .groupBy(purchaseMonth),
+    ])
+
+    const invoicesByMonth = new Map(invoiceRows.map((r) => [String(r.m ?? ''), r]))
+    const returnsByMonth = new Map(returnRows.map((r) => [String(r.m ?? ''), num(r.amount)]))
+    const purchasesByMonth = new Map(purchaseRows.map((r) => [String(r.m ?? ''), num(r.cost)]))
+    const expensesByMonth = new Map<string, number>()
+    const expenseByCategory = new Map<string, number>()
+    for (const e of expenseRows) {
+      const m = String(e.m ?? '')
+      expensesByMonth.set(m, (expensesByMonth.get(m) ?? 0) + num(e.amount))
+      const cat = e.category ?? 'Other'
+      expenseByCategory.set(cat, (expenseByCategory.get(cat) ?? 0) + num(e.amount))
     }
 
     const monthly = monthKeys.map((m) => {
-      const rows = invoices.filter((i) => monthOf(i.date) === m)
-      const revenue = rows.reduce((a, r) => a + num(r.grandTotal), 0) - (returnsByMonth.get(m) ?? 0)
-      const cogs = rows.reduce((a, r) => a + num(r.silverValue) + num(r.makingCharge), 0)
-      const exp = expenses.filter((e) => monthOf(e.date) === m).reduce((a, e) => a + num(e.amount), 0)
-      const purchases = purchaseInvoices.filter((p) => monthOf(p.date) === m).reduce((a, p) => a + num(p.cost), 0)
+      const inv = invoicesByMonth.get(m)
+      const revenue = num(inv?.revenue) - (returnsByMonth.get(m) ?? 0)
+      const cogs = num(inv?.cogs)
+      const exp = expensesByMonth.get(m) ?? 0
+      const purchases = purchasesByMonth.get(m) ?? 0
       return {
         month: m,
         revenue: round2(revenue),
@@ -680,48 +773,37 @@ dashboardRouter.get('/dashboard/profit', async (req, res) => {
         expenses: round2(exp),
         purchases: round2(purchases),
         netProfit: round2(revenue - cogs - exp),
-        invoices: rows.length,
+        invoices: Number(inv?.count ?? 0),
       }
     })
 
-    // Best sellers by profit contribution (uses invoice line items)
-    const itemMap = new Map<string, { name: string; qty: number; revenue: number; profit: number }>()
-    const itemRows = await db!
+    // Best sellers by profit contribution: grouped in SQL over all invoice
+    // items (key = SKU when present, else the product name); item profit is
+    // amount minus metal value (weight × rate).
+    const itemKey = sql<string>`coalesce(nullif(${schema.salesInvoiceItems.sku}, ''), ${schema.salesInvoiceItems.product}, '')`
+    const itemProfit = sql<number>`coalesce(sum(coalesce(${schema.salesInvoiceItems.amount}, 0) - coalesce(${schema.salesInvoiceItems.weight}, 0) * coalesce(${schema.salesInvoiceItems.silverRate}, 0)), 0)`
+    const bestSellerRows = await db!
       .select({
-        sku: schema.salesInvoiceItems.sku,
-        product: schema.salesInvoiceItems.product,
-        qty: schema.salesInvoiceItems.qty,
-        amount: schema.salesInvoiceItems.amount,
-        weight: schema.salesInvoiceItems.weight,
-        silverRate: schema.salesInvoiceItems.silverRate,
-        makingCharge: schema.salesInvoiceItems.makingCharge,
-        invoiceDate: schema.salesInvoices.date,
+        sku: itemKey,
+        name: sql<string>`coalesce(max(${schema.salesInvoiceItems.product}), max(${schema.salesInvoiceItems.sku}), '')`,
+        qty: sql<number>`coalesce(sum(coalesce(${schema.salesInvoiceItems.qty}, 0)), 0)`,
+        revenue: sql<number>`coalesce(sum(coalesce(${schema.salesInvoiceItems.amount}, 0)), 0)`,
+        profit: itemProfit,
       })
       .from(schema.salesInvoiceItems)
-      .innerJoin(schema.salesInvoices, eq(schema.salesInvoiceItems.invoiceId, schema.salesInvoices.id))
-    for (const it of itemRows) {
-      const key = String(it.sku ?? it.product ?? '')
-      if (!key) continue
-      const entry = itemMap.get(key) ?? { name: String(it.product ?? key), qty: 0, revenue: 0, profit: 0 }
-      entry.qty += num(it.qty)
-      entry.revenue += num(it.amount)
-      // Item-level profit: amount minus metal value (weight × rate)
-      entry.profit += num(it.amount) - num(it.weight) * num(it.silverRate)
-      itemMap.set(key, entry)
-    }
-    const bestSellers = [...itemMap.entries()]
-      .map(([sku, v]) => ({ sku, name: v.name, qty: v.qty, revenue: round2(v.revenue), profit: round2(v.profit) }))
-      .sort((a, b) => b.profit - a.profit)
-      .slice(0, 10)
+      .where(sql`${itemKey} <> ''`)
+      .groupBy(itemKey)
+      .orderBy(sql`${itemProfit} desc`)
+      .limit(10)
+    const bestSellers = bestSellerRows.map((r) => ({
+      sku: r.sku,
+      name: r.name,
+      qty: num(r.qty),
+      revenue: round2(num(r.revenue)),
+      profit: round2(num(r.profit)),
+    }))
 
-    // Expense breakdown for the period
-    const expenseByCategory = new Map<string, number>()
-    const firstMonth = monthKeys[0]
-    for (const e of expenses) {
-      if (monthOf(e.date) < firstMonth) continue
-      const cat = String(e.category ?? 'Other')
-      expenseByCategory.set(cat, (expenseByCategory.get(cat) ?? 0) + num(e.amount))
-    }
+    // Expense breakdown for the period (already grouped by month + category)
     const expenseBreakdown = [...expenseByCategory.entries()]
       .map(([category, amount]) => ({ category, amount: round2(amount) }))
       .sort((a, b) => b.amount - a.amount)
@@ -840,60 +922,78 @@ dashboardRouter.get('/reports/product-margins', async (req, res) => {
 dashboardRouter.get('/reports/gst', async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [invoices, purchaseInvoices] = await Promise.all([loadInvoices(), db!.select().from(schema.purchaseInvoices)])
-
     const monthParam = Number(req.query.month)
     const target = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12 ? monthParam : new Date().getMonth() + 1
     const yearParam = Number(req.query.year)
     const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
     const prefix = `${year}-${pad(target)}`
-    const rows = invoices.filter((i) => String(i.date ?? '').startsWith(prefix))
 
-    const isBusiness = (name: string) => /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i.test(name)
-    const b2b = rows.filter((i) => isBusiness(String(i.customer ?? '')))
-    const b2c = rows.filter((i) => !isBusiness(String(i.customer ?? '')))
-    const taxableOf = (r: typeof rows) => r.reduce((a, i) => a + (num(i.subtotal) - num(i.discount)), 0)
-    const gstOf = (r: typeof rows) => r.reduce((a, i) => a + num(i.gstAmount), 0)
+    // Aggregated in SQL: the month's B2B/B2C split (the business-name regex
+    // runs in Postgres), the 6-month output-GST chart and the filing statuses
+    // all come from grouped queries instead of loading every invoice in JS.
+    const monthCond = sql`${schema.salesInvoices.date}::text like ${prefix + '%'}`
+    const businessCond = sql`coalesce(${schema.salesInvoices.customer}, '') ~* ${BUSINESS_NAME_RE}`
+    const taxableAgg = sql<number>`coalesce(sum(coalesce(subtotal, 0) - coalesce(discount, 0)), 0)`
+    const gstAgg = sql<number>`coalesce(sum(coalesce(gst_amount, 0)), 0)`
+    const monthAgg = async (extra: SQL | undefined) => {
+      const aggRows = await db!
+        .select({ taxable: taxableAgg, gst: gstAgg, count: sql<number>`count(*)` })
+        .from(schema.salesInvoices)
+        .where(extra)
+      const r = aggRows[0]
+      return { taxable: num(r.taxable), gst: num(r.gst), count: Number(r.count) }
+    }
 
-    const taxable = taxableOf(rows)
-    const outputGst = gstOf(rows)
-    const inputGst = purchaseInvoices.filter((p) => String(p.date ?? '').startsWith(prefix)).reduce((a, p) => a + num(p.tax), 0)
+    const now = new Date()
+    const sixMonthStartDate = new Date(now.getFullYear(), now.getMonth() - 5, 1)
+    const threeMonthStartDate = new Date(now.getFullYear(), now.getMonth() - 2, 1)
+    const sixMonthStart = `${sixMonthStartDate.getFullYear()}-${pad(sixMonthStartDate.getMonth() + 1)}-01T00:00:00`
+    const threeMonthStart = `${threeMonthStartDate.getFullYear()}-${pad(threeMonthStartDate.getMonth() + 1)}-01T00:00:00`
+    const invoiceMonth = sql<string>`to_char(${schema.salesInvoices.date}, 'YYYY-MM')`
+
+    const [all, b2b, b2c, noteRows, nilRows, purchaseRows, monthlyRows, filingRows] = await Promise.all([
+      monthAgg(monthCond),
+      monthAgg(and(monthCond, businessCond)),
+      monthAgg(and(monthCond, sql`not (${businessCond})`)),
+      db!.select({ n: sql<number>`count(*)` }).from(schema.salesInvoices).where(and(monthCond, sql`status in ('refunded', 'cancelled')`)),
+      db!.select({ n: sql<number>`count(*)` }).from(schema.salesInvoices).where(and(monthCond, sql`coalesce(grand_total, 0) = 0`)),
+      db!.select({ tax: schema.purchaseInvoices.tax }).from(schema.purchaseInvoices).where(sql`${schema.purchaseInvoices.date}::text like ${prefix + '%'}`).limit(10000),
+      db!.select({ m: invoiceMonth, gst: gstAgg }).from(schema.salesInvoices).where(gte(schema.salesInvoices.date, sixMonthStart)).groupBy(invoiceMonth),
+      db!.select({ m: invoiceMonth, n: sql<number>`count(*)` }).from(schema.salesInvoices).where(gte(schema.salesInvoices.date, threeMonthStart)).groupBy(invoiceMonth),
+    ])
+
+    const taxable = all.taxable
+    const outputGst = all.gst
+    const inputGst = purchaseRows.reduce((a, p) => a + num(p.tax), 0)
     const netGst = Math.max(0, round2(outputGst - inputGst))
     const itcUtilised = round2(Math.min(inputGst, outputGst))
 
+    const gstByMonth = new Map(monthlyRows.map((r) => [String(r.m ?? ''), num(r.gst)]))
     const months: { label: string; gst: number }[] = []
-    const now = new Date()
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
       const p = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
-      months.push({
-        label: d.toLocaleDateString('en-IN', { month: 'short' }),
-        gst: round2(gstOf(invoices.filter((inv) => String(inv.date ?? '').startsWith(p)))),
-      })
+      months.push({ label: d.toLocaleDateString('en-IN', { month: 'short' }), gst: round2(gstByMonth.get(p) ?? 0) })
     }
 
+    const monthsWithInvoices = new Set(filingRows.filter((r) => Number(r.n) > 0).map((r) => String(r.m ?? '')))
     const filingMonths: { month: string; status: string; variant: 'warning' | 'success' | 'muted' }[] = []
-    const invoiceDates = invoices.map((i) => String(i.date ?? '').slice(0, 7))
     for (let i = 0; i < 3; i++) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
       const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
       const label = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
-      const hasInvoices = invoiceDates.some((dt) => dt.startsWith(key))
-      filingMonths.push({
-        month: label,
-        status: i === 0 ? 'In Progress' : hasInvoices ? 'Filed' : 'No Data',
-        variant: i === 0 ? 'warning' : hasInvoices ? 'success' : 'muted',
-      })
+      const hasInvoices = monthsWithInvoices.has(key)
+      filingMonths.push({ month: label, status: i === 0 ? 'In Progress' : hasInvoices ? 'Filed' : 'No Data', variant: i === 0 ? 'warning' : hasInvoices ? 'success' : 'muted' })
     }
 
     res.json({
       summary: { taxable: round2(taxable), outputGst: round2(outputGst), inputGst: round2(inputGst), netGst, itcUtilised, cgst: round2(netGst / 2), sgst: round2(netGst / 2) },
       gstr1: {
-        b2b: { invoices: b2b.length, taxable: round2(taxableOf(b2b)) },
-        b2c: { invoices: b2c.length, taxable: round2(taxableOf(b2c)) },
+        b2b: { invoices: b2b.count, taxable: round2(b2b.taxable) },
+        b2c: { invoices: b2c.count, taxable: round2(b2c.taxable) },
         exports: { invoices: 0, taxable: 0 },
-        notes: { invoices: rows.filter((i) => i.status === 'refunded' || i.status === 'cancelled').length, taxable: 0 },
-        nilRated: { invoices: rows.filter((i) => !num(i.grandTotal)).length, taxable: 0 },
+        notes: { invoices: Number(noteRows[0]?.n ?? 0), taxable: 0 },
+        nilRated: { invoices: Number(nilRows[0]?.n ?? 0), taxable: 0 },
       },
       monthly: months,
       filing: filingMonths,
@@ -908,15 +1008,28 @@ dashboardRouter.get('/reports/gst', async (req, res) => {
 dashboardRouter.get('/reports/gst/export', async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [invoices] = await Promise.all([loadInvoices()])
     const monthParam = Number(req.query.month)
     const target = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12 ? monthParam : new Date().getMonth() + 1
     const yearParam = Number(req.query.year)
     const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
     const prefix = `${year}-${pad(target)}`
-    const rows = invoices.filter((i) => String(i.date ?? '').startsWith(prefix))
+    // Only the requested month's rows are fetched (the CSV needs one row per
+    // invoice), instead of loading the entire invoice table.
+    const rows = await db!
+      .select({
+        number: schema.salesInvoices.number,
+        customer: schema.salesInvoices.customer,
+        date: schema.salesInvoices.date,
+        subtotal: schema.salesInvoices.subtotal,
+        discount: schema.salesInvoices.discount,
+        gstAmount: schema.salesInvoices.gstAmount,
+        grandTotal: schema.salesInvoices.grandTotal,
+        status: schema.salesInvoices.status,
+      })
+      .from(schema.salesInvoices)
+      .where(sql`${schema.salesInvoices.date}::text like ${prefix + '%'}`)
 
-    const isBusiness = (name: string) => /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i.test(String(name ?? ''))
+    const isBusiness = (name: string) => BUSINESS_NAME_PATTERN.test(String(name ?? ''))
     const esc = (v: unknown) => {
       const s = String(v ?? '')
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
@@ -1144,19 +1257,11 @@ dashboardRouter.get('/reports/hsn', async (req, res) => {
     const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
     const prefix = `${year}-${pad(target)}`
 
-    const invoices = await loadInvoices()
-    const items = invoices
-      .filter((i) => String(i.date ?? '').startsWith(prefix) && String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
-      .flatMap((inv) => {
-        const invAny = inv as unknown as Record<string, unknown>
-        const lineItems = (invAny.lineItems as Array<Record<string, unknown>> | null) ?? []
-        return lineItems.map((li) => ({
-          hsn: String(li.hsn ?? '7113'),
-          quantity: Number(li.quantity ?? 1),
-          taxableValue: Number(li.taxableValue ?? li.amount ?? 0),
-          gst: Number(li.gst ?? li.tax ?? 0),
-        }))
-      })
+    // The report previously scanned every invoice to read a `line_items` JSON
+    // column that does not exist on sales_invoices (line items live on
+    // sales_orders), so the grouped output was always empty. Keep the same
+    // result without loading the table at all.
+    const items: Array<{ hsn: string; quantity: number; taxableValue: number; gst: number }> = []
 
     // Group by HSN
     const hsnMap = new Map<string, { hsn: string; description: string; qty: number; taxableValue: number; cgst: number; sgst: number; igst: number; totalTax: number }>()
@@ -1198,8 +1303,22 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
     const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
     const prefix = `${year}-${pad(target)}`
 
-    const invoices = await loadInvoices()
-    const active = invoices.filter((i) => String(i.date ?? '').startsWith(prefix) && String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
+    // Only the requested month's invoices are fetched (per-invoice mismatch
+    // detection needs the rows themselves).
+    const monthInvoices = await db!
+      .select({
+        id: schema.salesInvoices.id,
+        number: schema.salesInvoices.number,
+        customer: schema.salesInvoices.customer,
+        subtotal: schema.salesInvoices.subtotal,
+        discount: schema.salesInvoices.discount,
+        gst: schema.salesInvoices.gst,
+        gstAmount: schema.salesInvoices.gstAmount,
+        status: schema.salesInvoices.status,
+      })
+      .from(schema.salesInvoices)
+      .where(sql`${schema.salesInvoices.date}::text like ${prefix + '%'}`)
+    const active = monthInvoices.filter((i) => String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
 
     // Input GST: sum the `tax` column of this month's purchase invoices,
     // excluding cancelled ones (mirrors the output-side filters above).
@@ -1215,7 +1334,7 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
     let b2cTaxable = 0
     const mismatches: Array<{ invoiceNumber: string; expected: number; actual: number; diff: number }> = []
 
-    const isBusiness = (name: string) => /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i.test(String(name ?? ''))
+    const isBusiness = (name: string) => BUSINESS_NAME_PATTERN.test(String(name ?? ''))
 
     for (const inv of active) {
       const taxable = num(inv.subtotal) - num(inv.discount)

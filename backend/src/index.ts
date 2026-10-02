@@ -17,7 +17,7 @@ import { dashboardRouter } from './routes/dashboard'
 import { rbacRouter } from './routes/rbac'
 import { backupRouter } from './routes/backup'
 import { printTemplatesRouter } from './routes/printTemplates'
-import { enforceRbac, requirePermission } from './rbac'
+import { computeUserPermissions, enforceRbac, requirePermission } from './rbac'
 import { requireAuth, shutdownSessions } from './sessions'
 import { systemRouter } from './routes/systemStatus'
 import { reportsRouter } from './routes/reports'
@@ -32,7 +32,7 @@ import { recountCustomerStats } from './customerStats'
 import { startAutoBackup, startDailySummary } from './autoBackup'
 import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailIngestConfigured, kickEmailIngest } from './orderEmailIngest'
 import { isPiiAccessDenied, missingPiiCustomerCount, normalizeShopifyCustomerId } from './shopifyDataEnhance'
-import { startSilverRateScheduler } from './silverRateScheduler'
+import { fetchSilverRateNow, getSchedulerStatus, setAutoRateEnabled, SILVER_RATE_HOUR, SILVER_RATE_MINUTE, startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
 
 const app = express()
@@ -981,6 +981,259 @@ app.post('/api/v1/silver/update', requirePermission('silver-rate', 'edit'), vali
       ip: actor.ip,
     })
     res.status(result.ok ? 200 : 502).json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
+// ─── Silver rate approval workflow: staff submit, Admin/Super Admin decide ───
+const SILVER_APPROVER_ROLES = ['Admin', 'Super Admin']
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+async function userNameById(userId: string): Promise<string> {
+  if (!db) return 'Unknown'
+  const [row] = await db.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId)).limit(1)
+  return row?.name ?? 'Unknown'
+}
+
+async function isSilverApprover(userId: string): Promise<boolean> {
+  const perms = await computeUserPermissions(userId)
+  return !!perms && SILVER_APPROVER_ROLES.includes(perms.role)
+}
+
+// Pending + recent rate-change requests. Approvers see everything; other
+// users only see their own requests.
+app.get('/api/v1/silver/requests', requireAuth, async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' })
+  try {
+    const userId = req.userId!
+    const isApprover = await isSilverApprover(userId)
+    const status = String(req.query.status ?? 'all')
+    const conditions = []
+    if (status !== 'all') conditions.push(eq(schema.silverRateRequests.status, status))
+    if (!isApprover) conditions.push(eq(schema.silverRateRequests.requestedById, userId))
+    const rows = await db
+      .select()
+      .from(schema.silverRateRequests)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(schema.silverRateRequests.requestedAt))
+      .limit(50)
+    res.json({ isApprover, requests: rows })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(500).json({ error: message })
+  }
+})
+
+// Submit a rate change. Admin/Super Admin (or when approval is disabled in
+// settings) apply immediately; other staff create a pending request.
+app.post('/api/v1/silver/requests', requireAuth, validate(silverRateSchema), async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' })
+  try {
+    const userId = req.userId!
+    const rate = Number(req.body.rate)
+    const syncFirst = req.body.syncFirst === true
+    const perms = await computeUserPermissions(userId)
+    if (!perms) return res.status(401).json({ error: 'User not found' })
+
+    const [approvalSetting] = await db.select({ requireRateApproval: schema.settings.requireRateApproval }).from(schema.settings).limit(1)
+    const approvalRequired = approvalSetting?.requireRateApproval !== false
+    const actor = actorFromRequest(req)
+
+    if (!approvalRequired || SILVER_APPROVER_ROLES.includes(perms.role)) {
+      const result = await applySilverRate(rate, { syncFirst, source: 'manual', actorName: await userNameById(userId) })
+      void recordActivity({
+        action: 'Updated Silver Rate',
+        module: 'silver-rate',
+        entity: 'Silver Rate',
+        details: `Silver rate changed to Rs${rate}/gm. ${result.ok ? `${result.affected ?? 0} product(s) repriced` : `Failed: ${result.errors?.join('; ') ?? 'unknown'}`}`,
+        userId: actor.userId,
+        ip: actor.ip,
+      })
+      return res.status(result.ok ? 200 : 502).json({ ...result, direct: true })
+    }
+
+    // Staff member with approval required → queue a pending request.
+    const [pending] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(schema.silverRateRequests)
+      .where(and(eq(schema.silverRateRequests.status, 'pending'), eq(schema.silverRateRequests.requestedById, userId)))
+    if (Number(pending?.n ?? 0) >= 5) {
+      return res.status(429).json({ error: 'You already have 5 pending rate requests awaiting approval' })
+    }
+    const latest = await getLatestSilverRate()
+    const [row] = await db
+      .insert(schema.silverRateRequests)
+      .values({
+        id: randomUUID(),
+        rate,
+        previousRate: latest?.rate ?? null,
+        status: 'pending',
+        syncFirst,
+        requestedBy: await userNameById(userId),
+        requestedById: userId,
+        requestedByRole: perms.role,
+        requestedAt: new Date().toISOString(),
+      })
+      .returning()
+    void recordActivity({
+      action: 'Requested Silver Rate Change',
+      module: 'silver-rate',
+      entity: `Silver Rate ₹${rate}/gm`,
+      details: `Submitted by ${perms.role} — awaiting Admin approval (current rate ₹${(latest?.rate ?? 0).toFixed(2)}/gm)`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.status(201).json({ direct: false, ok: true, request: row, message: 'Request submitted — awaiting Admin approval' })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(500).json({ error: message })
+  }
+})
+
+// Approve a pending request: applies the rate with the approver's name.
+app.post('/api/v1/silver/requests/:id/approve', requirePermission('silver-rate', 'edit'), async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' })
+  try {
+    const userId = req.userId!
+    if (!(await isSilverApprover(userId))) return res.status(403).json({ error: 'Only Admin or Super Admin can approve rate changes' })
+    const [request] = await db.select().from(schema.silverRateRequests).where(eq(schema.silverRateRequests.id, req.params.id)).limit(1)
+    if (!request) return res.status(404).json({ error: 'Request not found' })
+    if (request.status !== 'pending') return res.status(409).json({ error: `Request already ${request.status}` })
+
+    const approverName = await userNameById(userId)
+    const result = await applySilverRate(Number(request.rate), {
+      syncFirst: request.syncFirst === true,
+      source: 'approval',
+      actorName: approverName,
+    })
+    // If the rate row was written (reprice ran) the change counts as applied
+    // even if the Shopify push failed — otherwise keep it pending for retry.
+    const applied = result.ok || (result.affected ?? 0) > 0
+    const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim().slice(0, 500) : null
+    const [updated] = await db
+      .update(schema.silverRateRequests)
+      .set({
+        status: applied ? 'approved' : 'pending',
+        decidedBy: approverName,
+        decidedById: userId,
+        decidedAt: new Date().toISOString(),
+        decisionNote: note,
+        resultNote: result.ok
+          ? `Applied by ${approverName}: ${result.affected ?? 0} repriced, ${result.updated ?? 0} pushed to Shopify`
+          : `Apply failed: ${result.errors.join('; ') || 'unknown error'}`,
+      })
+      .where(eq(schema.silverRateRequests.id, request.id))
+      .returning()
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Approved Silver Rate Change',
+      module: 'silver-rate',
+      entity: `Silver Rate ₹${Number(request.rate).toFixed(2)}/gm`,
+      details: `Requested by ${request.requestedBy ?? 'unknown'} — approved by ${approverName}. ${result.ok ? `${result.affected ?? 0} repriced` : `Errors: ${result.errors.join('; ') || 'unknown'}`}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: applied, request: updated, result })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(500).json({ error: message })
+  }
+})
+
+// Reject a pending request (optional note recorded).
+app.post('/api/v1/silver/requests/:id/reject', requirePermission('silver-rate', 'edit'), async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' })
+  try {
+    const userId = req.userId!
+    if (!(await isSilverApprover(userId))) return res.status(403).json({ error: 'Only Admin or Super Admin can reject rate changes' })
+    const [request] = await db.select().from(schema.silverRateRequests).where(eq(schema.silverRateRequests.id, req.params.id)).limit(1)
+    if (!request) return res.status(404).json({ error: 'Request not found' })
+    if (request.status !== 'pending') return res.status(409).json({ error: `Request already ${request.status}` })
+
+    const approverName = await userNameById(userId)
+    const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim().slice(0, 500) : null
+    const [updated] = await db
+      .update(schema.silverRateRequests)
+      .set({
+        status: 'rejected',
+        decidedBy: approverName,
+        decidedById: userId,
+        decidedAt: new Date().toISOString(),
+        decisionNote: note,
+        resultNote: null,
+      })
+      .where(eq(schema.silverRateRequests.id, request.id))
+      .returning()
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Rejected Silver Rate Change',
+      module: 'silver-rate',
+      entity: `Silver Rate ₹${Number(request.rate).toFixed(2)}/gm`,
+      details: `Requested by ${request.requestedBy ?? 'unknown'} — rejected by ${approverName}${note ? `: ${note}` : ''}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, request: updated })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(500).json({ error: message })
+  }
+})
+
+// ─── Auto silver rate: status, manual fetch, runtime toggle ──────────────────
+app.get('/api/v1/silver/auto-rate/status', requirePermission('silver-rate', 'view'), async (_req, res) => {
+  try {
+    let approvalRequired = true
+    if (db) {
+      const [s] = await db.select({ requireRateApproval: schema.settings.requireRateApproval }).from(schema.settings).limit(1)
+      approvalRequired = s?.requireRateApproval !== false
+    }
+    res.json({
+      ...getSchedulerStatus(),
+      schedule: `${pad2(SILVER_RATE_HOUR)}:${pad2(SILVER_RATE_MINUTE)} IST`,
+      apiUrlConfigured: Boolean(process.env.SILVER_RATE_API_URL?.trim()),
+      approvalRequired,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
+app.post('/api/v1/silver/auto-rate/fetch-now', requirePermission('silver-rate', 'edit'), async (req, res) => {
+  try {
+    const result = await fetchSilverRateNow()
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: 'Fetched Silver Spot Rate',
+      module: 'silver-rate',
+      entity: 'Auto Rate',
+      details: result.ok ? `Fetched ₹${result.rate}/gm — ${result.repriced ?? 0} repriced, ${result.pushed ?? 0} pushed to Shopify` : `Failed: ${result.error ?? 'unknown error'}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.status(result.ok ? 200 : 400).json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    res.status(502).json({ error: message })
+  }
+})
+
+app.post('/api/v1/silver/auto-rate/toggle', requirePermission('system', 'edit'), async (req, res) => {
+  try {
+    const enabled = req.body?.enabled === true
+    await setAutoRateEnabled(enabled)
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: enabled ? 'Enabled Auto Silver Rate' : 'Disabled Auto Silver Rate',
+      module: 'silver-rate',
+      entity: 'Auto Rate',
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, enabled })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(502).json({ error: message })
