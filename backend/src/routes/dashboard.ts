@@ -3,7 +3,7 @@ import { and, desc, eq, gte, ne, sql, type AnyColumn, type SQL } from 'drizzle-o
 import { db, schema } from '../db/client'
 import { CONSTANTS } from '../constants'
 import { logger } from '../logger'
-import { computeInputGst, netPayable } from '../gst'
+import { computeInputGst, computeTcs, netPayable } from '../gst'
 
 export const dashboardRouter = Router()
 
@@ -957,14 +957,25 @@ dashboardRouter.get('/reports/gst', async (req, res) => {
       monthAgg(and(monthCond, sql`not (${businessCond})`)),
       db!.select({ n: sql<number>`count(*)` }).from(schema.salesInvoices).where(and(monthCond, sql`status in ('refunded', 'cancelled')`)),
       db!.select({ n: sql<number>`count(*)` }).from(schema.salesInvoices).where(and(monthCond, sql`coalesce(grand_total, 0) = 0`)),
-      db!.select({ tax: schema.purchaseInvoices.tax }).from(schema.purchaseInvoices).where(sql`${schema.purchaseInvoices.date}::text like ${prefix + '%'}`).limit(10000),
+      db!.select({
+        tax: schema.purchaseInvoices.tax,
+        cgst: schema.purchaseInvoices.cgst,
+        sgst: schema.purchaseInvoices.sgst,
+        igst: schema.purchaseInvoices.igst,
+        tcsAmount: schema.purchaseInvoices.tcsAmount,
+        tcsRate: schema.purchaseInvoices.tcsRate,
+        status: schema.purchaseInvoices.status,
+      }).from(schema.purchaseInvoices).where(sql`${schema.purchaseInvoices.date}::text like ${prefix + '%'}`).limit(10000),
       db!.select({ m: invoiceMonth, gst: gstAgg }).from(schema.salesInvoices).where(gte(schema.salesInvoices.date, sixMonthStart)).groupBy(invoiceMonth),
       db!.select({ m: invoiceMonth, n: sql<number>`count(*)` }).from(schema.salesInvoices).where(gte(schema.salesInvoices.date, threeMonthStart)).groupBy(invoiceMonth),
     ])
 
     const taxable = all.taxable
     const outputGst = all.gst
-    const inputGst = purchaseRows.reduce((a, p) => a + num(p.tax), 0)
+    // Input credit uses the CGST/SGST/IGST split where the supplier GSTIN is on
+    // file and ignores cancelled invoices; TCS is a separate liability.
+    const inputGst = computeInputGst(purchaseRows)
+    const tcs = computeTcs(purchaseRows)
     const netGst = Math.max(0, round2(outputGst - inputGst))
     const itcUtilised = round2(Math.min(inputGst, outputGst))
 
@@ -987,7 +998,7 @@ dashboardRouter.get('/reports/gst', async (req, res) => {
     }
 
     res.json({
-      summary: { taxable: round2(taxable), outputGst: round2(outputGst), inputGst: round2(inputGst), netGst, itcUtilised, cgst: round2(netGst / 2), sgst: round2(netGst / 2) },
+      summary: { taxable: round2(taxable), outputGst: round2(outputGst), inputGst: round2(inputGst), netGst, itcUtilised, tcs, cgst: round2(netGst / 2), sgst: round2(netGst / 2) },
       gstr1: {
         b2b: { invoices: b2b.count, taxable: round2(b2b.taxable) },
         b2c: { invoices: b2c.count, taxable: round2(b2c.taxable) },
@@ -1251,44 +1262,102 @@ dashboardRouter.get('/orders/:id/full', async (req, res) => {
 dashboardRouter.get('/reports/hsn', async (req, res) => {
   if (!requireDb(res)) return
   try {
+    // Business state, used to split CGST/SGST from IGST.
+    const [settingsRow] = await db!
+      .select({ address: schema.settings.address })
+      .from(schema.settings)
+      .limit(1)
+    const bizState = String(settingsRow?.address ?? '').toLowerCase()
+
     const monthParam = Number(req.query.month)
     const target = Number.isFinite(monthParam) && monthParam >= 1 && monthParam <= 12 ? monthParam : new Date().getMonth() + 1
     const yearParam = Number(req.query.year)
     const year = Number.isFinite(yearParam) && yearParam >= 2000 && yearParam <= 2200 ? yearParam : new Date().getFullYear()
     const prefix = `${year}-${pad(target)}`
 
-    // The report previously scanned every invoice to read a `line_items` JSON
-    // column that does not exist on sales_invoices (line items live on
-    // sales_orders), so the grouped output was always empty. Keep the same
-    // result without loading the table at all.
-    const items: Array<{ hsn: string; quantity: number; taxableValue: number; gst: number }> = []
+    // Outward supplies for the month, grouped by the HSN on the product.
+    //
+    // This used to read a `line_items` JSON column that does not exist on
+    // sales_invoices, so the report was always empty. The real line items live
+    // in sales_invoice_items, and HSN comes from the product (items only carry
+    // a SKU). GST is charged per invoice, so each line's taxable value takes a
+    // pro-rata share of (subtotal - discount) and is then taxed at the
+    // invoice's rate — which keeps the HSN totals reconciling with the invoice.
+    //
+    // Intra-state (CGST + SGST) when both states are known and match; a blank
+    // customer state is treated as intra-state, which is how walk-in counter
+    // sales are charged.
+    const rows = (await db!.execute(sql`
+      WITH inv AS (
+        SELECT i.id,
+               coalesce(i.subtotal, 0) - coalesce(i.discount, 0) AS taxable_pool,
+               coalesce(i.gst, 0) AS gst,
+               lower(coalesce(i.customer_state, '')) AS cstate
+        FROM sales_invoices i
+        WHERE i.date::text like ${prefix + '%'}
+          AND coalesce(i.status, '') NOT IN ('cancelled', 'refunded')
+      ),
+      lines AS (
+        SELECT inv.cstate,
+               inv.gst,
+               inv.taxable_pool,
+               coalesce(it.qty, 0)::bigint AS qty,
+               coalesce(it.amount, 0)::float AS amount,
+               sum(coalesce(it.amount, 0)) OVER (PARTITION BY inv.id) AS amount_sum,
+               coalesce(nullif(trim(p.hsn), ''), 'Unclassified') AS hsn
+        FROM inv
+        JOIN sales_invoice_items it ON it.invoice_id = inv.id
+        LEFT JOIN products p ON lower(p.sku) = lower(coalesce(it.sku, ''))
+      ),
+      alloc AS (
+        SELECT hsn, cstate, gst, qty,
+               amount * (CASE WHEN amount_sum > 0 THEN taxable_pool / amount_sum ELSE 1 END) AS taxable
+        FROM lines
+      )
+      SELECT hsn,
+             sum(qty)::bigint AS qty,
+             round(sum(taxable)::numeric, 2) AS taxable_value,
+             round(sum(CASE WHEN cstate = '' OR cstate = lower(${bizState}) THEN taxable * gst / 100 / 2 ELSE 0 END)::numeric, 2) AS cgst,
+             round(sum(CASE WHEN cstate = '' OR cstate = lower(${bizState}) THEN taxable * gst / 100 / 2 ELSE 0 END)::numeric, 2) AS sgst,
+             round(sum(CASE WHEN cstate <> '' AND cstate <> lower(${bizState}) THEN taxable * gst / 100 ELSE 0 END)::numeric, 2) AS igst
+      FROM alloc
+      GROUP BY hsn
+      ORDER BY sum(taxable) DESC
+    `)) as unknown as Array<{
+      hsn: string
+      qty: string | number
+      taxable_value: string | number
+      cgst: string | number
+      sgst: string | number
+      igst: string | number
+    }>
 
-    // Group by HSN
-    const hsnMap = new Map<string, { hsn: string; description: string; qty: number; taxableValue: number; cgst: number; sgst: number; igst: number; totalTax: number }>()
-    for (const item of items) {
-      const existing = hsnMap.get(item.hsn)
-      if (existing) {
-        existing.qty += item.quantity
-        existing.taxableValue += item.taxableValue
-        existing.cgst += Math.round((item.gst / 2) * 100) / 100
-        existing.sgst += Math.round((item.gst / 2) * 100) / 100
-        existing.totalTax += item.gst
-      } else {
-        hsnMap.set(item.hsn, {
-          hsn: item.hsn,
-          description: item.hsn === '7113' ? 'Silver jewellery articles' : 'Other goods',
-          qty: item.quantity,
-          taxableValue: item.taxableValue,
-          cgst: Math.round((item.gst / 2) * 100) / 100,
-          sgst: Math.round((item.gst / 2) * 100) / 100,
-          igst: 0,
-          totalTax: item.gst,
-        })
-      }
+    const describe = (hsn: string): string => {
+      if (hsn === '7113') return 'Silver jewellery articles'
+      if (hsn === 'Unclassified') return 'Unclassified — set an HSN code on these products'
+      return 'Goods (as per product master)'
     }
 
-    res.json(Array.from(hsnMap.values()).sort((a, b) => b.taxableValue - a.taxableValue))
+    const out = rows.map((r) => {
+      const taxableValue = Number(r.taxable_value ?? 0)
+      const cgst = Number(r.cgst ?? 0)
+      const sgst = Number(r.sgst ?? 0)
+      const igst = Number(r.igst ?? 0)
+      return {
+        hsn: r.hsn,
+        description: describe(r.hsn),
+        qty: Number(r.qty ?? 0),
+        taxableValue,
+        cgst,
+        sgst,
+        igst,
+        totalTax: Math.round((cgst + sgst + igst) * 100) / 100,
+      }
+    })
+
+    res.json(out)
   } catch (err) {
+    logger.error({ err }, 'HSN summary failed')
     res.status(500).json({ error: 'Failed to generate HSN summary' })
   }
 })
@@ -1320,14 +1389,24 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
       .where(sql`${schema.salesInvoices.date}::text like ${prefix + '%'}`)
     const active = monthInvoices.filter((i) => String(i.status) !== 'cancelled' && String(i.status) !== 'refunded')
 
-    // Input GST: sum the `tax` column of this month's purchase invoices,
-    // excluding cancelled ones (mirrors the output-side filters above).
+    // Input GST: prefer the per-invoice CGST/SGST/IGST split (supplier GSTIN
+    // on file) and fall back to the `tax` column for older invoices.
     const purchaseRows = await db!
-      .select({ tax: schema.purchaseInvoices.tax, status: schema.purchaseInvoices.status, date: schema.purchaseInvoices.date })
+      .select({
+        tax: schema.purchaseInvoices.tax,
+        cgst: schema.purchaseInvoices.cgst,
+        sgst: schema.purchaseInvoices.sgst,
+        igst: schema.purchaseInvoices.igst,
+        tcsAmount: schema.purchaseInvoices.tcsAmount,
+        tcsRate: schema.purchaseInvoices.tcsRate,
+        status: schema.purchaseInvoices.status,
+        date: schema.purchaseInvoices.date,
+      })
       .from(schema.purchaseInvoices)
       .where(sql`${schema.purchaseInvoices.date}::text like ${prefix + '%'}`)
       .limit(10000)
     const inputGst = computeInputGst(purchaseRows)
+    const tcs = computeTcs(purchaseRows)
 
     let outputGst = 0
     let b2bTaxable = 0
@@ -1364,6 +1443,7 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
       outputGst: round2(outputGst),
       inputGst: round2(inputGst),
       netPayable: round2(netPayable(outputGst, inputGst)),
+      tcs: round2(tcs),
       b2bTaxable: round2(b2bTaxable),
       b2cTaxable: round2(b2cTaxable),
       mismatches,

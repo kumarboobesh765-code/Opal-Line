@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnDef } from '@/lib/table'
-import { Building2, CheckCircle2, Download, Eye, Loader2, Plus, Search, ShoppingCart, Wallet, Weight, XCircle } from 'lucide-react'
+import { Building2, CheckCircle2, Download, Eye, Loader2, PackageCheck, Plus, Search, ShoppingCart, Trash2, Wallet, Weight, XCircle } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -21,8 +21,30 @@ import {
 } from '@/components/ui/dialog'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { PurchaseOrder, Supplier } from '@/types'
+import type { Product, PurchaseOrder, PurchaseOrderReceipt, Supplier } from '@/types'
 import { formatCurrency, formatDate, formatWeight } from '@/lib/format'
+
+/** One editable line on the new-PO form. */
+interface DraftLine {
+  sku: string
+  product: string
+  qty: string
+  weight: string
+  rate: string
+}
+
+function emptyLine(): DraftLine {
+  return { sku: '', product: '', qty: '1', weight: '', rate: '' }
+}
+
+/** A "custom" option lets a line be typed in when the SKU is not in the catalog. */
+const CUSTOM_SKU = '__custom__'
+
+function lineAmount(line: DraftLine): number {
+  const weight = Number(line.weight) || 0
+  const rate = Number(line.rate) || 0
+  return Math.round(weight * rate * 100) / 100
+}
 
 const statusBadge: Record<PurchaseOrder['status'], { label: string; variant: 'warning' | 'success' | 'info' | 'muted' }> = {
   open: { label: 'Open', variant: 'warning' },
@@ -36,18 +58,22 @@ export default function PurchaseOrdersPage() {
   const navigate = useNavigate()
   const [orders, setOrders] = useState<PurchaseOrder[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [form, setForm] = useState({ supplier: '', items: '', qty: '', weight: '', value: '' })
+  const [form, setForm] = useState({ supplier: '' })
+  const [lines, setLines] = useState<DraftLine[]>([emptyLine()])
   const [viewPo, setViewPo] = useState<PurchaseOrder | null>(null)
+  const [receipt, setReceipt] = useState<PurchaseOrderReceipt | null>(null)
+  const [receiptLoading, setReceiptLoading] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
-    dbApi.getPurchaseOrders().then((d) => {
+    dbApi.getPurchaseOrdersWithItems().then((d) => {
       setOrders(d)
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -60,33 +86,92 @@ export default function PurchaseOrdersPage() {
 
   useEffect(() => {
     dbApi.getSuppliers().then(setSuppliers).catch(() => setSuppliers([]))
+    dbApi.getProducts().then(setProducts).catch(() => setProducts([]))
+  }, [])
+
+  const openView = useCallback(async (po: PurchaseOrder) => {
+    setViewPo(po)
+    setReceipt(null)
+    setReceiptLoading(true)
+    try {
+      setReceipt(await dbApi.getOrderReceipt(po.id))
+    } catch {
+      setReceipt(null)
+    } finally {
+      setReceiptLoading(false)
+    }
   }, [])
 
   const openDialog = () => {
-    setForm({ supplier: '', items: '', qty: '', weight: '', value: '' })
+    setForm({ supplier: '' })
+    setLines([emptyLine()])
     setError('')
     setDialogOpen(true)
   }
+
+  const pickProduct = (index: number, sku: string) => {
+    setLines((prev) =>
+      prev.map((l, i) => {
+        if (i !== index) return l
+        if (sku === CUSTOM_SKU) return { ...l, sku: '' }
+        const p = products.find((x) => x.sku === sku)
+        return { ...l, sku, product: p?.name ?? l.product, weight: p ? String(p.netWeight ?? '') : l.weight }
+      }),
+    )
+  }
+
+  const setLine = (index: number, patch: Partial<DraftLine>) => {
+    setLines((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)))
+  }
+
+  const removeLine = (index: number) => {
+    setLines((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)))
+  }
+
+  const lineTotals = useMemo(() => {
+    const usable = lines.filter((l) => l.sku.trim() !== '' || l.product.trim() !== '')
+    return {
+      count: usable.length,
+      qty: usable.reduce((a, l) => a + (Math.max(1, Math.floor(Number(l.qty) || 1))), 0),
+      weight: Math.round(usable.reduce((a, l) => a + (Number(l.weight) || 0), 0) * 100) / 100,
+      value: Math.round(usable.reduce((a, l) => a + lineAmount(l), 0) * 100) / 100,
+    }
+  }, [lines])
 
   const submit = async () => {
     if (!form.supplier) {
       setError('Select a supplier')
       return
     }
+    const usable = lines.filter((l) => l.sku.trim() !== '' || l.product.trim() !== '')
+    if (usable.length === 0) {
+      setError('Add at least one line item')
+      return
+    }
     setSaving(true)
     setError('')
     try {
       const count = orders.length + 1
-      await dbApi.create('purchase-orders', {
-        number: `PO-2026-${String(count + 17).padStart(4, '0')}`,
+      const created = await dbApi.create<PurchaseOrder>('purchase-orders', {
+        number: `PO-${new Date().getFullYear()}-${String(count + 17).padStart(4, '0')}`,
         supplier: form.supplier,
-        items: parseInt(form.items || '1', 10),
-        qty: parseInt(form.qty || '0', 10),
-        weight: parseFloat(form.weight || '0'),
-        value: parseFloat(form.value || '0'),
+        items: lineTotals.count,
+        qty: lineTotals.qty,
+        weight: lineTotals.weight,
+        value: lineTotals.value,
         status: 'open',
         date: new Date().toISOString(),
       })
+      await dbApi.setPurchaseOrderLines(
+        created.id,
+        usable.map((l) => ({
+          product: l.product.trim(),
+          sku: l.sku.trim(),
+          qty: Math.max(1, Math.floor(Number(l.qty) || 1)),
+          weight: Number(l.weight) || 0,
+          rate: Number(l.rate) || 0,
+        })),
+      )
       setDialogOpen(false)
       load()
     } catch (e) {
@@ -182,7 +267,7 @@ export default function PurchaseOrdersPage() {
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setViewPo(row.original)}>
+                  <Button variant="ghost" size="icon-sm" onClick={() => openView(row.original)}>
                     <Eye className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
@@ -223,7 +308,7 @@ export default function PurchaseOrdersPage() {
         ),
       },
     ],
-    [setStatus, navigate],
+    [setStatus, navigate, openView],
   )
 
   return (
@@ -285,7 +370,7 @@ export default function PurchaseOrdersPage() {
             data={filtered}
             loading={loading}
             emptyMessage="No purchase orders found"
-            onRowClick={(o) => setViewPo(o)}
+            onRowClick={(o) => openView(o)}
           />
         </CardContent>
       </Card>
@@ -297,15 +382,93 @@ export default function PurchaseOrdersPage() {
             <DialogDescription>{viewPo ? formatDate(viewPo.date) : ''}</DialogDescription>
           </DialogHeader>
           {viewPo && (
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span className="font-medium">{viewPo.supplier}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={statusBadge[viewPo.status].variant} dot>{statusBadge[viewPo.status].label}</Badge></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Line items</span><span>{viewPo.items}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Quantity</span><span>{viewPo.qty}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Weight</span><span>{formatWeight(viewPo.weight)}</span></div>
+            <div className="space-y-3 text-sm">
+              <div className="space-y-2">
+                <div className="flex justify-between"><span className="text-muted-foreground">Supplier</span><span className="font-medium">{viewPo.supplier}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={statusBadge[viewPo.status].variant} dot>{statusBadge[viewPo.status].label}</Badge></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Quantity</span><span>{viewPo.qty}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Weight</span><span>{formatWeight(viewPo.weight)}</span></div>
+              </div>
+
+              {(viewPo.lines ?? []).length > 0 ? (
+                <div className="overflow-hidden rounded-md border border-border/60">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2 font-medium">Item</th>
+                        <th className="px-3 py-2 font-medium">SKU</th>
+                        <th className="px-3 py-2 text-right font-medium">Qty</th>
+                        <th className="px-3 py-2 text-right font-medium">Weight</th>
+                        <th className="px-3 py-2 text-right font-medium">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(viewPo.lines ?? []).map((l, i) => (
+                        <tr key={`${l.sku}-${i}`} className="border-b border-border/40 last:border-0">
+                          <td className="px-3 py-2">{l.product || '—'}</td>
+                          <td className="px-3 py-2 font-mono text-xs">{l.sku || '—'}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{l.qty}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{formatWeight(l.weight)}</td>
+                          <td className="px-3 py-2 text-right font-medium tabular-nums">{formatCurrency(l.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+
               <div className="flex justify-between border-t pt-2 font-semibold"><span>Order value</span><span>{formatCurrency(viewPo.value)}</span></div>
             </div>
           )}
+
+          {/* Ordered vs received — cancelled invoices are excluded. */}
+          <div className="rounded-md border border-border/60 p-3">
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <PackageCheck className="h-3.5 w-3.5" /> Received against this order
+            </p>
+            {receiptLoading ? (
+              <p className="text-xs text-muted-foreground">Loading receipt…</p>
+            ) : !receipt ? (
+              <p className="text-xs text-muted-foreground">No receipt information available.</p>
+            ) : receipt.invoiceCount === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Nothing received yet — record a purchase invoice against this order to see it here.
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <p className="text-[11px] text-muted-foreground">Ordered</p>
+                    <p className="font-medium tabular-nums">{receipt.orderedQty} pcs</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-muted-foreground">Received</p>
+                    <p className="font-medium tabular-nums">{receipt.receivedQty} pcs</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-muted-foreground">Variance</p>
+                    {receipt.shortBy > 0 ? (
+                      <p className="font-medium tabular-nums text-red-600 dark:text-red-400">−{receipt.shortBy} short</p>
+                    ) : receipt.overBy > 0 ? (
+                      <p className="font-medium tabular-nums text-warning-600 dark:text-warning-400">+{receipt.overBy} over</p>
+                    ) : (
+                      <p className="font-medium text-success-600 dark:text-success-400">Complete</p>
+                    )}
+                  </div>
+                </div>
+                <ul className="mt-2 space-y-1">
+                  {receipt.invoices.map((inv) => (
+                    <li key={inv.id} className="flex items-center justify-between text-xs">
+                      <span className="font-mono">{inv.number}</span>
+                      <span className="text-muted-foreground">
+                        {inv.qty} pcs · {formatWeight(inv.weight)} · {formatDate(inv.date)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -327,35 +490,70 @@ export default function PurchaseOrdersPage() {
                 className="w-full"
               />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Line Items">
-                <Input
-                  type="number" min="1"
-                  value={form.items}
-                  onChange={(e) => setForm((f) => ({ ...f, items: e.target.value }))}
-                />
-              </Field>
-              <Field label="Quantity">
-                <Input
-                  type="number" min="0"
-                  value={form.qty}
-                  onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))}
-                />
-              </Field>
-              <Field label="Weight (gm)">
-                <Input
-                  type="number" min="0" step="0.1"
-                  value={form.weight}
-                  onChange={(e) => setForm((f) => ({ ...f, weight: e.target.value }))}
-                />
-              </Field>
-              <Field label="Order Value (₹)">
-                <Input
-                  type="number" min="0" step="0.1"
-                  value={form.value}
-                  onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
-                />
-              </Field>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Line items</p>
+                <Button variant="outline" size="sm" onClick={() => setLines((prev) => [...prev, emptyLine()])}>
+                  <Plus className="h-3.5 w-3.5" /> Add line
+                </Button>
+              </div>
+              <div className="overflow-x-auto rounded-md border border-border/60">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                      <th className="min-w-[190px] px-2 py-2 font-medium">Product / SKU</th>
+                      <th className="w-20 px-2 py-2 text-right font-medium">Qty</th>
+                      <th className="w-28 px-2 py-2 text-right font-medium">Weight (gm)</th>
+                      <th className="w-28 px-2 py-2 text-right font-medium">Rate / gm</th>
+                      <th className="w-24 px-2 py-2 text-right font-medium">Amount</th>
+                      <th className="w-10 px-2 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lines.map((line, index) => (
+                      <tr key={index} className="border-b border-border/40 last:border-0">
+                        <td className="px-2 py-1.5">
+                          <Select
+                            options={[
+                              { value: '', label: 'Select a product…' },
+                              ...products.map((p) => ({ value: p.sku, label: `${p.name} (${p.sku})` })),
+                              { value: CUSTOM_SKU, label: 'Other / type manually' },
+                            ]}
+                            value={line.sku === '' ? (line.product ? CUSTOM_SKU : '') : line.sku}
+                            onValueChange={(v) => pickProduct(index, v)}
+                            className="h-8 text-xs"
+                          />
+                          <Input
+                            value={line.product}
+                            onChange={(e) => setLine(index, { product: e.target.value })}
+                            placeholder="Item name / SKU"
+                            className="mt-1 h-7 text-xs"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input type="number" min="1" value={line.qty} onChange={(e) => setLine(index, { qty: e.target.value })} className="h-8 text-right text-xs" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input type="number" min="0" step="0.001" value={line.weight} onChange={(e) => setLine(index, { weight: e.target.value })} className="h-8 text-right text-xs" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <Input type="number" min="0" step="0.01" value={line.rate} onChange={(e) => setLine(index, { rate: e.target.value })} className="h-8 text-right text-xs" />
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-xs">{formatCurrency(lineAmount(line))}</td>
+                        <td className="px-2 py-1.5 text-right">
+                          <Button variant="ghost" size="icon-sm" onClick={() => removeLine(index)} aria-label="Remove line">
+                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1.5 text-right text-xs text-muted-foreground">
+                {lineTotals.count} line(s) · {lineTotals.qty} pcs · {formatWeight(lineTotals.weight)} · {formatCurrency(lineTotals.value)}
+              </p>
             </div>
             {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
           </div>

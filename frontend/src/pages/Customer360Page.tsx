@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dbApi } from '@/lib/api'
+import { SalesFollowUpsCard } from '@/components/sales-follow-ups-card'
 import type { Customer, Customer360 } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/format'
 
@@ -154,6 +155,8 @@ export default function Customer360Page() {
           </CardContent>
         </Card>
       </div>
+
+      <SalesFollowUpsCard customer={data.customer} title="Open follow-ups" />
 
       <Card>
         <CardHeader>

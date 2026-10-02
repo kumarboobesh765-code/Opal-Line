@@ -462,21 +462,63 @@ dbRouter.post('/orders/repair-pii', requirePermission('shopify', 'edit'), async 
   }
 })
 
+// ─── E-invoicing (GST IRN) ─────────────────────────────────────────────────
+// Mode is a setting: off | manual | automatic. In `automatic` mode a newly
+// issued invoice is pushed to the gateway without anyone clicking anything.
 dbRouter.get('/einvoice/:invoiceId', requirePermission('sales', 'view'), async (req, res) => {
   try {
-    const [settingsRow] = await db!.select().from(s.settings).where(eq(s.settings.id, SETTINGS_ID)).limit(1)
-    if (!settingsRow?.einvoiceEnabled) {
-      return res.json({ status: 'not_configured', message: 'E-invoicing not configured. Enable it in Settings > Tax & Compliance.' })
-    }
+    const { resolveEInvoiceMode, isRealGatewayConfigured, resolveProvider } = await import('../einvoice')
+    const mode = await resolveEInvoiceMode()
     const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.invoiceId)).limit(1)
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
-    if (invoice.irn) {
-      return res.json({ status: 'generated', irn: invoice.irn, irnDate: invoice.irnDate, qrCode: invoice.qrCode })
-    }
-    return res.json({ status: 'pending', message: 'E-invoice generation not yet implemented. IRN will appear here once integrated with the GSTN IRP.' })
+    res.json({
+      mode,
+      provider: resolveProvider().name,
+      gatewayConfigured: isRealGatewayConfigured(),
+      status: invoice.irn ? 'generated' : mode === 'off' ? 'disabled' : 'pending',
+      irn: invoice.irn ?? null,
+      irnDate: invoice.irnDate ?? null,
+      qrCode: invoice.qrCode ?? null,
+    })
   } catch (err) {
-    logger.error({ err }, 'einvoice lookup failed')
+    logger.error({ err }, 'einvoice status failed')
     res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+dbRouter.post('/einvoice/:invoiceId/generate', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    if (!requireDb(res)) return
+    const { generateEInvoiceForInvoice, resolveEInvoiceMode } = await import('../einvoice')
+    const mode = await resolveEInvoiceMode()
+    if (mode === 'off') return res.status(400).json({ error: 'E-invoicing is switched off in Settings → Tax & Compliance' })
+
+    const [existing] = await db!.select({ irn: s.salesInvoices.irn }).from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.invoiceId)).limit(1)
+    if (!existing) return res.status(404).json({ error: 'Invoice not found' })
+    if (existing.irn) return res.status(409).json({ error: 'This invoice already has an IRN', irn: existing.irn })
+
+    const result = await generateEInvoiceForInvoice(req.params.invoiceId)
+    if (!result.ok) return res.status(502).json({ error: result.error })
+    recordCrud('invoices', 'E-invoice generated', req, { invoiceId: req.params.invoiceId, irn: result.irn, provider: result.provider })
+    res.json({ ok: true, irn: result.irn, irnDate: result.irnDate, qrCode: result.qrCode, provider: result.provider })
+  } catch (err) {
+    logger.error({ err }, 'einvoice generate failed')
+    res.status(500).json({ error: 'Failed to generate IRN' })
+  }
+})
+
+dbRouter.post('/einvoice/:invoiceId/cancel', requirePermission('sales', 'edit'), async (req, res) => {
+  try {
+    if (!requireDb(res)) return
+    const { cancelEInvoiceForInvoice } = await import('../einvoice')
+    const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim().slice(0, 100) : 'Cancelled by seller'
+    const result = await cancelEInvoiceForInvoice(req.params.invoiceId, reason)
+    if (!result.ok) return res.status(400).json({ error: result.error })
+    recordCrud('invoices', 'E-invoice cancelled', req, { invoiceId: req.params.invoiceId, reason })
+    res.json({ ok: true, cancelDate: result.cancelDate })
+  } catch (err) {
+    logger.error({ err }, 'einvoice cancel failed')
+    res.status(500).json({ error: 'Failed to cancel IRN' })
   }
 })
 
@@ -597,6 +639,9 @@ dbRouter.post('/invoices', requirePermission('sales', 'create'), async (req, res
     delete clean.id
     delete clean.items
     if (!clean.number) return res.status(400).json({ error: 'Invoice number is required' })
+    // Every dated report (dashboard, GST, HSN, statements, day book) filters on
+    // this column — an invoice without one is invisible in all of them.
+    if (!clean.date) clean.date = new Date().toISOString()
 
     const hasItems = items.length > 0
     const gst = num(body.gst, 3)
@@ -635,6 +680,15 @@ dbRouter.post('/invoices', requirePermission('sales', 'create'), async (req, res
     void import('../loyalty').then(({ earnForInvoice }) =>
       earnForInvoice({ id: row.id, number: row.number ?? '', customer: row.customer ?? '', grandTotal: row.grandTotal, status: row.status }),
     )
+    // E-invoicing: in `automatic` mode every new invoice is pushed to the
+    // gateway straight away. Fire-and-forget so billing is never blocked.
+    void import('../einvoice')
+      .then(async ({ resolveEInvoiceMode, generateEInvoiceForInvoice }) => {
+        if ((await resolveEInvoiceMode()) !== 'automatic') return
+        const result = await generateEInvoiceForInvoice(row.id)
+        if (!result.ok) logger.error({ err: result.error, invoice: row.number }, 'automatic IRN generation failed')
+      })
+      .catch(() => undefined)
     res.status(201).json(stripHash(row))
   } catch (err) {
     res.status(400).json({ error: 'Failed to create invoice' })
@@ -688,6 +742,23 @@ dbRouter.patch('/invoices/:id', requirePermission('sales', 'edit'), async (req, 
 
     if (!row) return res.status(404).json({ error: 'Not found' })
     recordCrud('invoices', 'Updated', req, row)
+
+    // Marking an invoice cancelled / refunded gives back the loyalty points it
+    // earned (the earn entry is skipped when an invoice is voided up front).
+    const nextStatus = String(row.status ?? '').toLowerCase()
+    if (nextStatus === 'cancelled' || nextStatus === 'refunded') {
+      void import('../loyalty')
+        .then(({ reverseEarnedForInvoice }) =>
+          reverseEarnedForInvoice({
+            id: row.id,
+            number: row.number,
+            customer: String(row.customer ?? ''),
+            reason: `Reversed — invoice ${row.number} marked ${nextStatus}`,
+          }),
+        )
+        .catch(() => undefined)
+    }
+
     res.json(stripHash(row))
   } catch (err) {
     res.status(400).json({ error: 'Failed to update invoice' })
@@ -1124,6 +1195,18 @@ dbRouter.post('/invoices/:id/return', requirePermission('sales', 'create'), asyn
     })
 
     recordCrud('sales-returns', 'Created', req, ret)
+    // Give back the points earned on the value being returned.
+    void import('../loyalty')
+      .then(({ reverseEarnedForInvoice }) =>
+        reverseEarnedForInvoice({
+          id: invoice.id,
+          number: invoice.number,
+          customer: String(invoice.customer ?? ''),
+          value: amount,
+          reason: `Reversed on return — credit note ${number} (₹${amount.toLocaleString('en-IN')})`,
+        }),
+      )
+      .catch(() => undefined)
     if (invoice.id) await insertOrderEvent(invoice.id, 'Return Processed', `Credit note ${number} — ${returnItems.length} item(s), ₹${amount.toLocaleString('en-IN')}${restock ? ', restocked' : ''}`, actorFromRequest(req).userId ?? 'system')
     void import('../statusNotifications').then((m) => m.notifyReturnProcessed({ customer: invoice.customer, invoiceNumber: invoice.number, amount, restocked: restock, creditNoteNumber: number })).catch(() => undefined)
     res.json({ return: ret, creditNoteNumber: number, amount, restocked: restock })
@@ -1496,19 +1579,36 @@ async function logResend(entry: typeof s.notificationLog.$inferSelect, ok: boole
 dbRouter.get('/inventory/reorder-suggestions', requirePermission('inventory', 'view'), async (_req, res) => {
   if (!requireDb(res)) return
   try {
-    // Sales per SKU over the last 90 days from order line items (JSONB)
+    // Sales per SKU over the last 90 days.
+    //
+    // Velocity has to count what the shop *actually sold*, which means both
+    // sources: tax invoices (counter sales typed straight into the ERP) and
+    // order line items (Shopify / online). Reading only sales_orders made every
+    // manually issued invoice count as zero, so the bestsellers sold over the
+    // counter never earned a reorder suggestion. Orders that were invoiced are
+    // skipped here to avoid counting the same sale twice.
     const salesRows = await db!.execute(sql`
-      SELECT li->>'sku' AS sku,
-             sum((li->>'quantity')::numeric) AS qty_sold
-      FROM sales_orders, jsonb_array_elements(line_items) AS li
-      WHERE date > now() - interval '90 days'
-        AND li->>'sku' IS NOT NULL AND li->>'sku' <> ''
-      GROUP BY li->>'sku'
+      SELECT sku, sum(qty)::numeric AS qty_sold FROM (
+        SELECT lower(trim(it.sku)) AS sku, coalesce(it.qty, 0)::numeric AS qty
+        FROM sales_invoice_items it
+        JOIN sales_invoices i ON i.id = it.invoice_id
+        WHERE i.date > now() - interval '90 days'
+          AND coalesce(i.status, '') NOT IN ('cancelled', 'refunded')
+          AND it.sku IS NOT NULL AND trim(it.sku) <> ''
+        UNION ALL
+        SELECT lower(trim(li->>'sku')) AS sku, (li->>'quantity')::numeric AS qty
+        FROM sales_orders, jsonb_array_elements(line_items) AS li
+        WHERE date > now() - interval '90 days'
+          AND coalesce(status, '') NOT IN ('cancelled', 'fulfilled', 'invoiced')
+          AND li->>'sku' IS NOT NULL AND trim(li->>'sku') <> ''
+      ) sold
+      GROUP BY sku
     `)
     const soldMap = new Map<string, number>()
     for (const row of salesRows as any[]) {
       soldMap.set(String(row.sku), Number(row.qty_sold ?? 0))
     }
+    // Products are matched by SKU case-insensitively, same as the query.
 
     const prods = await db!.select().from(s.products)
     const suggestions: Array<{
@@ -1518,7 +1618,7 @@ dbRouter.get('/inventory/reorder-suggestions', requirePermission('inventory', 'v
     }> = []
     for (const p of prods) {
       if (p.trackInventory === false) continue
-      const sold90d = soldMap.get(p.sku) ?? 0
+      const sold90d = soldMap.get(String(p.sku ?? '').trim().toLowerCase()) ?? 0
       const weeklyVelocity = Math.round((sold90d / 13) * 100) / 100 // 13 weeks ≈ 90 days
       const stock = p.stock ?? 0
       const weeksOfCover = weeklyVelocity > 0 ? Math.round((stock / weeklyVelocity) * 10) / 10 : 99
@@ -1566,7 +1666,7 @@ dbRouter.post('/purchase-orders/from-reorder', requirePermission('purchase', 'cr
     const prods = (await db!.select().from(s.products)).filter((p) => {
       if (p.trackInventory === false) return false
       if (ids && !ids.includes(p.id)) return false
-      const sold90d = soldMap.get(p.sku) ?? 0
+      const sold90d = soldMap.get(String(p.sku ?? '').trim().toLowerCase()) ?? 0
       const weeklyVelocity = Math.round((sold90d / 13) * 100) / 100
       const stock = p.stock ?? 0
       const weeksOfCover = weeklyVelocity > 0 ? Math.round((stock / weeklyVelocity) * 10) / 10 : 99
@@ -1597,7 +1697,7 @@ dbRouter.post('/purchase-orders/from-reorder', requirePermission('purchase', 'cr
       if (!poNumber) return res.status(500).json({ error: 'Could not generate PO number' })
 
       const qty = list.reduce((a, p) => {
-        const sold90d = soldMap.get(p.sku) ?? 0
+        const sold90d = soldMap.get(String(p.sku ?? '').trim().toLowerCase()) ?? 0
         const weeklyVelocity = Math.round((sold90d / 13) * 100) / 100
         const target = Math.max(p.reorderLevel ?? 5, Math.ceil(weeklyVelocity * 8))
         return a + Math.max(target - (p.stock ?? 0), 1)
@@ -1628,14 +1728,458 @@ dbRouter.post('/purchase-orders/from-reorder', requirePermission('purchase', 'cr
 })
 
 dbRouter.get('/purchase-invoices', listOf(s.purchaseInvoices, s.purchaseInvoices.date))
+// Line items + live balance for one purchase invoice.
+dbRouter.get('/purchase-invoices/:id/with-items', requirePermission('purchase', 'view'), async (req, res) => {
+  try {
+    const { getPurchaseInvoiceWithItems } = await import('../purchases')
+    const invoice = await getPurchaseInvoiceWithItems(req.params.id)
+    if (!invoice) return res.status(404).json({ error: 'Purchase invoice not found' })
+    res.json(invoice)
+  } catch (err) {
+    logger.error({ err }, 'purchase invoice with-items failed')
+    res.status(500).json({ error: 'Failed to load purchase invoice' })
+  }
+})
+
+// Create a purchase invoice with line items. Each line adds its quantity to
+// stock — purchases were previously totals-only, so nothing ever arrived.
+dbRouter.post('/purchase-invoices', requirePermission('purchase', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const {
+      normalizePurchaseItems, purchaseTotals, saveInvoiceItems,
+      splitInputGst, getBusinessState, computeTcs, reversePurchaseStock,
+    } = await import('../purchases')
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const number = String(body.number ?? '').trim()
+    const supplier = String(body.supplier ?? '').trim()
+    if (!number) return res.status(400).json({ error: 'Supplier invoice number is required' })
+    if (!supplier) return res.status(400).json({ error: 'supplier is required' })
+
+    const items = normalizePurchaseItems(body.items)
+    if (items.length === 0) {
+      return res.status(400).json({ error: 'At least one line item is required so stock can be updated' })
+    }
+    const totals = purchaseTotals(items)
+    const supplierGstin = String(body.supplierGstin ?? '').trim() || null
+    const gstSplit = splitInputGst(totals.tax, supplierGstin, await getBusinessState())
+    const tcs = computeTcs(totals.cost, body.tcsRate as number | null | undefined)
+    const date = body.date ? String(body.date) : new Date().toISOString()
+    const id = randomUUID()
+
+    const result = await db!.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(s.purchaseInvoices)
+        .values({
+          id,
+          number,
+          supplier,
+          items: totals.qty,
+          qty: totals.qty,
+          weight: totals.weight,
+          rate: totals.rate,
+          cost: totals.cost,
+          tax: totals.tax,
+          total: totals.total,
+          paidAmount: 0,
+          supplierGstin,
+          supplierState: gstSplit.supplierState || null,
+          cgst: gstSplit.cgst,
+          sgst: gstSplit.sgst,
+          igst: gstSplit.igst,
+          tcsRate: tcs.tcsRate,
+          tcsAmount: tcs.tcsAmount,
+          // Link back to the PO this received, so ordered-vs-received works.
+          orderId: body.orderId ? String(body.orderId) : null,
+          status: String(body.status ?? 'pending'),
+          date,
+        } as any)
+        .returning()
+      const saved = await saveInvoiceItems(tx as never, id, items, { addStock: true })
+      return { row, saved }
+    })
+
+    recordCrud('purchase-invoices', 'Created', req, result.row)
+    logger.info(
+      { number, supplier, lines: result.saved.lines, stocked: result.saved.stocked, total: totals.total },
+      'Purchase invoice received — stock updated',
+    )
+    res.status(201).json({ ...stripHash(result.row), items, lines: result.saved.lines, stockedSkus: result.saved.stocked })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'purchase invoice create failed')
+    // Drizzle wraps the driver error, so the constraint text ("duplicate key
+    // value violates unique constraint") lives on the cause, not the message.
+    const causeMsg = (err as { cause?: unknown })?.cause instanceof Error ? (err as Error & { cause: Error }).cause.message : ''
+    const isDuplicate = /unique|duplicate key/i.test(`${msg} ${causeMsg}`)
+    res.status(isDuplicate ? 400 : 500).json({ error: isDuplicate ? 'That supplier invoice number already exists' : 'Failed to create purchase invoice' })
+  }
+})
+
+// Update a purchase invoice: replacing the lines reverses the stock the old
+// lines added and applies the new ones. Cancelling takes the stock back out.
+dbRouter.patch('/purchase-invoices/:id', requirePermission('purchase', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const {
+      normalizePurchaseItems, purchaseTotals, saveInvoiceItems,
+      splitInputGst, getBusinessState, computeTcs, reversePurchaseStock,
+      restorePurchaseStock, balanceOf,
+    } = await import('../purchases')
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const [existing] = await db!.select().from(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, req.params.id)).limit(1)
+    if (!existing) return res.status(404).json({ error: 'Purchase invoice not found' })
+
+    const paid = Number(existing.paidAmount ?? 0)
+    const nextStatus = body.status !== undefined ? String(body.status) : null
+    const beingCancelled = nextStatus === 'cancelled' && String(existing.status ?? '') !== 'cancelled'
+    const beingReinstated = String(existing.status ?? '') === 'cancelled' && nextStatus && nextStatus !== 'cancelled'
+
+    const patch: Record<string, unknown> = {}
+    for (const key of ['number', 'supplier', 'supplierGstin', 'orderId', 'date'] as const) {
+      if (body[key] !== undefined) patch[key] = body[key] === null ? null : String(body[key])
+    }
+    if (nextStatus) patch.status = nextStatus
+
+    const rawItems = body.items !== undefined ? normalizePurchaseItems(body.items) : null
+    if (rawItems && rawItems.length > 0) {
+      const totals = purchaseTotals(rawItems)
+      const supplierGstin = String(body.supplierGstin ?? existing.supplierGstin ?? '').trim() || null
+      const gstSplit = splitInputGst(totals.tax, supplierGstin, await getBusinessState())
+      const tcs = computeTcs(totals.cost, (body.tcsRate ?? existing.tcsRate) as number | null | undefined)
+      Object.assign(patch, {
+        items: totals.qty,
+        qty: totals.qty,
+        weight: totals.weight,
+        rate: totals.rate,
+        cost: totals.cost,
+        tax: totals.tax,
+        total: totals.total,
+        supplierGstin,
+        supplierState: gstSplit.supplierState || null,
+        cgst: gstSplit.cgst,
+        sgst: gstSplit.sgst,
+        igst: gstSplit.igst,
+        tcsRate: tcs.tcsRate,
+        tcsAmount: tcs.tcsAmount,
+      })
+      if (Number(totals.total) < paid - 0.01) {
+        return res.status(400).json({ error: `Total is lower than the ${paid.toFixed(2)} already paid — adjust the payment first` })
+      }
+    }
+
+    const { updated, reversedSkus, stockedSkus } = await db!.transaction(async (tx) => {
+      let reversed = 0
+      let stocked = 0
+      // Lines are only rewritten when the caller actually sends new ones. A
+      // metadata-only edit (renumbering, fixing a GSTIN) must never drop them
+      // — that would silently delete the record of what arrived while leaving
+      // its stock in place, with no way to reconcile it later.
+      const replacingLines = Boolean(rawItems && rawItems.length > 0)
+      if (replacingLines) {
+        // Take back what the previous lines added, then apply the new ones.
+        reversed = await reversePurchaseStock(existing.id, tx as never)
+        await tx.delete(s.purchaseInvoiceItems).where(eq(s.purchaseInvoiceItems.invoiceId, existing.id))
+        // A cancelled invoice still records its lines — they just don't move stock.
+        stocked = (await saveInvoiceItems(tx as never, existing.id, rawItems!, { addStock: !beingCancelled })).stocked
+      } else if (beingCancelled) {
+        // Cancelling reverses the stock but KEEPS the lines, so the invoice
+        // still shows what was received and can be reinstated as-is.
+        reversed = await reversePurchaseStock(existing.id, tx as never)
+      } else if (beingReinstated) {
+        // Put back exactly the stock the kept lines describe.
+        stocked = await restorePurchaseStock(existing.id, tx as never)
+      }
+      const [row] = await tx
+        .update(s.purchaseInvoices)
+        .set(patch as never)
+        .where(eq(s.purchaseInvoices.id, existing.id))
+        .returning()
+      return { updated: row, reversedSkus: reversed, stockedSkus: stocked }
+    })
+
+    recordCrud('purchase-invoices', 'Updated', req, updated)
+    res.json({
+      ...stripHash(updated),
+      balance: balanceOf(updated),
+      reversedSkus,
+      stockedSkus,
+      note: beingReinstated ? 'Invoice reinstated — stock re-applied' : undefined,
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'purchase invoice update failed')
+    res.status(500).json({ error: msg })
+  }
+})
+// Permanently remove a purchase invoice. Cancelling is usually enough, but a
+// duplicate or test entry should not sit in the books forever. Stock the
+// invoice added is reversed in the same transaction, and the ledger rows that
+// reference it go with it (ON DELETE CASCADE).
+dbRouter.delete('/purchase-invoices/:id', requirePermission('purchase', 'delete'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { reversePurchaseStock } = await import('../purchases')
+    const wasCancelled = String((await db!.select({ status: s.purchaseInvoices.status })
+      .from(s.purchaseInvoices)
+      .where(eq(s.purchaseInvoices.id, req.params.id))
+      .limit(1))[0]?.status ?? '').toLowerCase() === 'cancelled'
+    const removed = await db!.transaction(async (tx) => {
+      const [existing] = await tx.select().from(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, req.params.id)).limit(1)
+      if (!existing) return null
+      // A cancelled invoice already had its stock taken back, so don't take it
+      // out a second time.
+      if (!wasCancelled) await reversePurchaseStock(existing.id, tx as never)
+      await tx.delete(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, existing.id))
+      return existing
+    })
+    if (!removed) return res.status(404).json({ error: 'Purchase invoice not found' })
+    recordCrud('purchase-invoices', 'Deleted', req, removed)
+    res.json({ ok: true, id: req.params.id })
+  } catch (err) {
+    logger.error({ err }, 'purchase invoice delete failed')
+    res.status(500).json({ error: 'Failed to delete purchase invoice' })
+  }
+})
+
 dbRouter.get('/purchase-invoices/:id', oneOf(s.purchaseInvoices, s.purchaseInvoices.id))
 dbRouter.get('/purchase-orders', listOf(s.purchaseOrders, s.purchaseOrders.date))
+
+// Purchase orders with their line items attached (an order without lines only
+// carries totals, so the "what did we actually order" question is unanswerable).
+dbRouter.get('/purchase-orders/with-items', requirePermission('purchase', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { getOrderLines } = await import('../purchases')
+    const limit = Math.min(200, Math.max(1, num(req.query.limit, 100)))
+    const orders = await db!.select().from(s.purchaseOrders).orderBy(desc(s.purchaseOrders.date)).limit(limit)
+    const lines = await getOrderLines(orders.map((o) => o.id))
+    const byOrder = new Map<string, typeof lines>()
+    for (const l of lines) {
+      const key = String(l.orderId)
+      const arr = byOrder.get(key) ?? []
+      arr.push(l)
+      byOrder.set(key, arr)
+    }
+    res.json({
+      page: 1,
+      pageSize: limit,
+      total: orders.length,
+      data: orders.map((o) => ({
+        ...o,
+        lines: (byOrder.get(o.id) ?? []).map((l) => ({
+          id: l.id,
+          product: l.product ?? '',
+          sku: l.sku ?? '',
+          qty: Number(l.qty ?? 0),
+          weight: Number(l.weight ?? 0),
+          rate: Number(l.rate ?? 0),
+          amount: Number(l.amount ?? 0),
+        })),
+      })),
+    })
+  } catch (err) {
+    logger.error({ err }, 'purchase orders with-items failed')
+    res.status(500).json({ error: 'Failed to load purchase orders' })
+  }
+})
+
+dbRouter.get('/purchase-orders/:id/with-items', requirePermission('purchase', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { getOrderLines } = await import('../purchases')
+    const [order] = await db!.select().from(s.purchaseOrders).where(eq(s.purchaseOrders.id, req.params.id)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Purchase order not found' })
+    const lines = await getOrderLines([order.id])
+    res.json({
+      ...order,
+      lines: lines.map((l) => ({
+        id: l.id,
+        product: l.product ?? '',
+        sku: l.sku ?? '',
+        qty: Number(l.qty ?? 0),
+        weight: Number(l.weight ?? 0),
+        rate: Number(l.rate ?? 0),
+        amount: Number(l.amount ?? 0),
+      })),
+    })
+  } catch (err) {
+    logger.error({ err }, 'purchase order with-items failed')
+    res.status(500).json({ error: 'Failed to load purchase order' })
+  }
+})
+
+// Replace a PO's lines. Orders only become stock when the purchase invoice is
+// recorded, so this never touches inventory.
+dbRouter.patch('/purchase-orders/:id/lines', requirePermission('purchase', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { normalizeOrderLines, orderLineTotals, saveOrderLines } = await import('../purchases')
+    const [order] = await db!.select().from(s.purchaseOrders).where(eq(s.purchaseOrders.id, req.params.id)).limit(1)
+    if (!order) return res.status(404).json({ error: 'Purchase order not found' })
+    const lines = normalizeOrderLines(req.body?.items ?? req.body?.lines)
+    if (lines.length === 0) return res.status(400).json({ error: 'At least one line item is required' })
+    const totals = orderLineTotals(lines)
+    const [updated] = await db!
+      .update(s.purchaseOrders)
+      .set(totals)
+      .where(eq(s.purchaseOrders.id, order.id))
+      .returning()
+    const saved = await saveOrderLines(order.id, lines)
+    recordCrud('purchase-orders', 'Updated', req, updated)
+    res.json({ ...stripHash(updated), lines, linesSaved: saved })
+  } catch (err) {
+    logger.error({ err }, 'purchase order lines update failed')
+    res.status(500).json({ error: 'Failed to save purchase order lines' })
+  }
+})
+
 dbRouter.get('/purchase-orders/:id', oneOf(s.purchaseOrders, s.purchaseOrders.id))
 
 dbRouter.get('/sales-returns', listOf(s.salesReturns, s.salesReturns.date))
 dbRouter.get('/sales-returns/:id', oneOf(s.salesReturns, s.salesReturns.id))
 
 dbRouter.get('/purchase-returns', listOf(s.purchaseReturns, s.purchaseReturns.date))
+
+// ─── Purchase returns ───────────────────────────────────────────────────────
+
+// Returns carry line items so the goods can actually come back out of stock.
+// Stock only moves when the return is RECEIVED — a pending or approved return
+// is paperwork.
+dbRouter.get('/purchase-returns/with-lines', requirePermission('purchase', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { getReturnLines } = await import('../purchases')
+    const limit = Math.min(200, Math.max(1, num(req.query.limit, 100)))
+    const returns = await db!.select().from(s.purchaseReturns).orderBy(desc(s.purchaseReturns.date)).limit(limit)
+    const byReturn = new Map<string, Awaited<ReturnType<typeof getReturnLines>>>()
+    for (const r of returns) byReturn.set(r.id, await getReturnLines(r.id))
+    res.json({
+      page: 1,
+      pageSize: limit,
+      total: returns.length,
+      data: returns.map((r) => ({
+        ...r,
+        lines: (byReturn.get(r.id) ?? []).map((l) => ({
+          id: l.id,
+          product: l.product ?? '',
+          sku: l.sku ?? '',
+          qty: Number(l.qty ?? 0),
+          weight: Number(l.weight ?? 0),
+          rate: Number(l.rate ?? 0),
+          amount: Number(l.amount ?? 0),
+        })),
+      })),
+    })
+  } catch (err) {
+    logger.error({ err }, 'purchase returns with-lines failed')
+    res.status(500).json({ error: 'Failed to load purchase returns' })
+  }
+})
+
+dbRouter.post('/purchase-returns', requirePermission('purchase', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { normalizeReturnLines, returnLineTotals, saveReturnLines } = await import('../purchases')
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const number = String(body.number ?? '').trim()
+    const supplier = String(body.supplier ?? '').trim()
+    if (!number) return res.status(400).json({ error: 'Return number is required' })
+    if (!supplier) return res.status(400).json({ error: 'supplier is required' })
+    const lines = normalizeReturnLines(body.items ?? body.lines)
+    if (lines.length === 0) return res.status(400).json({ error: 'At least one line item is required so stock can be taken back' })
+    const totals = returnLineTotals(lines)
+    const status = String(body.status ?? 'pending')
+    const reverseStock = status === 'received'
+
+    const id = randomUUID()
+    const result = await db!.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(s.purchaseReturns)
+        .values({
+          id,
+          number,
+          supplier,
+          invoiceId: body.invoiceId ? String(body.invoiceId) : null,
+          items: totals.items,
+          weight: totals.weight,
+          amount: totals.amount,
+          status,
+          date: body.date ? String(body.date) : new Date().toISOString(),
+        } as any)
+        .returning()
+      const saved = await saveReturnLines(tx as never, id, lines, { reverseStock })
+      return { row, saved }
+    })
+
+    recordCrud('purchase-returns', 'Created', req, result.row)
+    logger.info(
+      { number, supplier, lines: result.saved.lines, reversed: result.saved.reversed },
+      'Purchase return recorded',
+    )
+    res.status(201).json({ ...stripHash(result.row), lines, linesSaved: result.saved.lines, reversedSkus: result.saved.reversed })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'purchase return create failed')
+    const isDuplicate = /unique|duplicate key/i.test(`${msg} ${(err as { cause?: unknown })?.cause instanceof Error ? (err as Error & { cause: Error }).cause.message : ''}`)
+    res.status(isDuplicate ? 400 : 500).json({ error: isDuplicate ? 'That return number already exists' : 'Failed to create purchase return' })
+  }
+})
+
+// Receiving a return takes the goods back out of stock; un-receiving puts them
+// back. Cancelling a *received* return also reverses, so nothing is stranded.
+dbRouter.patch('/purchase-returns/:id', requirePermission('purchase', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const { restoreReturnStock, reverseReturnStock } = await import('../purchases')
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const [existing] = await db!.select().from(s.purchaseReturns).where(eq(s.purchaseReturns.id, req.params.id)).limit(1)
+    if (!existing) return res.status(404).json({ error: 'Purchase return not found' })
+
+    const wasReceived = String(existing.status ?? '').toLowerCase() === 'received'
+    const nextStatus = body.status !== undefined ? String(body.status).toLowerCase() : null
+    const nowReceived = nextStatus === 'received'
+    const nowCancelled = nextStatus === 'cancelled'
+    const patch: Record<string, unknown> = {}
+    for (const key of ['number', 'supplier', 'invoiceId', 'date'] as const) {
+      if (body[key] !== undefined) patch[key] = body[key] === null ? null : String(body[key])
+    }
+    if (nextStatus) patch.status = nextStatus
+
+    const { updated, moved } = await db!.transaction(async (tx) => {
+      let moved = 0
+      if (wasReceived && (nowCancelled || (nextStatus !== null && !nowReceived))) {
+        // Leaving the received state — goods go back on the shelf.
+        moved = await restoreReturnStock(existing.id, tx as never)
+      } else if (!wasReceived && (nowReceived || nowCancelled)) {
+        // Entering received (or being cancelled while already received).
+        moved = await reverseReturnStock(existing.id, tx as never)
+      }
+      const [row] = await tx.update(s.purchaseReturns).set(patch as never).where(eq(s.purchaseReturns.id, existing.id)).returning()
+      return { updated: row, moved }
+    })
+
+    recordCrud('purchase-returns', 'Updated', req, updated)
+    res.json({ ...stripHash(updated), stockMoved: moved })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'purchase return update failed')
+    res.status(500).json({ error: msg })
+  }
+})
+
+// Ordered vs received — what a PO actually got, ignoring cancelled invoices.
+dbRouter.get('/purchase-orders/:id/receipt', requirePermission('purchase', 'view'), async (req, res) => {
+  try {
+    const { reconcileOrder } = await import('../purchases')
+    const receipt = await reconcileOrder(req.params.id)
+    if (!receipt) return res.status(404).json({ error: 'Purchase order not found' })
+    res.json(receipt)
+  } catch (err) {
+    logger.error({ err }, 'order receipt reconciliation failed')
+    res.status(500).json({ error: 'Failed to reconcile purchase order' })
+  }
+})
 dbRouter.get('/purchase-returns/:id', oneOf(s.purchaseReturns, s.purchaseReturns.id))
 
 dbRouter.get('/inventory/locations', listOf(s.inventoryLocations, s.inventoryLocations.name))
@@ -2452,66 +2996,151 @@ dbRouter.post('/send-whatsapp', requirePermission('sales', 'edit'), async (req, 
 dbRouter.get('/supplier-dues', requirePermission('purchase', 'view'), async (_req, res) => {
   try {
     if (!db) return res.status(503).json({ error: 'Database not configured' })
-    const rows = await db
-      .select({
-        supplier: schema.purchaseInvoices.supplier,
-        count: sql<number>`count(*)::int`,
-        total: sql<number>`coalesce(sum(${schema.purchaseInvoices.total}), 0)::float`,
-        oldestDate: sql<string | null>`min(${schema.purchaseInvoices.date})::text`,
-      })
-      .from(schema.purchaseInvoices)
-      .where(sql`${schema.purchaseInvoices.status} is distinct from 'paid'`)
-      .groupBy(schema.purchaseInvoices.supplier)
-      .orderBy(sql`coalesce(sum(${schema.purchaseInvoices.total}), 0) desc`)
-    const total = rows.reduce((a, r) => a + Number(r.total ?? 0), 0)
-    res.json({ dues: rows.map((r) => ({ supplier: r.supplier ?? 'Unknown', count: Number(r.count ?? 0), total: Number(r.total ?? 0), oldestDate: r.oldestDate })), total, supplierCount: rows.length })
+    const { collectSupplierDues } = await import('../purchases')
+    const dues = await collectSupplierDues()
+    const total = dues.reduce((a, d) => a + d.balance, 0)
+    const aging = {
+      current: dues.reduce((a, d) => a + d.current, 0),
+      d1_30: dues.reduce((a, d) => a + d.d1_30, 0),
+      d31_60: dues.reduce((a, d) => a + d.d31_60, 0),
+      d60plus: dues.reduce((a, d) => a + d.d60plus, 0),
+    }
+    res.json({
+      dues: dues.map((d) => ({ ...d, count: d.invoiceCount })),
+      total,
+      aging,
+      supplierCount: dues.length,
+    })
   } catch (err) {
     logger.error({ err }, 'Supplier dues query failed')
     res.status(500).json({ error: 'Failed to load supplier dues' })
   }
 })
 
-// Record a supplier payment — settles open purchase invoices FIFO (oldest
-// first) until the amount is exhausted, mirroring the customer dues flow.
+// Open invoices for one supplier — drives the payment dialog.
+dbRouter.get('/supplier-dues/:supplier', requirePermission('purchase', 'view'), async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: 'Database not configured' })
+    const { getSupplierOpenInvoices, getSupplierPayments, getPaymentAllocations } = await import('../purchases')
+    const supplier = decodeURIComponent(req.params.supplier)
+    const invoices = await getSupplierOpenInvoices(supplier)
+    const payments = await getSupplierPayments(supplier, 25)
+    const allocations = await Promise.all(payments.map((p) => getPaymentAllocations(p.id)))
+    res.json({
+      supplier,
+      invoices,
+      outstanding: Math.round(invoices.reduce((a, i) => a + i.balance, 0) * 100) / 100,
+      payments: payments.map((p, i) => ({
+        id: p.id,
+        ref: p.ref,
+        amount: Number(p.amount ?? 0),
+        method: p.method,
+        date: p.date,
+        note: p.note,
+        allocations: allocations[i],
+      })),
+    })
+  } catch (err) {
+    logger.error({ err }, 'Supplier dues detail failed')
+    res.status(500).json({ error: 'Failed to load supplier dues' })
+  }
+})
+
+// Record a supplier payment: writes a ledger row plus per-invoice allocations
+// and advances each invoice's paid amount, so partial payments settle properly.
 dbRouter.post('/supplier-dues/pay', requirePermission('purchase', 'edit'), async (req, res) => {
   try {
     if (!db) return res.status(503).json({ error: 'Database not configured' })
-    const supplier = String(req.body?.supplier ?? '').trim()
-    const amount = Number(req.body?.amount ?? 0)
-    const method = String(req.body?.method ?? 'cash').trim().toLowerCase()
-    if (!supplier) return res.status(400).json({ error: 'supplier required' })
-    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be > 0' })
+    const { recordSupplierPayment } = await import('../purchases')
+    const allocate = Array.isArray(req.body?.allocate) ? (req.body.allocate as unknown[]).map(String) : null
+    const result = await recordSupplierPayment({
+      supplier: String(req.body?.supplier ?? ''),
+      amount: Number(req.body?.amount ?? 0),
+      method: String(req.body?.method ?? 'cash').trim().toLowerCase(),
+      note: typeof req.body?.note === 'string' ? req.body.note.slice(0, 200) : null,
+      createdBy: actorFromRequest(req).userId ?? null,
+      allocate,
+    })
+    if (!result.ok) return res.status(400).json({ error: result.error })
 
-    const open = await db
-      .select()
-      .from(schema.purchaseInvoices)
-      .where(sql`${schema.purchaseInvoices.supplier} = ${supplier} and ${schema.purchaseInvoices.status} is distinct from 'paid' and ${schema.purchaseInvoices.status} is distinct from 'cancelled'`)
-      .orderBy(sql`${schema.purchaseInvoices.date} asc`)
-    if (open.length === 0) return res.status(400).json({ error: 'No outstanding invoices for this supplier' })
-    const outstanding = open.reduce((a, inv) => a + Number(inv.total ?? 0), 0)
-    if (amount > outstanding + 0.01) return res.status(400).json({ error: `Amount exceeds outstanding (${outstanding.toFixed(2)})` })
-
-    let remaining = amount
-    const settled: string[] = []
-    for (const inv of open) {
-      if (remaining <= 0) break
-      const due = Number(inv.total ?? 0)
-      const applied = Math.min(due, remaining)
-      if (applied <= 0) continue
-      remaining = Math.round((remaining - applied) * 100) / 100
-      if (applied >= due - 0.01) {
-        await db.update(schema.purchaseInvoices).set({ status: 'paid' }).where(eq(schema.purchaseInvoices.id, inv.id))
-        settled.push(inv.number)
-      } else {
-        await db.update(schema.purchaseInvoices).set({ status: 'partial' }).where(eq(schema.purchaseInvoices.id, inv.id))
-      }
-    }
-    const ref = `SP-${Date.now().toString(36).toUpperCase()}`
-    logger.info({ supplier, amount, method, settled, ref }, 'Supplier payment recorded')
-    res.json({ ok: true, ref, settled, outstanding: Math.round((outstanding - amount) * 100) / 100 })
+    const actor = actorFromRequest(req)
+    recordCrud('purchase-invoices', 'Payment recorded', req, {
+      supplier: String(req.body?.supplier ?? ''),
+      ref: result.ref,
+      allocations: result.allocations,
+    })
+    void recordActivity({
+      action: 'Recorded Supplier Payment',
+      module: 'purchase',
+      entity: String(req.body?.supplier ?? ''),
+      details: `${result.ref} · ₹${Number(req.body?.amount ?? 0).toLocaleString('en-IN')}${result.settled.length ? ` · settled ${result.settled.join(', ')}` : ''}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json(result)
   } catch (err) {
     logger.error({ err }, 'Supplier payment failed')
     res.status(500).json({ error: 'Failed to record supplier payment' })
+  }
+})
+
+// Email the shop owner a summary of what is owed to suppliers and how overdue.
+// Run the same summary the daily scheduler sends, on demand.
+dbRouter.post('/supplier-dues/sweep', requirePermission('purchase', 'edit'), async (_req, res) => {
+  try {
+    const { runSupplierPayables } = await import('../supplierPayables')
+    const result = await runSupplierPayables({ force: true })
+    res.json({ ok: result.sent, ...result })
+  } catch (err) {
+    logger.error({ err }, 'supplier payables sweep failed')
+    res.status(500).json({ error: 'Failed to run the supplier payables summary' })
+  }
+})
+
+dbRouter.post('/supplier-dues/remind', requirePermission('purchase', 'edit'), async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: 'Database not configured' })
+    const { collectSupplierDues } = await import('../purchases')
+    const { sendEmail } = await import('../notifications')
+    const { escapeHtml } = await import('../htmlEscape')
+    const [settingsRow] = await db!.select().from(s.settings).where(eq(s.settings.id, SETTINGS_ID)).limit(1)
+    const recipient =
+      typeof req.body?.to === 'string' && req.body.to.trim()
+        ? req.body.to.trim()
+        : (process.env.NOTIFICATION_EMAIL ?? String(settingsRow?.email ?? '')).trim()
+    if (!recipient) return res.status(400).json({ error: 'No recipient configured — pass "to" or set the business email' })
+
+    const dues = await collectSupplierDues()
+    if (dues.length === 0) return res.json({ ok: true, sent: 0, message: 'No supplier dues outstanding' })
+    const total = dues.reduce((a, d) => a + d.balance, 0)
+    const rows = dues
+      .map(
+        (d) =>
+          `<tr><td style="padding:6px;border-bottom:1px solid #eee">${escapeHtml(d.supplier ?? 'Unknown')}</td>` +
+          `<td style="padding:6px;border-bottom:1px solid #eee;text-align:right">${d.invoiceCount}</td>` +
+          `<td style="padding:6px;border-bottom:1px solid #eee;text-align:right">₹${d.balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td></tr>`,
+      )
+      .join('')
+    const sent = await sendEmail({
+      to: recipient,
+      subject: `Supplier dues — ₹${total.toLocaleString('en-IN')} outstanding`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px">
+          <h2 style="color:#1a1a2e">Supplier payables</h2>
+          <p>Total outstanding across ${dues.length} supplier(s).</p>
+          <table style="width:100%;border-collapse:collapse;margin:12px 0">
+            <tr><th align="left" style="padding:6px">Supplier</th><th align="right" style="padding:6px">Invoices</th><th align="right" style="padding:6px">Balance</th></tr>
+            ${rows}
+            <tr><td style="padding:6px;font-weight:bold">Total</td><td></td><td align="right" style="padding:6px;font-weight:bold">₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td></tr>
+          </table>
+          <p style="color:#999;font-size:12px">Opal Line ERP — Purchase payables summary</p>
+        </div>`,
+    })
+    if (!sent) return res.status(500).json({ error: 'Failed to send summary. Check server logs.' })
+    res.json({ ok: true, sent: dues.length, to: recipient })
+  } catch (err) {
+    logger.error({ err }, 'supplier dues reminder failed')
+    res.status(500).json({ error: 'Failed to send supplier dues summary' })
   }
 })
 

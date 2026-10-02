@@ -53,6 +53,12 @@ export const products = pgTable('products', {
   silverRate: numericNumber('silver_rate'),
   sellingPrice: numericNumber('selling_price'),
   compareAtPrice: numericNumber('compare_at_price'),
+  /**
+   * Weighted-average cost per unit, maintained from purchase invoices so
+   * margin reporting reflects what stock actually cost rather than a manual
+   * figure that drifts as silver moves.
+   */
+  costPrice: numericNumber('cost_price'),
   stock: integer('stock'),
   reorderLevel: integer('reorder_level'),
   shopifyStatus: text('shopify_status'),
@@ -229,10 +235,94 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   total: numericNumber('total'),
   status: text('status'),
   date: ts('date'),
+  /** How much has been paid against this invoice (ledger-backed). */
+  paidAmount: numericNumber('paid_amount').default(0),
+  /** Supplier tax details — needed to claim input credit. */
+  supplierGstin: text('supplier_gstin'),
+  supplierState: text('supplier_state'),
+  /** Input GST split, derived from the supplier's state vs ours. */
+  cgst: numericNumber('cgst'),
+  sgst: numericNumber('sgst'),
+  igst: numericNumber('igst'),
+  /** Tax collected at source on bullion purchases. */
+  tcsRate: numericNumber('tcs_rate'),
+  tcsAmount: numericNumber('tcs_amount'),
+  /** The purchase order this invoice received, when it came from one. */
+  orderId: text('order_id'),
 }, (table) => ({
   numberIdx: uniqueIndex('purchase_invoices_number_idx').on(table.number),
   supplierIdx: index('purchase_invoices_supplier_idx').on(table.supplier),
   dateIdx: index('purchase_invoices_date_idx').on(table.date),
+  statusIdx: index('purchase_invoices_status_idx').on(table.status),
+  orderIdx: index('purchase_invoices_order_id_idx').on(table.orderId),
+}))
+
+/**
+ * Line items on a purchase invoice. Without these there is nothing to add to
+ * stock when a purchase is received — only totals were being stored.
+ */
+export const purchaseInvoiceItems = pgTable('purchase_invoice_items', {
+  id: text('id').primaryKey(),
+  invoiceId: text('invoice_id').notNull(),
+  product: text('product'),
+  sku: text('sku'),
+  qty: numericNumber('qty').default(1),
+  weight: numericNumber('weight'),
+  /** Silver rate per gram this was bought at. */
+  rate: numericNumber('rate'),
+  /** Rate × weight (+ making charge), pre-tax. */
+  cost: numericNumber('cost'),
+  tax: numericNumber('tax'),
+  amount: numericNumber('amount'),
+}, (table) => ({
+  invoiceIdx: index('purchase_invoice_items_invoice_id_idx').on(table.invoiceId),
+  skuIdx: index('purchase_invoice_items_sku_idx').on(table.sku),
+  invoiceFk: foreignKey({ columns: [table.invoiceId], foreignColumns: [purchaseInvoices.id], name: 'purchase_invoice_items_invoice_id_fk' }).onDelete('cascade'),
+}))
+
+/** Line items on a purchase order — what was actually ordered from a supplier. */
+export const purchaseOrderItems = pgTable('purchase_order_items', {
+  id: text('id').primaryKey(),
+  orderId: text('order_id').notNull(),
+  product: text('product'),
+  sku: text('sku'),
+  qty: numericNumber('qty').default(1),
+  weight: numericNumber('weight'),
+  rate: numericNumber('rate'),
+  amount: numericNumber('amount'),
+}, (table) => ({
+  orderIdx: index('purchase_order_items_order_id_idx').on(table.orderId),
+  skuIdx: index('purchase_order_items_sku_idx').on(table.sku),
+  orderFk: foreignKey({ columns: [table.orderId], foreignColumns: [purchaseOrders.id], name: 'purchase_order_items_order_id_fk' }).onDelete('cascade'),
+}))
+
+/** Money actually paid to a supplier — the counterpart of `payments`. */
+export const supplierPayments = pgTable('supplier_payments', {
+  id: text('id').primaryKey(),
+  ref: text('ref'),
+  supplier: text('supplier'),
+  amount: numericNumber('amount').notNull(),
+  method: text('method'),
+  note: text('note'),
+  date: ts('date'),
+  createdBy: text('created_by'),
+}, (table) => ({
+  refIdx: index('supplier_payments_ref_idx').on(table.ref),
+  supplierIdx: index('supplier_payments_supplier_idx').on(table.supplier),
+  dateIdx: index('supplier_payments_date_idx').on(table.date),
+}))
+
+/** How a supplier payment was split across their open invoices. */
+export const supplierPaymentAllocations = pgTable('supplier_payment_allocations', {
+  id: text('id').primaryKey(),
+  paymentId: text('payment_id').notNull(),
+  invoiceId: text('invoice_id'),
+  invoiceNumber: text('invoice_number'),
+  amount: numericNumber('amount').notNull(),
+}, (table) => ({
+  paymentIdx: index('supplier_payment_allocations_payment_id_idx').on(table.paymentId),
+  invoiceIdx: index('supplier_payment_allocations_invoice_id_idx').on(table.invoiceId),
+  paymentFk: foreignKey({ columns: [table.paymentId], foreignColumns: [supplierPayments.id], name: 'supplier_payment_allocations_payment_id_fk' }).onDelete('cascade'),
 }))
 
 export const salesReturns = pgTable('sales_returns', {
@@ -305,10 +395,32 @@ export const purchaseReturns = pgTable('purchase_returns', {
   amount: numericNumber('amount'),
   status: text('status'),
   date: ts('date'),
+  /** The purchase invoice being returned against. */
+  invoiceId: text('invoice_id'),
 }, (table) => ({
   numberIdx: uniqueIndex('purchase_returns_number_idx').on(table.number),
   supplierIdx: index('purchase_returns_supplier_idx').on(table.supplier),
   dateIdx: index('purchase_returns_date_idx').on(table.date),
+  invoiceIdx: index('purchase_returns_invoice_id_idx').on(table.invoiceId),
+}))
+
+/**
+ * Line items on a purchase return. Without these a return can only carry a
+ * total, so nothing can be taken back out of stock.
+ */
+export const purchaseReturnItems = pgTable('purchase_return_items', {
+  id: text('id').primaryKey(),
+  returnId: text('return_id').notNull(),
+  product: text('product'),
+  sku: text('sku'),
+  qty: numericNumber('qty').default(1),
+  weight: numericNumber('weight'),
+  rate: numericNumber('rate'),
+  amount: numericNumber('amount'),
+}, (table) => ({
+  returnIdx: index('purchase_return_items_return_id_idx').on(table.returnId),
+  skuIdx: index('purchase_return_items_sku_idx').on(table.sku),
+  returnFk: foreignKey({ columns: [table.returnId], foreignColumns: [purchaseReturns.id], name: 'purchase_return_items_return_id_fk' }).onDelete('cascade'),
 }))
 
 export const inventoryLocations = pgTable('inventory_locations', {
@@ -509,6 +621,11 @@ export const settings = pgTable('settings', {
   tcsEnabled: boolean('tcs_enabled').default(false),
   defaultTdsSection: text('default_tds_section'),
   einvoiceEnabled: boolean('einvoice_enabled').default(false),
+  /**
+   * How IRNs get generated: off | manual | automatic.
+   * `automatic` pushes every newly issued invoice to the gateway.
+   */
+  einvoiceMode: text('einvoice_mode').default('off'),
   ewayBillEnabled: boolean('eway_bill_enabled').default(false),
   upiId: text('upi_id'),
   upiMerchantName: text('upi_merchant_name'),

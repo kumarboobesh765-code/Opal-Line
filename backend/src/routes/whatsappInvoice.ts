@@ -56,5 +56,53 @@ export function registerWhatsappInvoiceRoutes(app: Express) {
     }
   })
 
+  /**
+   * POST /api/v1/whatsapp/quotation/:id
+   * Sends the quotation summary to the customer's WhatsApp number. A draft that
+   * goes out this way is marked `sent` so the lifecycle stays truthful.
+   */
+  router.post('/quotation/:id', requireAuth, requirePermission('sales', 'edit'), async (req: Request, res: Response) => {
+    if (!db) { res.status(503).json({ ok: false, error: 'Database unavailable' }); return }
+    try {
+      const { markQuotationSent } = await import('./quotations')
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      if (!quote) { res.status(404).json({ ok: false, error: 'Quotation not found' }); return }
+      if (quote.status === 'cancelled') { res.status(400).json({ ok: false, error: 'Quotation was cancelled' }); return }
+      if (!isWhatsAppConfigured()) {
+        res.json({ ok: false, error: 'WhatsApp not configured — add WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID in Connections → Configuration' })
+        return
+      }
+      const digits = (quote.customerPhone ?? '').replace(/\D/g, '')
+      const to = digits.length === 10 ? `91${digits}` : digits
+      if (!to) { res.json({ ok: false, error: 'Quotation has no customer phone number' }); return }
+
+      const items = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, quote.id))
+      const lines = items
+        .slice(0, 8)
+        .map((it) => `• ${it.product || it.sku} × ${it.qty} — ₹${Number(it.amount ?? 0).toLocaleString('en-IN')}`)
+        .join('\n')
+      const more = items.length > 8 ? `\n…and ${items.length - 8} more item(s)` : ''
+      const validity = quote.validUntil
+        ? new Date(quote.validUntil).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : 'the date agreed with you'
+      const message =
+        `\uD83D\uDCCB *Quotation ${quote.number}*\n` +
+        `Hello ${quote.customer || 'there'},\n\n` +
+        `${lines}${more}\n\n` +
+        `Total: *₹${Number(quote.grandTotal ?? 0).toLocaleString('en-IN')}*\n` +
+        `Valid until: ${validity}\n\n` +
+        `Prices are based on the silver rate on the day of billing. Please let us know to proceed. ✨`
+
+      const result = await sendWhatsAppMessage(to, message)
+      if (!result) { res.json({ ok: false, error: 'WhatsApp send failed (check credentials/logs)' }); return }
+      const becameSent = await markQuotationSent(quote.id)
+      logger.info({ quotation: quote.number, to }, 'Quotation sent via WhatsApp')
+      res.json({ ok: true, to, messageId: result.messageId, markedSent: becameSent })
+    } catch (err) {
+      logger.error({ err }, 'WhatsApp quotation send failed')
+      res.status(500).json({ ok: false, error: 'Failed to send WhatsApp message' })
+    }
+  })
+
   app.use('/api/v1/whatsapp', router)
 }

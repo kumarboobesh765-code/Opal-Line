@@ -28,7 +28,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { dbApi } from '@/lib/api'
-import type { AppSettings, Invoice } from '@/types'
+import type { AppSettings, EInvoiceStatus, Invoice } from '@/types'
 import { formatCurrency, formatDateTime } from '@/lib/format'
 
 export default function InvoiceDetailPage() {
@@ -45,6 +45,8 @@ export default function InvoiceDetailPage() {
   const [emailSending, setEmailSending] = useState(false)
   // Auto UPI QR for printables (from Settings UPI ID); null = hidden.
   const [upiQr, setUpiQr] = useState<string | null>(null)
+  const [einvoice, setEinvoice] = useState<EInvoiceStatus | null>(null)
+  const [irnBusy, setIrnBusy] = useState(false)
   // Return-dialog state must live above the early returns (Rules of Hooks)
   const [returnOpen, setReturnOpen] = useState(false)
   const [returnQty, setReturnQty] = useState<Record<string, number>>({})
@@ -395,6 +397,51 @@ export default function InvoiceDetailPage() {
         </div>
 
         <div className="space-y-4">
+          <EInvoiceCard
+            status={einvoice}
+            busy={irnBusy}
+            onLoad={(id) =>
+              dbApi
+                .getEInvoiceStatus(id)
+                .then(setEinvoice)
+                .catch(() => setEinvoice(null))
+            }
+            onGenerate={async () => {
+              setIrnBusy(true)
+              try {
+                const r = await dbApi.generateEInvoice(invoice.id)
+                setEinvoice((s) => ({
+                  mode: s?.mode ?? 'manual',
+                  provider: r.provider,
+                  gatewayConfigured: s?.gatewayConfigured ?? false,
+                  status: 'generated',
+                  irn: r.irn,
+                  irnDate: r.irnDate,
+                  qrCode: r.qrCode,
+                }))
+                toast.success(`IRN generated via ${r.provider}`)
+                setInvoice({ ...invoice, irn: r.irn, irnDate: r.irnDate, qrCode: r.qrCode })
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'IRN generation failed')
+              } finally {
+                setIrnBusy(false)
+              }
+            }}
+            onCancel={async () => {
+              setIrnBusy(true)
+              try {
+                await dbApi.cancelEInvoice(invoice.id, 'Cancelled by seller')
+                toast.success('IRN cancelled')
+                setEinvoice((s) => (s ? { ...s, status: 'pending', irn: s.irn } : s))
+                setInvoice({ ...invoice, status: 'cancelled' })
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'IRN cancellation failed')
+              } finally {
+                setIrnBusy(false)
+              }
+            }}
+          />
+
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">Payment</CardTitle>
@@ -501,6 +548,97 @@ export default function InvoiceDetailPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+/**
+ * E-invoicing panel: shows the IRN once generated, or the action to generate
+ * one when the shop has e-invoicing switched on.
+ */
+function EInvoiceCard({
+  status,
+  busy,
+  onLoad,
+  onGenerate,
+  onCancel,
+}: {
+  status: EInvoiceStatus | null
+  busy: boolean
+  onLoad: (invoiceId: string) => void
+  onGenerate: () => void
+  onCancel: () => void
+}) {
+  const { invoiceId } = useParams()
+  useEffect(() => {
+    if (invoiceId) onLoad(invoiceId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoiceId])
+
+  // Nothing to show while e-invoicing is off — don't clutter every invoice.
+  if (!status || status.mode === 'off') return null
+
+  const generated = status.status === 'generated' && Boolean(status.irn)
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" /> E-Invoice (GST)
+        </CardTitle>
+        <CardDescription>
+          {status.mode === 'automatic'
+            ? 'IRNs are generated automatically when an invoice is issued.'
+            : 'Generate the IRN for this invoice when it is issued.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {generated && status.irn ? (
+          <>
+            <div className="rounded-lg border border-success-100 bg-success-50/60 p-3">
+              <p className="text-sm font-semibold text-success-700">IRN generated</p>
+              <p className="mt-1 break-all font-mono text-[11px] text-success-800">{status.irn}</p>
+              {status.irnDate ? (
+                <p className="mt-1 text-[11px] text-success-700/80">Issued {formatDateTime(status.irnDate)}</p>
+              ) : null}
+            </div>
+            {status.qrCode ? (
+              <div className="rounded-lg border p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Signed QR payload</p>
+                <p className="mt-1 break-all font-mono text-[10.5px] text-muted-foreground">{status.qrCode}</p>
+              </div>
+            ) : null}
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full gap-1.5"
+              disabled={busy}
+              onClick={async () => {
+                const ok = await confirmDialog({
+                  title: 'Cancel this IRN?',
+                  description: 'Cancelling an IRN at the GST portal cannot be undone, and the invoice will be marked cancelled.',
+                  confirmLabel: 'Cancel IRN',
+                  danger: true,
+                })
+                if (ok) onCancel()
+              }}
+            >
+              {busy ? 'Cancelling…' : 'Cancel IRN'}
+            </Button>
+          </>
+        ) : (
+          <>
+            <p className="text-[13px] text-muted-foreground">
+              No IRN on this invoice yet.
+              {!status.gatewayConfigured ? ' It will be produced locally until a live GST gateway is connected.' : ''}
+            </p>
+            <Button size="sm" className="w-full gap-1.5" disabled={busy} onClick={onGenerate}>
+              {busy ? 'Generating…' : 'Generate IRN'}
+            </Button>
+          </>
+        )}
+        <p className="text-[11px] text-muted-foreground">Provider: {status.provider}</p>
+      </CardContent>
+    </Card>
   )
 }
 

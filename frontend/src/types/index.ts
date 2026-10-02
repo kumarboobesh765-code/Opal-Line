@@ -14,7 +14,14 @@ export interface AppSettings {
   invoicePrefix: string
   rateSource: string
   autoUpdateMcx: boolean
+  /**
+   * Legacy flag. Staff rate changes always require Admin / Super Admin
+   * approval now, so this value is ignored by the backend.
+   */
   requireRateApproval: boolean
+  einvoiceEnabled?: boolean
+  /** IRN generation mode: off | manual | automatic. */
+  einvoiceMode?: EInvoiceMode
   autoReconcileRazorpay: boolean
   paymentReminders: boolean
   lowStockAlerts: boolean
@@ -78,6 +85,8 @@ export interface GstReportResult {
     inputGst: number
     netGst: number
     itcUtilised: number
+    /** Tax collected at source on bullion — a separate liability, not credit. */
+    tcs: number
     cgst: number
     sgst: number
   }
@@ -262,7 +271,10 @@ export interface SilverRateAutoStatus {
   fetching: boolean
   schedule: string
   apiUrlConfigured: boolean
+  /** Always true — staff rate changes cannot bypass approval. */
   approvalRequired: boolean
+  /** Admin / Super Admin: may apply rate changes and fetch the spot rate. */
+  isApprover: boolean
 }
 
 export interface LowStockItem {
@@ -393,6 +405,10 @@ export interface Invoice {
   paymentId?: string
   status: 'paid' | 'draft' | 'issued' | 'overdue' | 'cancelled' | 'refunded'
   date: string
+  /** GST e-invoice fields, present once an IRN has been generated. */
+  irn?: string | null
+  irnDate?: string | null
+  qrCode?: string | null
   businessName?: string
   businessGstin?: string
   businessAddress?: string
@@ -548,6 +564,19 @@ export interface Supplier {
   outstanding: number
 }
 
+/** One bought line on a purchase invoice — cost is rate × weight. */
+export interface PurchaseInvoiceItem {
+  id?: string
+  product: string
+  sku: string
+  qty: number
+  weight: number
+  rate: number
+  cost: number
+  tax: number
+  amount: number
+}
+
 export interface PurchaseInvoice {
   id: string
   number: string
@@ -561,6 +590,136 @@ export interface PurchaseInvoice {
   total: number
   status: 'paid' | 'partial' | 'pending' | 'cancelled'
   date: string
+  /** How much has been paid against the invoice so far. */
+  paidAmount?: number
+  /** total − paidAmount; what is still owed. */
+  balance?: number
+  supplierGstin?: string | null
+  supplierState?: string | null
+  /** Input GST split: same-state buys split into CGST + SGST, others are IGST. */
+  cgst?: number
+  sgst?: number
+  igst?: number
+  /** Tax collected at source on bullion purchases (194Q). */
+  tcsRate?: number
+  tcsAmount?: number
+}
+
+/** A purchase invoice plus its line items and live balance. */
+export interface PurchaseInvoiceDetail extends PurchaseInvoice {
+  /** `items` on the invoice row is a count, so lines live under their own key. */
+  lines: PurchaseInvoiceItem[]
+  paidAmount: number
+  balance: number
+  supplierGstin: string | null
+  supplierState: string | null
+  cgst: number
+  sgst: number
+  igst: number
+  tcsRate: number
+  tcsAmount: number
+}
+
+/** Payload for creating a purchase invoice — items are required so stock moves. */
+export interface PurchaseInvoiceInput {
+  number: string
+  supplier: string
+  date?: string
+  status?: string
+  supplierGstin?: string | null
+  /** 0 disables TCS; otherwise a percentage of the pre-tax value. */
+  tcsRate?: number
+  items: Array<{
+    product: string
+    sku: string
+    qty: number
+    weight: number
+    rate: number
+    tax: number
+  }>
+}
+
+/** Outstanding balance for one supplier, split by how overdue it is. */
+export interface SupplierDue {
+  supplier: string
+  invoiceCount: number
+  /** Alias of invoiceCount kept for older callers. */
+  count?: number
+  total: number
+  paid: number
+  balance: number
+  oldestDate: string | null
+  /**
+   * Aging buckets, matching the receivables aging used elsewhere: `current` is
+   * not yet due, then 1–30, 31–60 and 60+ days overdue.
+   */
+  current: number
+  d1_30: number
+  d31_60: number
+  d60plus: number
+}
+
+export interface SupplierAgingTotals {
+  current: number
+  d1_30: number
+  d31_60: number
+  d60plus: number
+}
+
+export interface SupplierDuesResponse {
+  dues: SupplierDue[]
+  total: number
+  aging: SupplierAgingTotals
+  supplierCount: number
+}
+
+/** An open (not yet fully paid) invoice for one supplier. */
+export interface SupplierOpenInvoice {
+  id: string
+  number: string
+  date: string | null
+  total: number
+  paidAmount: number
+  balance: number
+  ageDays: number
+}
+
+/** Where one payment went across the invoices it settled. */
+export interface SupplierAllocation {
+  id?: string
+  paymentId?: string
+  invoiceId: string
+  invoiceNumber: string
+  amount: number
+}
+
+/** A row in the supplier payment ledger. */
+export interface SupplierPayment {
+  id: string
+  ref: string
+  amount: number
+  method: string
+  date: string | null
+  note: string | null
+  allocations: SupplierAllocation[]
+}
+
+export interface SupplierDuesDetail {
+  supplier: string
+  invoices: SupplierOpenInvoice[]
+  outstanding: number
+  payments: SupplierPayment[]
+}
+
+/** One ordered line on a purchase order. */
+export interface PurchaseOrderItem {
+  id?: string
+  product: string
+  sku: string
+  qty: number
+  weight: number
+  rate: number
+  amount: number
 }
 
 export interface PurchaseOrder {
@@ -573,6 +732,7 @@ export interface PurchaseOrder {
   value: number
   status: 'open' | 'received' | 'cancelled' | 'draft' | 'closed'
   date: string
+  lines?: PurchaseOrderItem[]
 }
 
 export interface SalesReturn {
@@ -584,6 +744,50 @@ export interface SalesReturn {
   amount: number
   status: 'pending' | 'approved' | 'refunded' | 'rejected'
   date: string
+}
+
+/** How IRNs get generated: never, per invoice, or on every new invoice. */
+export type EInvoiceMode = 'off' | 'manual' | 'automatic'
+
+export interface EInvoiceStatus {
+  mode: EInvoiceMode
+  provider: string
+  gatewayConfigured: boolean
+  status: 'generated' | 'pending' | 'disabled'
+  irn: string | null
+  irnDate: string | null
+  qrCode: string | null
+}
+
+export type SalesFollowUpKind = 'quotation' | 'quotation-expiring' | 'order' | 'booking' | 'booking-advance'
+
+/** Something in the sales pipeline that needs a person to chase it. */
+export interface SalesFollowUp {
+  kind: SalesFollowUpKind
+  id: string
+  customer: string | null
+  reference: string
+  detail: string
+  value: number
+  ageDays: number
+  dueAt: string | null
+  href: string
+}
+
+export interface SalesFollowUpSummary {
+  total: number
+  quotations: number
+  orders: number
+  bookings: number
+  expiring: number
+  customerCount: number
+  topCustomers: Array<{ customer: string; count: number }>
+}
+
+export interface SalesFollowUpsResponse {
+  followUps: SalesFollowUp[]
+  summary: SalesFollowUpSummary
+  customer: string | null
 }
 
 export interface QuotationItem {
@@ -622,6 +826,17 @@ export interface Quotation {
   items?: QuotationItem[]
 }
 
+/** One line on a purchase return — what is being sent back. */
+export interface PurchaseReturnItem {
+  id?: string
+  product: string
+  sku: string
+  qty: number
+  weight: number
+  rate: number
+  amount: number
+}
+
 export interface PurchaseReturn {
   id: string
   number: string
@@ -629,8 +844,27 @@ export interface PurchaseReturn {
   items: number
   weight: number
   amount: number
-  status: 'pending' | 'approved' | 'rejected' | 'received'
+  status: 'pending' | 'approved' | 'rejected' | 'received' | 'cancelled'
   date: string
+  /** The purchase invoice this returns against. */
+  invoiceId?: string | null
+  lines?: PurchaseReturnItem[]
+}
+
+/** What a purchase order actually received. */
+export interface PurchaseOrderReceipt {
+  orderId: string
+  number: string
+  supplier: string | null
+  status: string | null
+  orderedQty: number
+  orderedWeight: number
+  receivedQty: number
+  receivedWeight: number
+  invoiceCount: number
+  invoices: Array<{ id: string; number: string; status: string | null; qty: number; weight: number; date: string | null }>
+  shortBy: number
+  overBy: number
 }
 
 export interface Customer {

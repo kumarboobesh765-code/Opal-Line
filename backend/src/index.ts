@@ -453,6 +453,21 @@ import accountingRouter from './routes/accounting.js'
 app.use('/api/v1/accounts', accountingRouter)
 app.use('/api/v1/db', dbRouter)
 app.use('/api/v1/db', requireAuth, dashboardRouter)
+
+// ─── Sales follow-ups: what needs chasing today ─────────────────────────────
+app.get('/api/v1/sales/followups', requireAuth, requirePermission('sales', 'view'), async (req, res) => {
+  try {
+    const { collectSalesFollowUps, summariseSalesFollowUps } = await import('./salesFollowups')
+    const customer = typeof req.query.customer === 'string' && req.query.customer.trim() ? req.query.customer.trim() : null
+    const followUps = await collectSalesFollowUps(customer)
+    const summary = await summariseSalesFollowUps(followUps)
+    res.json({ followUps, summary, customer })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'Sales follow-ups failed')
+    res.status(500).json({ error: message })
+  }
+})
 app.use('/api/v1/rbac', requireAuth, rbacRouter)
 app.use('/api/v1/backup', requireAuth, enforceRbac, backupRouter)
 app.use('/api/v1/print-templates', requireAuth, enforceRbac, printTemplatesRouter)
@@ -967,20 +982,16 @@ app.get('/api/v1/gold/rate', requirePermission('gold-rate', 'view'), async (_req
   }
 })
 
+// Legacy entry point kept for older clients. It runs through the same
+// approval gate as /silver/requests (see handleSilverRateChange) so it can
+// never be used to apply a rate change without Admin approval.
 app.post('/api/v1/silver/update', requirePermission('silver-rate', 'edit'), validate(silverRateSchema), async (req, res) => {
   try {
-    const { rate, syncFirst } = req.body
-    const result = await applySilverRate(rate, { syncFirst })
-    const actor = actorFromRequest(req)
-    void recordActivity({
-      action: 'Updated Silver Rate',
-      module: 'silver-rate',
-      entity: 'Silver Rate',
-      details: `Silver rate changed to Rs${rate}/gm${syncFirst ? ' (products synced from Shopify first)' : ''}. ${result.ok ? `${result.affected ?? 0} product(s) repriced` : `Update failed: ${result.errors?.join('; ') ?? 'unknown error'}`}`,
-      userId: actor.userId,
-      ip: actor.ip,
-    })
-    res.status(result.ok ? 200 : 502).json(result)
+    const userId = req.userId!
+    const perms = await computeUserPermissions(userId)
+    if (!perms) return res.status(401).json({ error: 'User not found' })
+    const outcome = await handleSilverRateChange(userId, perms.role, Number(req.body.rate), req.body.syncFirst === true, actorFromRequest(req))
+    res.status(outcome.status).json(outcome.body)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(502).json({ error: message })
@@ -1000,6 +1011,68 @@ async function userNameById(userId: string): Promise<string> {
 async function isSilverApprover(userId: string): Promise<boolean> {
   const perms = await computeUserPermissions(userId)
   return !!perms && SILVER_APPROVER_ROLES.includes(perms.role)
+}
+
+type RateActor = { userId: string | null; ip: string | null }
+
+// Single gate for every silver rate change. Admin / Super Admin apply the
+// rate immediately; every other role gets a pending request that an approver
+// must accept or reject. Approval is mandatory for staff — it cannot be
+// switched off from settings.
+async function handleSilverRateChange(
+  userId: string,
+  role: string,
+  rate: number,
+  syncFirst: boolean,
+  actor: RateActor,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  if (!db) return { status: 503, body: { error: 'Database unavailable' } }
+
+  if (SILVER_APPROVER_ROLES.includes(role)) {
+    const result = await applySilverRate(rate, { syncFirst, source: 'manual', actorName: await userNameById(userId) })
+    void recordActivity({
+      action: 'Updated Silver Rate',
+      module: 'silver-rate',
+      entity: 'Silver Rate',
+      details: `Silver rate changed to Rs${rate}/gm${syncFirst ? ' (products synced from Shopify first)' : ''}. ${result.ok ? `${result.affected ?? 0} product(s) repriced` : `Failed: ${result.errors?.join('; ') ?? 'unknown'}`}`,
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    return { status: result.ok ? 200 : 502, body: { ...result, direct: true } }
+  }
+
+  // Staff member → queue a pending request for Admin / Super Admin approval.
+  const [pending] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(schema.silverRateRequests)
+    .where(and(eq(schema.silverRateRequests.status, 'pending'), eq(schema.silverRateRequests.requestedById, userId)))
+  if (Number(pending?.n ?? 0) >= 5) {
+    return { status: 429, body: { error: 'You already have 5 pending rate requests awaiting approval' } }
+  }
+  const latest = await getLatestSilverRate()
+  const [row] = await db
+    .insert(schema.silverRateRequests)
+    .values({
+      id: randomUUID(),
+      rate,
+      previousRate: latest?.rate ?? null,
+      status: 'pending',
+      syncFirst,
+      requestedBy: await userNameById(userId),
+      requestedById: userId,
+      requestedByRole: role,
+      requestedAt: new Date().toISOString(),
+    })
+    .returning()
+  void recordActivity({
+    action: 'Requested Silver Rate Change',
+    module: 'silver-rate',
+    entity: `Silver Rate ₹${rate}/gm`,
+    details: `Submitted by ${role} — awaiting Admin approval (current rate ₹${(latest?.rate ?? 0).toFixed(2)}/gm)`,
+    userId: actor.userId,
+    ip: actor.ip,
+  })
+  return { status: 201, body: { direct: false, ok: true, request: row, message: 'Request submitted — awaiting Admin approval' } }
 }
 
 // Pending + recent rate-change requests. Approvers see everything; other
@@ -1026,66 +1099,21 @@ app.get('/api/v1/silver/requests', requireAuth, async (req, res) => {
   }
 })
 
-// Submit a rate change. Admin/Super Admin (or when approval is disabled in
-// settings) apply immediately; other staff create a pending request.
+// Submit a rate change. Admin/Super Admin apply immediately; other staff get a
+// pending request that an approver must action.
 app.post('/api/v1/silver/requests', requireAuth, validate(silverRateSchema), async (req, res) => {
-  if (!db) return res.status(503).json({ error: 'Database unavailable' })
   try {
     const userId = req.userId!
-    const rate = Number(req.body.rate)
-    const syncFirst = req.body.syncFirst === true
     const perms = await computeUserPermissions(userId)
     if (!perms) return res.status(401).json({ error: 'User not found' })
-
-    const [approvalSetting] = await db.select({ requireRateApproval: schema.settings.requireRateApproval }).from(schema.settings).limit(1)
-    const approvalRequired = approvalSetting?.requireRateApproval !== false
-    const actor = actorFromRequest(req)
-
-    if (!approvalRequired || SILVER_APPROVER_ROLES.includes(perms.role)) {
-      const result = await applySilverRate(rate, { syncFirst, source: 'manual', actorName: await userNameById(userId) })
-      void recordActivity({
-        action: 'Updated Silver Rate',
-        module: 'silver-rate',
-        entity: 'Silver Rate',
-        details: `Silver rate changed to Rs${rate}/gm. ${result.ok ? `${result.affected ?? 0} product(s) repriced` : `Failed: ${result.errors?.join('; ') ?? 'unknown'}`}`,
-        userId: actor.userId,
-        ip: actor.ip,
-      })
-      return res.status(result.ok ? 200 : 502).json({ ...result, direct: true })
-    }
-
-    // Staff member with approval required → queue a pending request.
-    const [pending] = await db
-      .select({ n: sql<number>`count(*)` })
-      .from(schema.silverRateRequests)
-      .where(and(eq(schema.silverRateRequests.status, 'pending'), eq(schema.silverRateRequests.requestedById, userId)))
-    if (Number(pending?.n ?? 0) >= 5) {
-      return res.status(429).json({ error: 'You already have 5 pending rate requests awaiting approval' })
-    }
-    const latest = await getLatestSilverRate()
-    const [row] = await db
-      .insert(schema.silverRateRequests)
-      .values({
-        id: randomUUID(),
-        rate,
-        previousRate: latest?.rate ?? null,
-        status: 'pending',
-        syncFirst,
-        requestedBy: await userNameById(userId),
-        requestedById: userId,
-        requestedByRole: perms.role,
-        requestedAt: new Date().toISOString(),
-      })
-      .returning()
-    void recordActivity({
-      action: 'Requested Silver Rate Change',
-      module: 'silver-rate',
-      entity: `Silver Rate ₹${rate}/gm`,
-      details: `Submitted by ${perms.role} — awaiting Admin approval (current rate ₹${(latest?.rate ?? 0).toFixed(2)}/gm)`,
-      userId: actor.userId,
-      ip: actor.ip,
-    })
-    res.status(201).json({ direct: false, ok: true, request: row, message: 'Request submitted — awaiting Admin approval' })
+    const outcome = await handleSilverRateChange(
+      userId,
+      perms.role,
+      Number(req.body.rate),
+      req.body.syncFirst === true,
+      actorFromRequest(req),
+    )
+    res.status(outcome.status).json(outcome.body)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     res.status(500).json({ error: message })
@@ -1183,18 +1211,17 @@ app.post('/api/v1/silver/requests/:id/reject', requirePermission('silver-rate', 
 })
 
 // ─── Auto silver rate: status, manual fetch, runtime toggle ──────────────────
-app.get('/api/v1/silver/auto-rate/status', requirePermission('silver-rate', 'view'), async (_req, res) => {
+app.get('/api/v1/silver/auto-rate/status', requirePermission('silver-rate', 'view'), async (req, res) => {
   try {
-    let approvalRequired = true
-    if (db) {
-      const [s] = await db.select({ requireRateApproval: schema.settings.requireRateApproval }).from(schema.settings).limit(1)
-      approvalRequired = s?.requireRateApproval !== false
-    }
+    // Approval for staff rate changes is mandatory, so approvalRequired is
+    // always true. isApprover tells the UI who may apply a change directly.
+    const isApprover = await isSilverApprover(req.userId!)
     res.json({
       ...getSchedulerStatus(),
       schedule: `${pad2(SILVER_RATE_HOUR)}:${pad2(SILVER_RATE_MINUTE)} IST`,
       apiUrlConfigured: Boolean(process.env.SILVER_RATE_API_URL?.trim()),
-      approvalRequired,
+      approvalRequired: true,
+      isApprover,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
@@ -1204,6 +1231,11 @@ app.get('/api/v1/silver/auto-rate/status', requirePermission('silver-rate', 'vie
 
 app.post('/api/v1/silver/auto-rate/fetch-now', requirePermission('silver-rate', 'edit'), async (req, res) => {
   try {
+    // Fetching applies the live spot rate and reprices products, so it counts
+    // as a rate change — approvers only.
+    if (!(await isSilverApprover(req.userId!))) {
+      return res.status(403).json({ error: 'Only Admin or Super Admin can fetch and apply the live silver rate' })
+    }
     const result = await fetchSilverRateNow()
     const actor = actorFromRequest(req)
     void recordActivity({
@@ -1966,6 +1998,10 @@ async function startServer() {
     // Monthly customer statements (1st, 08:30) and due-date reminders (daily 09:15).
     void import('./monthlyStatements').then((m) => m.startMonthlyStatements())
     void import('./dueReminders').then((d) => d.startDueReminders())
+    // Daily sales follow-up sweep (10:05): lapses quotations, logs what to chase.
+    void import('./salesFollowups').then((f) => f.startSalesFollowUps())
+    // Daily supplier payables summary (09:20): one email, never per-supplier.
+    void import('./supplierPayables').then((p) => p.startSupplierPayables())
     // Weekly owner insights (Monday 08:00).
     void import('./ownerWeekly').then((w) => w.startWeeklyOwnerReport())
     startSilverRateScheduler()

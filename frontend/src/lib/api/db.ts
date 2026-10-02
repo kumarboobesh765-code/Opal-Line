@@ -10,6 +10,8 @@ import type {
   SilverRateRow,
   SilverRateSubmitResponse,
   Quotation,
+  SalesFollowUpsResponse,
+  EInvoiceStatus,
   AppSettings,
   AuditLogEntry,
   NotificationSettings,
@@ -28,8 +30,13 @@ import type {
   PaymentStatusSegment,
   Product,
   PurchaseInvoice,
+  PurchaseInvoiceDetail,
+  PurchaseInvoiceInput,
   PurchaseOrder,
+  PurchaseOrderReceipt,
   PurchaseReturn,
+  SupplierDuesDetail,
+  SupplierDuesResponse,
   SalesOrder,
   SalesOverviewPoint,
   SalesReturn,
@@ -68,6 +75,10 @@ export const dbApi = {
       currency: res.currency,
     }
   },
+  /**
+   * Legacy endpoint — kept for older clients. It now runs through the same
+   * approval gate: staff get a queued request, approvers apply directly.
+   */
   updateSilverRate: async (rate: number, syncFirst = false) =>
     request<{ ok: boolean; rate: number; previousRate: number; affected: number; matched: number; updated: number; skipped: number; errors: string[]; message?: string; steps?: Array<{ key: string; label: string; status: 'done' | 'failed' | 'skipped'; detail?: string }> }>(
       '/silver/update',
@@ -77,7 +88,8 @@ export const dbApi = {
    * disabled, otherwise queues a request for admin approval. */
   submitSilverRateRequest: (rate: number, syncFirst = false): Promise<SilverRateSubmitResponse> =>
     request('/silver/requests', { method: 'POST', body: JSON.stringify({ rate, syncFirst }) }),
-  getSilverRateRequests: (): Promise<SilverRateRequestsResponse> => request('/silver/requests'),
+  getSilverRateRequests: (status?: 'pending' | 'approved' | 'rejected' | 'all'): Promise<SilverRateRequestsResponse> =>
+    request(`/silver/requests${status ? `?status=${status}` : ''}`),
   approveSilverRateRequest: (id: string, note?: string): Promise<{ ok: boolean; request: SilverRateRequestRow }> =>
     request(`/silver/requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
   rejectSilverRateRequest: (id: string, note?: string): Promise<{ ok: boolean; request: SilverRateRequestRow }> =>
@@ -176,13 +188,26 @@ export const dbApi = {
   getNotificationSettings: (): Promise<NotificationSettings> => request('/db/settings/notifications'),
   updateNotificationSettings: (patch: Partial<NotificationSettings>) =>
     request<NotificationSettings>('/db/settings/notifications', { method: 'PUT', body: JSON.stringify(patch) }),
-  getSupplierDues: () =>
-    request<{ dues: Array<{ supplier: string; count: number; total: number; oldestDate: string | null }>; total: number; supplierCount: number }>('/db/supplier-dues'),
-  recordSupplierPayment: (payload: { supplier: string; amount: number; method: string }) =>
-    request<{ ok: boolean; ref: string }>('/db/supplier-dues/pay', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+  /** Outstanding supplier dues with an aging split (cancelled invoices excluded). */
+  getSupplierDues: (): Promise<SupplierDuesResponse> => request('/db/supplier-dues'),
+  /** Open invoices + payment ledger for one supplier. */
+  getSupplierDuesDetail: (supplier: string): Promise<SupplierDuesDetail> =>
+    request(`/db/supplier-dues/${encodeURIComponent(supplier)}`),
+  /** Record a payment; `allocate` restricts it to the given invoice ids. */
+  recordSupplierPayment: (payload: {
+    supplier: string
+    amount: number
+    method: string
+    note?: string
+    allocate?: string[]
+  }) =>
+    request<{ ok: boolean; ref: string; paymentId: string; outstanding: number; settled: string[]; allocations: Array<{ invoiceId: string; invoiceNumber: string; amount: number; settled: boolean }> }>(
+      '/db/supplier-dues/pay',
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  /** Email the owner a summary of what is owed to suppliers. */
+  sendSupplierDuesSummary: (to?: string): Promise<{ ok: boolean; sent: number; to?: string; message?: string; error?: string }> =>
+    request('/db/supplier-dues/remind', { method: 'POST', body: JSON.stringify({ to }) }),
   createPaymentLink: (customer: string, amount: number) =>
     request<{ url: string; id: string; configured: boolean }>('/db/dues/payment-link', {
       method: 'POST',
@@ -355,11 +380,84 @@ export const dbApi = {
   updateQuotation: (id: string, payload: Record<string, unknown>) =>
     request<Quotation>(`/db/quotations/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteQuotation: (id: string) => request<{ ok: boolean }>(`/db/quotations/${id}`, { method: 'DELETE' }),
+  /** Email the quotation to the customer with the PDF attached. */
+  emailQuotation: (id: string, to?: string): Promise<{ ok: boolean; to?: string; message?: string; error?: string }> =>
+    request(`/db/quotations/${encodeURIComponent(id)}/email`, {
+      method: 'POST',
+      body: JSON.stringify(to ? { to } : {}),
+    }),
+  /** Send the quotation summary on WhatsApp (marks a draft as sent). */
+  sendQuotationWhatsApp: (id: string) =>
+    request<{ ok: boolean; to?: string; messageId?: string; markedSent?: boolean; error?: string }>(
+      `/whatsapp/quotation/${encodeURIComponent(id)}`,
+      { method: 'POST' },
+    ),
+  /** E-invoicing: IRN status, generation and cancellation. */
+  getEInvoiceStatus: (invoiceId: string): Promise<EInvoiceStatus> =>
+    request(`/db/einvoice/${encodeURIComponent(invoiceId)}`),
+  generateEInvoice: (invoiceId: string): Promise<{ ok: boolean; irn: string; irnDate: string; qrCode: string | null; provider: string }> =>
+    request(`/db/einvoice/${encodeURIComponent(invoiceId)}/generate`, { method: 'POST' }),
+  cancelEInvoice: (invoiceId: string, reason?: string): Promise<{ ok: boolean; cancelDate?: string }> =>
+    request(`/db/einvoice/${encodeURIComponent(invoiceId)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  /** Quotations, pipeline orders and bookings that need chasing. */
+  getSalesFollowUps: (customer?: string): Promise<SalesFollowUpsResponse> =>
+    request(`/sales/followups${customer ? `?customer=${encodeURIComponent(customer)}` : ''}`),
+  /** Lifecycle: draft → sent → approved (→ converted), plus cancelled / reopen. */
+  setQuotationStatus: (id: string, status: Quotation['status']) =>
+    request<{ ok: boolean; previousStatus?: string; quotation: Quotation }>(`/db/quotations/${id}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    }),
   convertQuotation: (id: string) =>
     request<{ ok: boolean; invoiceNumber: string; invoiceId: string }>(`/db/quotations/${id}/convert`, { method: 'POST' }),
   convertQuotationToOrder: (id: string) =>
     request<{ ok: boolean; orderNumber: string; orderId: string }>(`/db/quotations/${id}/convert-order`, { method: 'POST' }),
   getPurchaseInvoices: () => list<PurchaseInvoice>('/db/purchase-invoices', PAGED),
+  /** Line items + live balance for one purchase invoice. */
+  getPurchaseInvoiceWithItems: (id: string): Promise<PurchaseInvoiceDetail> =>
+    request(`/db/purchase-invoices/${encodeURIComponent(id)}/with-items`),
+  /** Record a purchase: line items are required so each one lands in stock. */
+  createPurchaseInvoice: (payload: PurchaseInvoiceInput): Promise<PurchaseInvoice & { lines: number; stockedSkus: number }> =>
+    request('/db/purchase-invoices', { method: 'POST', body: JSON.stringify(payload) }),
+  /** Edit a purchase: replacing lines restocks the difference, cancelling removes it. */
+  updatePurchaseInvoice: (
+    id: string,
+    payload: Partial<PurchaseInvoiceInput> & { status?: string; orderId?: string | null },
+  ): Promise<PurchaseInvoice & { balance: number; reversedSkus: number; stockedSkus: number }> =>
+    request(`/db/purchase-invoices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  /** Permanently remove a purchase invoice, reversing any stock it added. */
+  deletePurchaseInvoice: (id: string): Promise<{ ok: boolean; id: string }> =>
+    request(`/db/purchase-invoices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Purchase returns with their line items. */
+  getPurchaseReturnsWithLines: (): Promise<PurchaseReturn[]> => list('/db/purchase-returns/with-lines', PAGED),
+  /** Record a return; stock only leaves when status is `received`. */
+  createPurchaseReturn: (payload: {
+    number: string
+    supplier: string
+    invoiceId?: string | null
+    status?: string
+    items: Array<{ product: string; sku: string; qty: number; weight: number; rate: number }>
+  }): Promise<PurchaseReturn & { linesSaved: number; reversedSkus: number }> =>
+    request('/db/purchase-returns', { method: 'POST', body: JSON.stringify(payload) }),
+  /** Receiving a return takes the goods out of stock; leaving that state puts them back. */
+  setPurchaseReturnStatus: (id: string, status: string): Promise<PurchaseReturn & { stockMoved: number }> =>
+    request(`/db/purchase-returns/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  /** Ordered vs received for a purchase order (cancelled invoices ignored). */
+  getOrderReceipt: (orderId: string): Promise<PurchaseOrderReceipt> =>
+    request(`/db/purchase-orders/${encodeURIComponent(orderId)}/receipt`),
+  /** Purchase orders with their line items attached. */
+  getPurchaseOrdersWithItems: (): Promise<PurchaseOrder[]> => list('/db/purchase-orders/with-items', PAGED),
+  getPurchaseOrderWithItems: (id: string): Promise<PurchaseOrder> =>
+    request(`/db/purchase-orders/${encodeURIComponent(id)}/with-items`),
+  /** Replace a PO's line items (stock only moves when the purchase invoice lands). */
+  setPurchaseOrderLines: (
+    id: string,
+    items: Array<{ product: string; sku: string; qty: number; weight: number; rate: number }>,
+  ): Promise<PurchaseOrder> =>
+    request(`/db/purchase-orders/${encodeURIComponent(id)}/lines`, { method: 'PATCH', body: JSON.stringify({ items }) }),
   getSalesReturns: () => list<SalesReturn>('/db/sales-returns', PAGED),
   getPurchaseReturns: () => list<PurchaseReturn>('/db/purchase-returns', PAGED),
   getStockTransfers: () => list<StockTransfer>('/db/inventory/transfers', PAGED),

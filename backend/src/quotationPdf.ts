@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit'
 import QRCode from 'qrcode'
 import { getRawClient } from './db/client'
 import { logger } from './logger'
+import { escapeHtml } from './htmlEscape'
 
 export interface QuotationItem {
   name: string
@@ -146,6 +147,43 @@ export async function generateQuotationPDF(quotationId: string): Promise<Buffer 
     logger.error({ err, quotationId }, 'Quotation PDF generation failed')
     return null
   }
+}
+
+/** Email a quotation to the customer with the PDF attached. */
+export async function emailQuotationPDF(quotationId: string, recipientEmail: string): Promise<boolean> {
+  const { sendEmail } = await import('./notifications')
+  const pdfBuffer = await generateQuotationPDF(quotationId)
+  if (!pdfBuffer) return false
+
+  const client = getRawClient()
+  if (!client) return false
+  const [row] = await client.unsafe(`SELECT number, grand_total, customer, valid_until FROM quotations WHERE id = $1`, [
+    quotationId,
+  ]) as any[]
+  const number = row?.number || quotationId
+  const customer = row?.customer || 'Customer'
+  const total = Number(row?.grand_total || 0)
+  const validUntil = row?.valid_until
+    ? new Date(row.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    : 'the date agreed with you'
+
+  return sendEmail({
+    to: recipientEmail,
+    subject: `Quotation ${number} — Opal Line`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #1a1a2e;">\uD83D\uDCCE Quotation ${escapeHtml(number)}</h2>
+        <p>Dear ${escapeHtml(customer)},</p>
+        <p>Thank you for your interest. Please find our quotation attached — the quoted total is
+           <strong>\u20B9${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> and it is valid until
+           <strong>${escapeHtml(validUntil)}</strong>.</p>
+        <p>Prices are based on the silver rate on the day of billing. If you would like to proceed, simply reply to
+           this email or visit the store.</p>
+        <p style="color: #999; font-size: 12px;">Opal Line ERP — Quotation</p>
+      </div>
+    `,
+    attachments: [{ filename: `${number}.pdf`, content: pdfBuffer }],
+  })
 }
 
 export async function createQuotationPDFBuffer(data: QuotationPdfData): Promise<Buffer> {

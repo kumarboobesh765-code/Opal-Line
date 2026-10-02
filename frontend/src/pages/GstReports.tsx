@@ -119,6 +119,9 @@ export default function GstReportsPage() {
                   <Row label="Output SGST" value={formatCurrency(s.sgst)} />
                   <Row label="ITC Utilised" value={formatCurrency(s.itcUtilised)} />
                   <Row label="Net Tax Payable" value={formatCurrency(s.netGst)} highlight />
+                  {/* TCS is collected from suppliers on bullion and deposited
+                      on their behalf — a separate liability, never ITC. */}
+                  <Row label="TCS Collected (194Q)" value={formatCurrency(s.tcs)} />
                 </div>
               </CardContent>
             </Card>

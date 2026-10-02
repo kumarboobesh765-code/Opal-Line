@@ -231,17 +231,182 @@ No env vars — configured entirely in the UI (*System → Print Designer*):
 Invoices, quotations, orders, packing slips and pick lists print with product
 photo thumbnails when images exist.
 
+## 11b. Quotations: lifecycle, sending and follow-ups
+
+A quotation moves through a real lifecycle:
+
+```
+draft ──► sent ──► approved ──► converted      (terminal)
+  │        │           │
+  └────────┴───────────┴──► cancelled / expired (terminal)
+```
+
+| Action | Where | Notes |
+|---|---|---|
+| Mark as sent / approved / cancel | Quotations page, row actions | Invalid jumps are rejected server-side |
+| Email quotation | Row actions (✉) | Sends the **PDF attached**; a draft flips to `sent` automatically |
+| WhatsApp quotation | Row actions (💬) | Needs `customerPhone`; degrades gracefully when WhatsApp isn't configured |
+| Reopen expired | Row actions (↻) | Extends validity by 15 days and returns it to `draft` |
+
+- **Auto-expiry:** once `Valid Until` passes, the quotation becomes `expired`
+  and can no longer be converted into an invoice or an order — extend it to
+  revive it. Expiry runs on every list load and in a daily sweep (10:05).
+- **Follow-ups** (`GET /api/v1/sales/followups`) collect what needs chasing:
+  quotations sent/approved with no decision, quotes lapsing within 2 days,
+  orders stuck in the pipeline, and bookings awaiting fulfilment or advance.
+  Shown on the Quotations page and, scoped per customer, on Customer 360. The
+  daily sweep writes a summary into the activity log.
+
+## 11c. Purchases: line items, stock-in, supplier ledger and input GST
+
+`Purchase → Invoices` records what actually arrived. A purchase invoice is made
+of **line items** (product / SKU / qty / weight / rate / GST per line) — the
+totals are derived from those lines, and each line's quantity is **added to
+stock** for the matching SKU.
+
+| Action | Effect on stock |
+|---|---|
+| Record purchase | `stock += qty` per line, and cost price is re-weighted |
+| Edit the lines | Old lines are reversed, then the new lines are applied |
+| Cancel the invoice | The stock it added is taken back out; the lines are kept |
+| Reinstate a cancelled invoice | The kept lines put their stock back |
+| Delete the invoice | Removed for good, with its stock reversed |
+
+**Stock and cost.** Buying revalues the product's weighted-average cost:
+
+```
+newCost = (stockOnHand × costOnHand + boughtQty × buyPrice) / newStock
+```
+
+A product with stock but no recorded cost simply adopts the buy price. Selling
+or cancelling never revalues what remains — standard weighted-average
+behaviour. The result is stored in `products.cost_price`.
+
+**Purchase returns** (`Purchase → Returns`) carry their own line items. Stock
+only moves when the return is **Received** — a pending or approved return is
+paperwork. Receiving takes the goods out, and undoing the receipt (or
+cancelling a received return) puts them back.
+
+Editing a line that has already been paid against is blocked if it would drop
+the invoice total below what has been paid.
+
+**Input GST split.** Each invoice stores the supplier GSTIN. The first two
+digits give the supplier's state, which is compared with the business state
+(taken from your own GSTIN in `System → Settings → Business`):
+
+| Case | Charged |
+|---|---|
+| Same state (or no supplier GSTIN) | CGST + SGST, half each |
+| Different state | IGST, in full |
+
+With no GSTIN anywhere the purchase is treated as intra-state, which is the
+same assumption the HSN summary makes for counter sales.
+
+**TCS (194Q).** Bullion buyers owe tax collected at source. Set the rate per
+invoice (usually `1`, sometimes `0.25`/`0.5`); `0` disables it. TCS is computed
+on the pre-tax value and shown on the invoice.
+
+TCS is **not** input credit — it is collected from the supplier and deposited
+on their behalf, so it is a liability in its own right (GSTR-3B "TCS
+collected"). `Reports → GST` shows it as its own line and it is deliberately
+excluded from ITC and from net payable. Cancelled invoices drop out of it, as
+they do from the input credit.
+
+**Supplier ledger.** `Reports → Supplier Dues` shows every supplier still owed
+money, split into aging buckets (0–30 / 31–60 / 60+ days). Cancelled and fully
+paid invoices are excluded, so the total is always payable.
+
+- **Pay** opens the supplier's open invoices — tick the ones this payment
+  settles and enter the amount. Allocation is oldest-first and bounded by each
+  invoice's balance, so repeated partial payments settle correctly and a
+  supplier can never be over-paid (the API rejects it).
+- **Ledger** shows the same open invoices plus the payment history and exactly
+  where each payment was allocated.
+- **Send Summary** emails the payables report to the notification address.
+  A summary is also emailed **automatically every day at 09:20** — one email
+  covering every supplier, never one per supplier, and never more than once a
+  day. Set it off with `NOTIFICATION_EMAIL`, or via *Settings → Notifications →
+  Recipient email*. `POST /db/supplier-dues/sweep` runs it on demand.
+
+Purchase orders carry their own line items (`purchase_order_items`) for what was
+*ordered*; stock only moves when the purchase invoice is recorded. A purchase
+invoice can be linked to its order (`order_id`), and
+`GET /db/purchase-orders/:id/receipt` reconciles **ordered vs received** —
+cancelled invoices are ignored, so a short shipment is not masked by a voided
+invoice. The PO detail dialog shows the variance.
+
+**Concurrency.** Recording a supplier payment locks the candidate invoice rows
+and re-reads their balances inside a single transaction, so two payments racing
+on the same invoice cannot both act on a stale balance and over-allocate it.
+
+Schema additions are idempotent and applied on every start
+(`purchase_invoice_items`, `purchase_order_items`, `supplier_payments`,
+`supplier_payment_allocations`, plus the `paid_amount` / GST split / TCS columns
+on `purchase_invoices`), so an existing install upgrades itself.
+
 ## 12. In-app Settings reference (*System → Settings*)
 
 | Tab | Keys |
 |---|---|
 | Appearance | Theme: Light / Dark / System (also the 🌙 header toggle) |
-| Business | Business name, GSTIN, phone, email, address; defaults: purity (92.5/95.8/99.9), making charge ₹/g, GST %, currency, invoice prefix, rate source (MCX), auto-update rate, require rate approval |
+| Business | Business name, GSTIN, phone, email, address; defaults: purity (92.5/95.8/99.9), making charge ₹/g, GST %, currency, invoice prefix, rate source (MCX), auto-update rate |
 | Banking | Bank accounts used on prints |
-| Silver Rate | Source + auto-update + approval toggle |
+| Compliance | E-invoicing mode (off / manual / automatic), gateway status, GSTIN reminder |
+| Silver Rate | Source + auto-update. Rate changes by anyone other than an Admin / Super Admin **always** require approval (see below) |
 | Notifications | Low-stock alerts, daily summary, Shopify order-import notices, payment reminders, test senders |
 | Team | Role permissions overview + **Security card → "Log out other devices"** |
 | Users & Roles | Per-user module/action permissions, activation, password resets |
+
+### GST e-invoicing (IRN)
+
+`System → Settings → Compliance` chooses how IRNs are generated:
+
+| Mode | Behaviour |
+|---|---|
+| **Off** | Invoices are issued without an IRN (default) |
+| **Manual** | Nothing leaves the app until someone clicks **Generate IRN** on the invoice |
+| **Automatic** | Every newly issued invoice is sent to the gateway on save; cancelling stays manual |
+
+An invoice shows its IRN, issue date and signed QR payload once generated, and
+**Cancel IRN** voids it at the portal (irreversible) and marks the invoice
+cancelled.
+
+**Gateway.** No IRP round trip happens until credentials exist, so IRNs are
+generated locally in the meantime — the whole flow (storage, QR, status, cancel)
+works offline and is clearly marked `mock` in the QR payload. To go live, set:
+
+| Variable | Purpose |
+|---|---|
+| `CLEARTAX_GSTIN` | Your GSTIN |
+| `CLEARTAX_AUTH_TOKEN` | ClearTax API auth token |
+| `CLEARTAX_SANDBOX` | `true` to use the ClearTax sandbox |
+
+Other gateways (Zoho, a direct IRP connection with your own signing
+certificate) slot in as another adapter in `backend/src/einvoice.ts` — the
+routes, UI and schema do not change.
+
+### HSN summary
+
+`Reports → HSN Summary` groups the month's **issued invoices** by the HSN code
+on each product. Taxable value takes a pro-rata share of the invoice discount,
+so line totals reconcile with the invoice, and GST is split into CGST/SGST or
+IGST by comparing the customer's state with the business address (a blank
+customer state is treated as intra-state, which is how counter sales are
+charged). Products with no HSN on file land in a clearly-labelled
+**Unclassified** row — worth clearing before filing.
+
+### Silver rate approval
+
+Rate changes made by an **Admin or Super Admin** apply immediately. A change
+submitted by **any other role** (e.g. Manager) is queued as a *pending request*
+and the rate stays unchanged until an Admin / Super Admin approves it —
+rejecting keeps the old rate. This is enforced in the backend for every entry
+point, including the legacy `/api/v1/silver/update` route, and cannot be
+switched off from Settings. `POST /api/v1/silver/auto-rate/fetch-now` applies the
+live MCX spot rate and reprices products, so it is likewise restricted to
+Admin / Super Admin. Approvers see a pending-count badge in the header and a
+"Rate Change Approvals" panel on the Silver Rate page; every submission,
+approval and rejection is written to the activity log with the actor's name.
 
 ## 13. Rate limiting (operational notes)
 

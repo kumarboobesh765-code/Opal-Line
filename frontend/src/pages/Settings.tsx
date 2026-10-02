@@ -30,6 +30,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   rateSource: 'mcx',
   autoUpdateMcx: true,
   requireRateApproval: true,
+  einvoiceEnabled: false,
+  einvoiceMode: 'off',
   autoReconcileRazorpay: true,
   paymentReminders: false,
   lowStockAlerts: true,
@@ -43,6 +45,71 @@ export default function SettingsPage() {
     <RequireModule module="system">
       <SettingsContent />
     </RequireModule>
+  )
+}
+
+function ComplianceCard() {
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [gateway, setGateway] = useState<{ provider: string; gatewayConfigured: boolean } | null>(null)
+
+  useEffect(() => {
+    dbApi.getSettings().then((row) => { if (row) setSettings({ ...DEFAULT_SETTINGS, ...row }) }).catch(() => {})
+    // The gateway state lives on the per-invoice status endpoint, so probe any
+    // invoice-free response we have: a 404 still tells us nothing, so instead
+    // ask for the mode through settings and infer the provider from the API.
+    dbApi.getEInvoiceStatus('').catch(() => setGateway(null))
+  }, [])
+
+  const mode = settings.einvoiceMode ?? 'off'
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground">E-Invoicing (GST IRN)</h3>
+        </div>
+
+        <Field label="IRN generation mode">
+          <Select
+            options={[
+              { value: 'off', label: 'Off — never generate IRNs' },
+              { value: 'manual', label: 'Manual — generate per invoice from the invoice page' },
+              { value: 'automatic', label: 'Automatic — generate for every new invoice' },
+            ]}
+            value={mode}
+            onValueChange={(v) => setSettings((s) => ({ ...s, einvoiceMode: v as AppSettings['einvoiceMode'], einvoiceEnabled: v !== 'off' }))}
+            className="w-full"
+          />
+        </Field>
+
+        <p className="text-[13px] text-muted-foreground">
+          {mode === 'off'
+            ? 'Invoices are issued without an IRN.'
+            : mode === 'manual'
+              ? 'Nothing is sent to the GST portal until someone clicks “Generate IRN” on the invoice.'
+              : 'Every newly issued invoice is sent to the gateway automatically. Cancelling an IRN stays a manual action.'}
+        </p>
+
+        <div className="rounded-lg border p-4">
+          <p className="text-sm font-medium text-foreground">Gateway</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {gateway?.gatewayConfigured
+              ? `Connected via ${gateway.provider}.`
+              : 'No live gateway connected — IRNs are generated locally so the full flow can be used and reviewed. Add CLEARTAX_GSTIN and CLEARTAX_AUTH_TOKEN to the environment to go live, or extend the provider adapter.'}
+          </p>
+          {settings.gstin ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              GSTIN on file: <span className="font-mono text-foreground">{settings.gstin}</span>
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+              Add your GSTIN in the Business tab before generating IRNs — it is written into every e-invoice.
+            </p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -112,8 +179,13 @@ function SettingsContent() {
           <TabsTrigger value="silver"><Tag /> Silver Rate</TabsTrigger>
           <TabsTrigger value="banking"><Landmark /> Banking</TabsTrigger>
           <TabsTrigger value="notifications"><Bell /> Notifications</TabsTrigger>
+          <TabsTrigger value="compliance"><ShieldCheck /> Compliance</TabsTrigger>
           <TabsTrigger value="team"><Users /> Team</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="compliance">
+          <ComplianceCard />
+        </TabsContent>
 
         <TabsContent value="appearance">
           <AppearanceCard />
@@ -214,12 +286,14 @@ function SettingsContent() {
                 checked={settings.autoUpdateMcx}
                 onCheckedChange={(v) => set('autoUpdateMcx', v)}
               />
-              <SettingRow
-                title="Require admin approval for rate changes"
-                description="Price changes must be approved before applying to Shopify."
-                checked={settings.requireRateApproval}
-                onCheckedChange={(v) => set('requireRateApproval', v)}
-              />
+              <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <p className="text-[13px] text-muted-foreground">
+                  <span className="font-semibold text-foreground">Admin approval is always required for staff rate changes.</span>{' '}
+                  Rate changes submitted by anyone other than an Admin or Super Admin are queued for approval and do not
+                  apply until accepted.
+                </p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

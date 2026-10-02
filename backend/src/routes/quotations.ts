@@ -1,9 +1,11 @@
-import { desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import type { NextFunction, Request, Response } from 'express'
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/client'
 import * as s from '../db/schema'
 import { requirePermission } from '../rbac'
+import { recordActivity } from '../activity'
+import { actorFromRequest } from '../activity'
 import { num, round2 } from './db'
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown
@@ -24,6 +26,8 @@ interface RouteRegistrar {
  *   POST   /quotations            create
  *   PATCH  /quotations/:id        update (replaces items when provided)
  *   DELETE /quotations/:id        delete
+ *   POST   /quotations/:id/status   move the quotation through its lifecycle
+ *                                  (sent / approved / cancelled / reopen)
  *   POST   /quotations/:id/convert  convert into a real tax invoice (no stock movement
  *                                  until conversion; conversion mirrors manual invoices)
  *   POST   /quotations/:id/convert-order  convert into a confirmed sales order
@@ -32,6 +36,63 @@ interface RouteRegistrar {
  */
 
 const QUOTE_PREFIX = 'QT-'
+
+// ─── Lifecycle ──────────────────────────────────────────────────────────────
+// A quotation is created as `draft` and lives here until it is converted:
+//   draft → sent → approved → converted   (or cancelled / expired at any point)
+// `converted` is terminal and only set by the convert routes; `expired` is
+// applied automatically once `validUntil` has passed.
+export const QUOTATION_STATUSES = ['draft', 'sent', 'approved', 'converted', 'expired', 'cancelled'] as const
+export type QuotationStatus = (typeof QUOTATION_STATUSES)[number]
+
+const STATUS_TRANSITIONS: Record<QuotationStatus, QuotationStatus[]> = {
+  draft: ['sent', 'cancelled'],
+  sent: ['approved', 'cancelled', 'expired'],
+  approved: ['cancelled', 'expired'],
+  expired: ['draft'],
+  converted: [],
+  cancelled: [],
+}
+
+export function isQuotationStatus(value: unknown): value is QuotationStatus {
+  return typeof value === 'string' && (QUOTATION_STATUSES as readonly string[]).includes(value)
+}
+
+/** True when the quotation has a valid-until date that is already in the past. */
+export function quotationIsExpired(quote: { validUntil?: string | null; status?: string | null }): boolean {
+  if (!quote.validUntil) return false
+  return new Date(quote.validUntil).getTime() < Date.now()
+}
+
+/** Statuses that expiry may still touch (converted / cancelled are final). */
+const EXPIRABLE: QuotationStatus[] = ['draft', 'sent', 'approved']
+
+/**
+ * Flip past-valid-until quotations to `expired`. Called before listing so the
+ * UI and filters never show a stale quotation as live, and from the daily
+ * scheduler so the state is correct even when nobody opens the page.
+ */
+export async function expireStaleQuotations(): Promise<number> {
+  if (!db) return 0
+  try {
+    const now = new Date().toISOString()
+    const expired = await db
+      .update(s.quotations)
+      .set({ status: 'expired', updatedAt: now })
+      .where(
+        and(
+          inArray(s.quotations.status, EXPIRABLE),
+          isNotNull(s.quotations.validUntil),
+          lt(s.quotations.validUntil, now),
+        ),
+      )
+      .returning({ id: s.quotations.id })
+    return expired.length
+  } catch {
+    // Never let a housekeeping failure break a request.
+    return 0
+  }
+}
 
 async function nextQuotationNumber(): Promise<string> {
   const now = new Date()
@@ -95,12 +156,32 @@ function sanitizeCustomer(body: Record<string, unknown>) {
   }
 }
 
+/**
+ * Mark a draft quotation as sent. Called after the quotation was actually
+ * delivered (email / WhatsApp) so the lifecycle reflects reality.
+ */
+export async function markQuotationSent(quotationId: string): Promise<boolean> {
+  if (!db) return false
+  const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, quotationId)).limit(1)
+  if (!quote || quote.status !== 'draft') return false
+  await db.update(s.quotations).set({ status: 'sent', updatedAt: new Date().toISOString() }).where(eq(s.quotations.id, quotationId))
+  return true
+}
+
 export function registerQuotationRoutes(router: RouteRegistrar) {
-  router.get('/quotations', requirePermission('sales', 'view'), async (_req, res) => {
+  router.get('/quotations', requirePermission('sales', 'view'), async (req, res) => {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
-      const quotes = await db.select().from(s.quotations).orderBy(desc(s.quotations.date)).limit(200)
-      res.json({ page: 1, pageSize: 200, total: quotes.length, data: quotes })
+      // Keep the list honest: anything past its valid-until date reads expired.
+      await expireStaleQuotations()
+      const statusFilter = typeof req.query.status === 'string' && isQuotationStatus(req.query.status) ? req.query.status : null
+      const quotes = await db
+        .select()
+        .from(s.quotations)
+        .where(statusFilter ? eq(s.quotations.status, statusFilter) : undefined)
+        .orderBy(desc(s.quotations.date))
+        .limit(200)
+      res.json({ page: 1, pageSize: 200, total: quotes.length, status: statusFilter ?? 'all', data: quotes })
     } catch {
       res.status(500).json({ error: 'Failed to list quotations' })
     }
@@ -111,6 +192,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
     try {
       const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
+      await expireStaleQuotations()
       const items = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, quote.id))
       res.json({ ...quote, items })
     } catch {
@@ -174,11 +256,19 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
       }
       if (items.length > 0) totals = computeTotals(items, gstRate, discount)
 
+      // Extending the validity of an expired quotation brings it back to draft.
+      const nextValidUntil = body.validUntil ? String(body.validUntil) : (existing.validUntil ?? null)
+      const revivedStatus =
+        existing.status === 'expired' && nextValidUntil && new Date(nextValidUntil).getTime() > Date.now()
+          ? 'draft'
+          : undefined
+
       const [row] = await db.update(s.quotations).set({
         ...clean,
         gst: gstRate,
         discount,
         ...totals,
+        ...(revivedStatus ? { status: revivedStatus } : {}),
         updatedAt: new Date().toISOString(),
       }).where(eq(s.quotations.id, req.params.id)).returning()
 
@@ -208,6 +298,110 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
     }
   })
 
+  // ─── Lifecycle: move a quotation between draft / sent / approved / cancelled ──
+  router.post('/quotations/:id/status', requirePermission('sales', 'edit'), async (req: Request, res: Response) => {
+    if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
+    try {
+      const next = (req.body ?? {}).status
+      if (!isQuotationStatus(next)) {
+        res.status(400).json({ error: `status must be one of: ${QUOTATION_STATUSES.join(', ')}` })
+        return
+      }
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      if (!quote) { res.status(404).json({ error: 'Not found' }); return }
+      if (quote.convertedInvoice) {
+        res.status(400).json({ error: `Quotation already converted to ${quote.convertedInvoice}` })
+        return
+      }
+
+      // Refresh expiry first so a stale quotation can't be revived by mistake.
+      if (quotationIsExpired(quote) && quote.status !== 'expired') await expireStaleQuotations()
+      const [fresh] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const current = (fresh?.status ?? quote.status ?? 'draft') as QuotationStatus
+
+      if (current === next) {
+        res.json({ ok: true, unchanged: true, quotation: fresh })
+        return
+      }
+      if (!STATUS_TRANSITIONS[current]?.includes(next)) {
+        res.status(400).json({
+          error: `Cannot change status from ${current} to ${next}. Allowed: ${STATUS_TRANSITIONS[current]?.join(', ') || 'none'}`,
+        })
+        return
+      }
+      // Reopening an expired quotation without extending it would expire it again.
+      if (next === 'draft' && fresh && quotationIsExpired(fresh)) {
+        res.status(400).json({ error: 'Extend the valid-until date before reopening this quotation' })
+        return
+      }
+
+      const now = new Date().toISOString()
+      const [updated] = await db
+        .update(s.quotations)
+        .set({ status: next, updatedAt: now })
+        .where(eq(s.quotations.id, req.params.id))
+        .returning()
+      const actor = actorFromRequest(req)
+      void recordActivity({
+        action: `Quotation ${next === 'approved' ? 'Approved' : next.charAt(0).toUpperCase() + next.slice(1)}`,
+        module: 'sales',
+        entity: `Quotation ${quote.number}`,
+        details: `${current} → ${next} · ₹${Number(quote.grandTotal ?? 0).toLocaleString('en-IN')} · ${quote.customer ?? 'walk-in'}`,
+        userId: actor.userId,
+        ip: actor.ip,
+      })
+      res.json({ ok: true, previousStatus: current, quotation: updated })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      res.status(500).json({ error: msg.includes('unique') ? 'Failed to update status' : msg })
+    }
+  })
+
+  // ─── Send to customer ───────────────────────────────────────────────────────
+  // Marks a draft as sent (once it has actually left the building) and records
+  // it in the activity log.
+  async function markSent(quotationId: string): Promise<void> {
+    await markQuotationSent(quotationId)
+  }
+
+  router.post('/quotations/:id/email', requirePermission('sales', 'edit'), async (req: Request, res: Response) => {
+    if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
+    try {
+      const { emailQuotationPDF } = await import('../quotationPdf')
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      if (!quote) { res.status(404).json({ error: 'Quotation not found' }); return }
+      if (quote.status === 'cancelled') { res.status(400).json({ error: 'Quotation was cancelled' }); return }
+
+      let recipient = typeof (req.body ?? {}).to === 'string' ? String((req.body as Record<string, unknown>).to).trim() : ''
+      if (!recipient && quote.customerEmail) recipient = quote.customerEmail.trim()
+      if (!recipient && quote.customer) {
+        const [cust] = await db.select({ email: s.customers.email }).from(s.customers).where(eq(s.customers.name, quote.customer)).limit(1)
+        if (cust?.email) recipient = cust.email.trim()
+      }
+      if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+        res.status(400).json({ error: 'No valid email address. Add one to the quotation or pass "to" in the request.' })
+        return
+      }
+
+      const sent = await emailQuotationPDF(quote.id, recipient)
+      if (!sent) { res.status(500).json({ error: 'Failed to send email. Check server logs.' }); return }
+      await markSent(quote.id)
+      const actor = actorFromRequest(req)
+      void recordActivity({
+        action: 'Emailed Quotation',
+        module: 'sales',
+        entity: `Quotation ${quote.number}`,
+        details: `Quotation emailed to ${recipient}`,
+        userId: actor.userId,
+        ip: actor.ip,
+      })
+      res.json({ ok: true, to: recipient, message: 'Quotation emailed successfully' })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      res.status(500).json({ error: msg })
+    }
+  })
+
   router.post('/quotations/:id/convert', requirePermission('sales', 'create'), async (req, res) => {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
@@ -215,6 +409,14 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
       if (quote.convertedInvoice) {
         res.status(400).json({ error: `Already converted to ${quote.convertedInvoice}` })
+        return
+      }
+      if (quote.status === 'expired' || quotationIsExpired(quote)) {
+        res.status(400).json({ error: 'Quotation has expired — extend its valid-until date before converting' })
+        return
+      }
+      if (quote.status === 'cancelled') {
+        res.status(400).json({ error: 'Quotation was cancelled' })
         return
       }
       const items = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, quote.id))
@@ -314,6 +516,14 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
       if (quote.convertedInvoice) {
         res.status(400).json({ error: `Already converted to ${quote.convertedInvoice}` })
+        return
+      }
+      if (quote.status === 'expired' || quotationIsExpired(quote)) {
+        res.status(400).json({ error: 'Quotation has expired — extend its valid-until date before converting' })
+        return
+      }
+      if (quote.status === 'cancelled') {
+        res.status(400).json({ error: 'Quotation was cancelled' })
         return
       }
       const items = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, quote.id))

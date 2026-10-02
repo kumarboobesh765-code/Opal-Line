@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeInputGst, netPayable } from './gst'
+import { computeInputGst, computeTcs, netPayable } from './gst'
 
 describe('computeInputGst', () => {
   test('sums the tax column over purchase invoice rows', () => {
@@ -42,5 +42,31 @@ describe('netPayable', () => {
 
   test('equal credits net to zero', () => {
     assert.equal(netPayable(1200, 1200), 0)
+  })
+})
+
+describe('computeTcs', () => {
+  test('sums TCS across purchase invoices', () => {
+    const rows = [{ tax: 100, tcsAmount: 10 }, { tax: 200, tcsAmount: 20 }]
+    assert.equal(computeTcs(rows), 30)
+  })
+
+  test('excludes cancelled invoices', () => {
+    const rows = [
+      { tax: 100, tcsAmount: 10, status: 'received' },
+      { tax: 200, tcsAmount: 20, status: 'cancelled' },
+    ]
+    assert.equal(computeTcs(rows), 10)
+  })
+
+  test('is zero when no TCS was collected', () => {
+    assert.equal(computeTcs([{ tax: 100 }, { tax: 200, tcsAmount: null }]), 0)
+  })
+
+  test('is kept separate from input credit, never netted into it', () => {
+    // TCS is a liability collected on the buyer's behalf, not a credit.
+    const rows = [{ tax: 1000, tcsAmount: 100 }]
+    assert.equal(computeInputGst(rows), 1000)
+    assert.equal(computeTcs(rows), 100)
   })
 })

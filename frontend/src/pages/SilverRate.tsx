@@ -223,6 +223,9 @@ export default function SilverRatePage() {
   }
 
   const pendingCount = useMemo(() => requests.filter((r) => r.status === 'pending').length, [requests])
+  // Admin / Super Admin can apply a rate change (and fetch the spot rate)
+  // directly; every other role always goes through approval.
+  const canApprove = isApprover || autoStatus?.isApprover === true
 
   return (
     <div className="mx-auto w-full max-w-[1400px] space-y-5 px-4 py-4 sm:py-6 lg:px-6">
@@ -242,11 +245,23 @@ export default function SilverRatePage() {
               {syncingProducts ? 'Syncing products...' : 'Sync Products from Shopify'}
             </Button>
             <Button onClick={openUpdate} className="gap-2">
-              <TrendingUp className="h-4 w-4" /> Update Silver Rate
+              <TrendingUp className="h-4 w-4" /> {canApprove ? 'Update Silver Rate' : 'Request Rate Change'}
             </Button>
           </>
         }
       />
+
+      {!canApprove ? (
+        <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm text-amber-800">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-semibold">Approval required</p>
+            <p className="text-[13px]">
+              Rate changes submitted by your role are queued for an Admin or Super Admin to approve. The rate stays unchanged until then.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {syncResult ? (
         <div
@@ -289,14 +304,14 @@ export default function SilverRatePage() {
               <ShieldCheck className="h-4 w-4 text-muted-foreground" />
               <CardTitle className="text-sm">Rate Change Approvals</CardTitle>
             </div>
-            {pendingCount > 0 ? <Badge variant="warning" className="text-[10px]">{pendingCount} pending</Badge> : <Badge variant="muted" className="text-[10px]">{autoStatus?.approvalRequired === false ? 'Approval off' : 'None pending'}</Badge>}
+            {pendingCount > 0 ? <Badge variant="warning" className="text-[10px]">{pendingCount} pending</Badge> : <Badge variant="muted" className="text-[10px]">None pending</Badge>}
           </CardHeader>
           <CardContent>
             {requests.length === 0 ? (
               <p className="py-4 text-center text-[13px] text-muted-foreground">
-                {autoStatus?.approvalRequired === false
-                  ? 'Approval is disabled in Settings — all rate changes apply immediately.'
-                  : 'No rate change requests. Staff submissions will appear here for approval.'}
+                {canApprove
+                  ? 'No rate change requests. Staff submissions will appear here for approval.'
+                  : 'No rate change requests yet. Any rate change you submit is sent to an Admin or Super Admin for approval.'}
               </p>
             ) : (
               <div className="space-y-2">
@@ -380,8 +395,21 @@ export default function SilverRatePage() {
                     Rate source not configured — set <code className="rounded bg-muted px-1">SILVER_RATE_API_URL</code> to enable spot-rate fetching.
                   </p>
                 ) : null}
+                {!canApprove ? (
+                  <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-[11px] text-amber-800">
+                    <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>Fetching applies the live spot rate and reprices products, so only Admin or Super Admin can run it.</span>
+                  </p>
+                ) : null}
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" className="gap-1.5" onClick={fetchNow} disabled={fetchingNow || !autoStatus.apiUrlConfigured}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={fetchNow}
+                    disabled={fetchingNow || !autoStatus.apiUrlConfigured || !canApprove}
+                    title={canApprove ? undefined : 'Only Admin or Super Admin can fetch and apply the live silver rate'}
+                  >
                     <RefreshCw className={cn('h-3.5 w-3.5', fetchingNow && 'animate-spin')} />
                     {fetchingNow ? 'Fetching…' : 'Fetch spot rate now'}
                   </Button>

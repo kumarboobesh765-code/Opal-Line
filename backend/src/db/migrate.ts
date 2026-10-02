@@ -66,6 +66,97 @@ async function main() {
   await client.unsafe(`CREATE INDEX IF NOT EXISTS "silver_rate_requests_requested_at_idx" ON "silver_rate_requests" ("requested_at");`)
   await client.unsafe(`ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "require_rate_approval" boolean DEFAULT true;`)
   await client.unsafe(`ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "auto_update_mcx" boolean DEFAULT false;`)
+  await client.unsafe(`ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "einvoice_mode" text DEFAULT 'off';`)
+
+  console.log('Purchase line items, supplier payment ledger (idempotent)...')
+  // Purchases previously stored only totals, so nothing could reach stock and
+  // supplier payments had nowhere to be recorded.
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "paid_amount" numeric DEFAULT 0;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "supplier_gstin" text;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "supplier_state" text;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "cgst" numeric;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "sgst" numeric;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "igst" numeric;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "tcs_rate" numeric;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "tcs_amount" numeric;`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_invoices_status_idx" ON "purchase_invoices" ("status");`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "order_id" text;`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_invoices_order_id_idx" ON "purchase_invoices" ("order_id");`)
+  await client.unsafe(`ALTER TABLE "products" ADD COLUMN IF NOT EXISTS "cost_price" numeric;`)
+  await client.unsafe(`ALTER TABLE "purchase_returns" ADD COLUMN IF NOT EXISTS "invoice_id" text;`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_returns_invoice_id_idx" ON "purchase_returns" ("invoice_id");`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "purchase_return_items" (
+      "id" text PRIMARY KEY NOT NULL,
+      "return_id" text NOT NULL,
+      "product" text,
+      "sku" text,
+      "qty" numeric DEFAULT 1,
+      "weight" numeric,
+      "rate" numeric,
+      "amount" numeric,
+      CONSTRAINT "purchase_return_items_return_id_fk" FOREIGN KEY ("return_id")
+        REFERENCES "purchase_returns" ("id") ON DELETE CASCADE
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_return_items_return_id_idx" ON "purchase_return_items" ("return_id");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_return_items_sku_idx" ON "purchase_return_items" ("sku");`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "purchase_invoice_items" (
+      "id" text PRIMARY KEY NOT NULL,
+      "invoice_id" text NOT NULL,
+      "product" text,
+      "sku" text,
+      "qty" numeric DEFAULT 1,
+      "weight" numeric,
+      "rate" numeric,
+      "cost" numeric,
+      "tax" numeric,
+      "amount" numeric,
+      CONSTRAINT "purchase_invoice_items_invoice_id_fk" FOREIGN KEY ("invoice_id")
+        REFERENCES "purchase_invoices" ("id") ON DELETE CASCADE
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_invoice_items_invoice_id_idx" ON "purchase_invoice_items" ("invoice_id");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_invoice_items_sku_idx" ON "purchase_invoice_items" ("sku");`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "purchase_order_items" (
+      "id" text PRIMARY KEY NOT NULL,
+      "order_id" text NOT NULL,
+      "product" text,
+      "sku" text,
+      "qty" numeric DEFAULT 1,
+      "weight" numeric,
+      "rate" numeric,
+      "amount" numeric,
+      CONSTRAINT "purchase_order_items_order_id_fk" FOREIGN KEY ("order_id")
+        REFERENCES "purchase_orders" ("id") ON DELETE CASCADE
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_order_items_order_id_idx" ON "purchase_order_items" ("order_id");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "purchase_order_items_sku_idx" ON "purchase_order_items" ("sku");`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "supplier_payments" (
+      "id" text PRIMARY KEY NOT NULL,
+      "ref" text,
+      "supplier" text,
+      "amount" numeric NOT NULL,
+      "method" text,
+      "note" text,
+      "date" timestamp,
+      "created_by" text
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "supplier_payments_supplier_idx" ON "supplier_payments" ("supplier");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "supplier_payments_date_idx" ON "supplier_payments" ("date");`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "supplier_payment_allocations" (
+      "id" text PRIMARY KEY NOT NULL,
+      "payment_id" text NOT NULL,
+      "invoice_id" text,
+      "invoice_number" text,
+      "amount" numeric NOT NULL,
+      CONSTRAINT "supplier_payment_allocations_payment_id_fk" FOREIGN KEY ("payment_id")
+        REFERENCES "supplier_payments" ("id") ON DELETE CASCADE
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "supplier_payment_allocations_payment_id_idx" ON "supplier_payment_allocations" ("payment_id");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "supplier_payment_allocations_invoice_id_idx" ON "supplier_payment_allocations" ("invoice_id");`)
 
   console.log('Seeding default roles (idempotent)...')
   for (const [i, name] of roleNames.entries()) {

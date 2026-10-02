@@ -8,10 +8,15 @@ import {
   Loader2,
   Plus,
   Printer,
+  RotateCcw,
   Search,
+  Send,
   ShoppingBag,
   Trash2,
   Wallet,
+  XCircle,
+  Mail,
+  MessageCircle,
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
@@ -31,6 +36,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { dbApi, backupApi } from '@/lib/api'
+import { SalesFollowUpsCard } from '@/components/sales-follow-ups-card'
 import type { AppSettings, Quotation } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/format'
 import { printDocument, mergePrintConfig } from '@/lib/printTemplate'
@@ -64,6 +70,15 @@ const statusBadge: Record<string, { label: string; variant: 'success' | 'warning
   expired: { label: 'Expired', variant: 'muted' },
   cancelled: { label: 'Cancelled', variant: 'muted' },
 }
+
+/** Statuses that can no longer be converted into an invoice or order. */
+const isClosed = (status: string) => status === 'converted' || status === 'cancelled' || status === 'expired'
+
+/** Statuses where the lifecycle actions still apply. */
+const isLive = (status: string) => !isClosed(status)
+
+/** Order the status filter follows the lifecycle. */
+const statusOptions: Array<Quotation['status']> = ['draft', 'sent', 'approved', 'converted', 'expired', 'cancelled']
 
 interface ItemForm {
   product: string
@@ -227,6 +242,76 @@ export default function QuotationsPage() {
     }
   }
 
+  // ─── Lifecycle actions ─────────────────────────────────────────────────────
+  const changeStatus = async (q: Quotation, next: Quotation['status'], opts?: { extendDays?: number }) => {
+    if (next === 'cancelled') {
+      const ok = await confirmDialog({
+        title: `Cancel ${q.number}?`,
+        description: 'The quotation stays on record as cancelled and can no longer be converted.',
+        confirmLabel: 'Cancel quotation',
+        danger: true,
+      })
+      if (!ok) return
+    }
+    setConvertingId(q.id)
+    try {
+      // Reopening an expired quotation first needs a validity window.
+      let reopenUntil: Date | null = null
+      if (next === 'draft' && opts?.extendDays) {
+        reopenUntil = new Date(Date.now() + opts.extendDays * 86_400_000)
+        await dbApi.updateQuotation(q.id, { validUntil: reopenUntil.toISOString() })
+      }
+      await dbApi.setQuotationStatus(q.id, next)
+      toast.success(
+        next === 'draft' && reopenUntil
+          ? `${q.number} reopened — valid until ${formatDate(reopenUntil.toISOString())}`
+          : `${q.number} marked ${next}`,
+      )
+      load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update status')
+    } finally {
+      setConvertingId(null)
+    }
+  }
+
+  // ─── Send to customer ─────────────────────────────────────────────────────
+  const [sendingId, setSendingId] = useState<string | null>(null)
+
+  const sendByEmail = async (q: Quotation) => {
+    setSendingId(q.id)
+    try {
+      const r = await dbApi.emailQuotation(q.id)
+      if (r.ok) {
+        toast.success(`Quotation emailed to ${r.to}`)
+        load()
+      } else {
+        toast.error(r.error ?? 'Email failed')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Email failed')
+    } finally {
+      setSendingId(null)
+    }
+  }
+
+  const sendByWhatsApp = async (q: Quotation) => {
+    setSendingId(q.id)
+    try {
+      const r = await dbApi.sendQuotationWhatsApp(q.id)
+      if (r.ok) {
+        toast.success(`Quotation sent on WhatsApp to ${r.to}`)
+        load()
+      } else {
+        toast.error(r.error ?? 'WhatsApp send failed')
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'WhatsApp send failed')
+    } finally {
+      setSendingId(null)
+    }
+  }
+
   const convert = async (q: Quotation) => {
     if (!(await confirmDialog({ title: `Convert ${q.number} into a tax invoice?`, description: 'Stock will be deducted and an invoice number generated.', confirmLabel: 'Convert' }))) return
     setConvertingId(q.id)
@@ -316,7 +401,16 @@ export default function QuotationsPage() {
       {
         accessorKey: 'validUntil',
         header: 'Valid Until',
-        cell: ({ row }) => <span className="text-muted-foreground">{row.original.validUntil ? formatDate(row.original.validUntil) : '—'}</span>,
+        cell: ({ row }) => {
+          if (!row.original.validUntil) return <span className="text-muted-foreground">—</span>
+          const isExpired = new Date(row.original.validUntil).getTime() < Date.now()
+          return (
+            <span className={isExpired ? 'font-medium text-red-600 dark:text-red-400' : 'text-muted-foreground'}>
+              {formatDate(row.original.validUntil)}
+              {isExpired && !isClosed(row.original.status) ? ' · lapsed' : ''}
+            </span>
+          )
+        },
       },
       {
         id: 'status',
@@ -350,24 +444,124 @@ export default function QuotationsPage() {
                 </TooltipTrigger>
                 <TooltipContent>Download PDF</TooltipContent>
               </Tooltip>
-              {row.original.status !== 'converted' && row.original.status !== 'cancelled' && (
+              {isLive(row.original.status) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={sendingId === row.original.id}
+                      onClick={() => sendByEmail(row.original)}
+                    >
+                      {sendingId === row.original.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Mail className="h-3.5 w-3.5 text-primary-600" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Email with PDF</TooltipContent>
+                </Tooltip>
+              )}
+              {isLive(row.original.status) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={sendingId === row.original.id || !row.original.customerPhone}
+                      onClick={() => sendByWhatsApp(row.original)}
+                    >
+                      <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {row.original.customerPhone ? 'Send on WhatsApp' : 'No phone number on this quotation'}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status === 'draft' && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       disabled={convertingId === row.original.id}
+                      onClick={() => changeStatus(row.original, 'sent')}
+                    >
+                      <Send className="h-3.5 w-3.5 text-primary-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mark as sent</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status === 'sent' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={convertingId === row.original.id}
+                      onClick={() => changeStatus(row.original, 'approved')}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Customer approved</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status === 'expired' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={convertingId === row.original.id}
+                      onClick={() => changeStatus(row.original, 'draft', { extendDays: 15 })}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 text-primary-600" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Reopen for 15 more days</TooltipContent>
+                </Tooltip>
+              )}
+              {isLive(row.original.status) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={convertingId === row.original.id}
+                      onClick={() => changeStatus(row.original, 'cancelled')}
+                    >
+                      <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Cancel quotation</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status !== 'converted' && row.original.status !== 'cancelled' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      disabled={convertingId === row.original.id || row.original.status === 'expired'}
                       onClick={() => convert(row.original)}
                     >
                       {convertingId === row.original.id
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        : <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />}
+                        : <Wallet className="h-3.5 w-3.5 text-success-600" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Convert to invoice</TooltipContent>
+                  <TooltipContent>
+                    {row.original.status === 'expired'
+                      ? 'Expired — reopen to convert'
+                      : 'Convert to invoice'}
+                  </TooltipContent>
                 </Tooltip>
               )}
-              {row.original.status !== 'converted' && row.original.status !== 'cancelled' && (
+              {isLive(row.original.status) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -439,6 +633,8 @@ export default function QuotationsPage() {
         <MiniCard label="Quoted Value" value={formatCurrency(quotes.filter((q) => q.status !== 'converted' && q.status !== 'cancelled').reduce((a, q) => a + q.grandTotal, 0))} sub="Open pipeline" />
       </div>
 
+      <SalesFollowUpsCard />
+
       <Card>
         <CardContent className="space-y-4 p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2.5">
@@ -453,16 +649,15 @@ export default function QuotationsPage() {
             </div>
             <Select
               options={[
-                { value: '', label: 'All Status' },
-                { value: 'draft', label: 'Draft' },
-                { value: 'sent', label: 'Sent' },
-                { value: 'approved', label: 'Approved' },
-                { value: 'converted', label: 'Converted' },
-                { value: 'cancelled', label: 'Cancelled' },
+                { value: '', label: `All Status (${quotes.length})` },
+                ...statusOptions.map((st) => ({
+                  value: st,
+                  label: `${statusBadge[st]?.label ?? st} (${quotes.filter((r) => r.status === st).length})`,
+                })),
               ]}
               value={statusFilter}
               onValueChange={setStatusFilter}
-              className="w-[140px]"
+              className="w-[170px]"
             />
             <div className="ml-auto text-xs text-muted-foreground">
               <span className="font-semibold text-foreground">{filtered.length}</span> of {quotes.length} quotations

@@ -34,6 +34,10 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
   const [feed, setFeed] = useState<Array<{ type: string; title: string; detail: string | null; at: string | null; href: string }>>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [lastSeenAt, setLastSeenAt] = useState<string | null>(null)
+  const [pendingRateRequests, setPendingRateRequests] = useState(0)
+
+  // Only Admin / Super Admin can act on queued silver-rate requests.
+  const isRateApprover = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin'
 
   const rate = silverRate?.rate ?? null
   const change = silverRate?.change ?? 0
@@ -71,6 +75,28 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
     }, 15_000)
     return () => window.clearInterval(interval)
   }, [loadNotifications])
+
+  const loadPendingRateRequests = useCallback(async () => {
+    if (!isRateApprover) return
+    try {
+      const res = await dbApi.getSilverRateRequests('pending')
+      setPendingRateRequests(res.requests?.length ?? 0)
+    } catch {
+      // keep the last known count
+    }
+  }, [isRateApprover])
+
+  useEffect(() => {
+    if (!isRateApprover) return
+    // Defer the first poll out of the effect body (react/set-state-in-effect).
+    queueMicrotask(() => {
+      void loadPendingRateRequests()
+    })
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') loadPendingRateRequests()
+    }, 60_000)
+    return () => window.clearInterval(interval)
+  }, [isRateApprover, loadPendingRateRequests])
 
   const handleNotificationOpen = () => {
     if (notifications.length > 0 && notifications[0].time) {
@@ -132,6 +158,32 @@ export function Header({ onToggleSidebar, onOpenSearch }: HeaderProps) {
               </p>
             </div>
           </Link>
+        ) : null}
+
+        {isRateApprover ? (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Link
+                  to="/silver-rate"
+                  className="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
+                  aria-label="Pending silver rate requests"
+                >
+                  <ShieldCheck className="h-[18px] w-[18px]" />
+                  {pendingRateRequests > 0 ? (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white">
+                      {pendingRateRequests > 9 ? '9+' : pendingRateRequests}
+                    </span>
+                  ) : null}
+                </Link>
+              </TooltipTrigger>
+              <TooltipContent>
+                {pendingRateRequests > 0
+                  ? `${pendingRateRequests} rate change request${pendingRateRequests > 1 ? 's' : ''} awaiting approval`
+                  : 'No rate change requests awaiting approval'}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ) : null}
 
         <button

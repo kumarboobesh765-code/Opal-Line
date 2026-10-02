@@ -493,5 +493,6 @@ export async function emailInvoicePDF(invoiceId: string, recipientEmail: string)
         <p style="color: #999; font-size: 12px;">Opal Line ERP — Invoice Notification</p>
       </div>
     `,
+    attachments: [{ filename: `${invNumber}.pdf`, content: pdfBuffer }],
   })
 }

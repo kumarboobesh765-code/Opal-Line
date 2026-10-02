@@ -205,6 +205,7 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         silver_rate numeric,
         selling_price numeric,
         compare_at_price numeric,
+        cost_price numeric,
         stock integer,
         reorder_level integer,
         shopify_status text,
@@ -454,6 +455,71 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         status text,
         date timestamp
       )`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS paid_amount numeric DEFAULT 0`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS supplier_gstin text`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS supplier_state text`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS cgst numeric`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS sgst numeric`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS igst numeric`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS tcs_rate numeric`)
+    await tx.unsafe(`ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS tcs_amount numeric`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_invoices_status_idx ON purchase_invoices (status)`)
+
+    // Purchase line items — what arrives, and what adds to stock.
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS purchase_invoice_items (
+        id text PRIMARY KEY,
+        invoice_id text NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+        product text,
+        sku text,
+        qty numeric DEFAULT 1,
+        weight numeric,
+        rate numeric,
+        cost numeric,
+        tax numeric,
+        amount numeric
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_invoice_items_invoice_id_idx ON purchase_invoice_items (invoice_id)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_invoice_items_sku_idx ON purchase_invoice_items (sku)`)
+
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS purchase_order_items (
+        id text PRIMARY KEY,
+        order_id text NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        product text,
+        sku text,
+        qty numeric DEFAULT 1,
+        weight numeric,
+        rate numeric,
+        amount numeric
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_order_items_order_id_idx ON purchase_order_items (order_id)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS purchase_order_items_sku_idx ON purchase_order_items (sku)`)
+
+    // Supplier payment ledger + how each payment was allocated.
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS supplier_payments (
+        id text PRIMARY KEY,
+        ref text,
+        supplier text,
+        amount numeric NOT NULL,
+        method text,
+        note text,
+        date timestamp,
+        created_by text
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS supplier_payments_supplier_idx ON supplier_payments (supplier)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS supplier_payments_date_idx ON supplier_payments (date)`)
+    await tx.unsafe(`
+      CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
+        id text PRIMARY KEY,
+        payment_id text NOT NULL REFERENCES supplier_payments(id) ON DELETE CASCADE,
+        invoice_id text,
+        invoice_number text,
+        amount numeric NOT NULL
+      )`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS supplier_payment_allocations_payment_id_idx ON supplier_payment_allocations (payment_id)`)
+    await tx.unsafe(`CREATE INDEX IF NOT EXISTS supplier_payment_allocations_invoice_id_idx ON supplier_payment_allocations (invoice_id)`)
     await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS purchase_invoices_number_idx ON purchase_invoices (number)`)
 
     await tx.unsafe(`
@@ -1098,6 +1164,7 @@ async function applyUpgrades(sql: postgres.Sql): Promise<void> {
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS tcs_enabled boolean DEFAULT false`,
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS default_tds_section text`,
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS einvoice_enabled boolean DEFAULT false`,
+      `ALTER TABLE settings ADD COLUMN IF NOT EXISTS einvoice_mode text DEFAULT 'off'`,
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS eway_bill_enabled boolean DEFAULT false`,
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS upi_id text`,
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS upi_merchant_name text`,
@@ -1282,6 +1349,82 @@ async function applyUpgrades(sql: postgres.Sql): Promise<void> {
       // The Settings toggles existed in the UI but not on older databases.
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS require_rate_approval boolean DEFAULT true`,
       `ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_update_mcx boolean DEFAULT false`,
+      // Purchase lines, input-GST split, TCS and the supplier payment ledger.
+      // These also live in createSchema, but that only runs on a brand-new
+      // database — an existing install gets them from here.
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS paid_amount numeric DEFAULT 0`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS order_id text`,
+      `CREATE INDEX IF NOT EXISTS purchase_invoices_order_id_idx ON purchase_invoices (order_id)`,
+      `ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price numeric`,
+      `ALTER TABLE purchase_returns ADD COLUMN IF NOT EXISTS invoice_id text`,
+      `CREATE INDEX IF NOT EXISTS purchase_returns_invoice_id_idx ON purchase_returns (invoice_id)`,
+      `CREATE TABLE IF NOT EXISTS purchase_return_items (
+        id text PRIMARY KEY,
+        return_id text NOT NULL REFERENCES purchase_returns(id) ON DELETE CASCADE,
+        product text,
+        sku text,
+        qty numeric DEFAULT 1,
+        weight numeric,
+        rate numeric,
+        amount numeric
+      )`,
+      `CREATE INDEX IF NOT EXISTS purchase_return_items_return_id_idx ON purchase_return_items (return_id)`,
+      `CREATE INDEX IF NOT EXISTS purchase_return_items_sku_idx ON purchase_return_items (sku)`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS supplier_gstin text`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS supplier_state text`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS cgst numeric`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS sgst numeric`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS igst numeric`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS tcs_rate numeric`,
+      `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS tcs_amount numeric`,
+      `CREATE INDEX IF NOT EXISTS purchase_invoices_status_idx ON purchase_invoices (status)`,
+      `CREATE TABLE IF NOT EXISTS purchase_invoice_items (
+        id text PRIMARY KEY,
+        invoice_id text NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+        product text,
+        sku text,
+        qty numeric DEFAULT 1,
+        weight numeric,
+        rate numeric,
+        cost numeric,
+        tax numeric,
+        amount numeric
+      )`,
+      `CREATE INDEX IF NOT EXISTS purchase_invoice_items_invoice_id_idx ON purchase_invoice_items (invoice_id)`,
+      `CREATE INDEX IF NOT EXISTS purchase_invoice_items_sku_idx ON purchase_invoice_items (sku)`,
+      `CREATE TABLE IF NOT EXISTS purchase_order_items (
+        id text PRIMARY KEY,
+        order_id text NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        product text,
+        sku text,
+        qty numeric DEFAULT 1,
+        weight numeric,
+        rate numeric,
+        amount numeric
+      )`,
+      `CREATE INDEX IF NOT EXISTS purchase_order_items_order_id_idx ON purchase_order_items (order_id)`,
+      `CREATE INDEX IF NOT EXISTS purchase_order_items_sku_idx ON purchase_order_items (sku)`,
+      `CREATE TABLE IF NOT EXISTS supplier_payments (
+        id text PRIMARY KEY,
+        ref text,
+        supplier text,
+        amount numeric NOT NULL,
+        method text,
+        note text,
+        date timestamp,
+        created_by text
+      )`,
+      `CREATE INDEX IF NOT EXISTS supplier_payments_supplier_idx ON supplier_payments (supplier)`,
+      `CREATE INDEX IF NOT EXISTS supplier_payments_date_idx ON supplier_payments (date)`,
+      `CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
+        id text PRIMARY KEY,
+        payment_id text NOT NULL REFERENCES supplier_payments(id) ON DELETE CASCADE,
+        invoice_id text,
+        invoice_number text,
+        amount numeric NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS supplier_payment_allocations_payment_id_idx ON supplier_payment_allocations (payment_id)`,
+      `CREATE INDEX IF NOT EXISTS supplier_payment_allocations_invoice_id_idx ON supplier_payment_allocations (invoice_id)`,
     ]
     for (const stmt of upgrades) {
       await sql.unsafe(stmt).catch(() => undefined)
