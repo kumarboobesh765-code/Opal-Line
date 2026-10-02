@@ -16,6 +16,7 @@ import type {
   KpiCardData,
   LedgerEntry,
   LowStockItem,
+  ReceivablesAging,
   Payment,
   PaymentStatusSegment,
   Product,
@@ -106,6 +107,7 @@ export const dbApi = {
     request(`/db/dashboard/profit?months=${months}`),
   getPaymentStatus: (): Promise<{ segments: PaymentStatusSegment[]; total: number }> =>
     request('/db/dashboard/payment-status'),
+  getReceivablesAging: (): Promise<ReceivablesAging> => request('/db/dashboard/aging'),
   getSilverRateHistory: async (): Promise<SilverRatePoint[]> => {
     const res = await request<{ data: Array<{ updatedAt: string; rate: number }> }>('/db/silver-rates?limit=100')
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']

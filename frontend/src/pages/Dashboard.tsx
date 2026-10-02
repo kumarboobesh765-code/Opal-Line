@@ -18,6 +18,7 @@ import {
   Package,
   PackageX,
   Plus,
+  Printer,
   Repeat,
   ShieldAlert,
   ShoppingBag,
@@ -32,6 +33,7 @@ import {
 import { useAuth } from '@/auth/auth-context'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { StatCard } from '@/components/ui/stat-card'
@@ -48,6 +50,7 @@ import type {
   KpiCardData,
   LowStockItem,
   PaymentStatusSegment,
+  ReceivablesAging,
   SalesOverviewPoint,
   SilverRate,
   SilverRatePoint,
@@ -112,6 +115,7 @@ export default function DashboardPage() {
   const [lowStock, setLowStock] = useState<LowStockItem[]>([])
   const [activities, setActivities] = useState<Activity[]>([])
   const [security, setSecurity] = useState<{ failedLogins24h: number; lockedAccounts: number; recent: Array<{ entity: string | null; details: string | null; timestamp: string | null }> } | null>(null)
+  const [aging, setAging] = useState<ReceivablesAging | null>(null)
   const [analytics, setAnalytics] = useState<AnalyticsStat[]>([])
   const [shopifyStatus, setShopifyStatus] = useState<ShopifyStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -131,8 +135,9 @@ export default function DashboardPage() {
       dbApi.getRecentActivities().catch(() => []),
       dbApi.getAnalyticsStats().catch(() => []),
       dbApi.getDashboardSecurity().catch(() => null),
+      dbApi.getReceivablesAging().catch(() => null),
       shopifyApi.getStatus().catch(() => null),
-    ]).then(([k, s, tp, ps, sr, sh, ls, ac, an, sec, ss]) => {
+    ]).then(([k, s, tp, ps, sr, sh, ls, ac, an, sec, ag, ss]) => {
       if (cancelled) return
       setKpis(k)
       setSummary(s)
@@ -144,6 +149,7 @@ export default function DashboardPage() {
       setActivities(ac)
       setAnalytics(an)
       setSecurity(sec)
+      setAging(ag)
       setShopifyStatus(ss)
       setLoading(false)
     }).catch(() => {
@@ -170,22 +176,48 @@ export default function DashboardPage() {
     }
   }, [period, customRange])
 
+  // Print the dashboard as a standalone snapshot: a print-scoped stylesheet
+  // (index.css) unwraps the app shell while the "print-dashboard" body class
+  // is present; afterprint removes it again.
+  const printDashboard = () => {
+    document.body.classList.add('print-dashboard')
+    const cleanup = () => {
+      document.body.classList.remove('print-dashboard')
+      window.removeEventListener('afterprint', cleanup)
+    }
+    window.addEventListener('afterprint', cleanup)
+    window.print()
+  }
+
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-4 sm:py-6 lg:px-6">
+    <div className="print-area mx-auto w-full max-w-[1600px] space-y-6 px-4 py-4 sm:py-6 lg:px-6">
       <PageHeader
         title="Dashboard"
         subtitle="Here's what's happening with your ecommerce business today."
         actions={
-          <PeriodSelect
-            value={period}
-            onChange={setPeriod}
-            range={customRange}
-            onRangeChange={setCustomRange}
-            variant="range"
-            align="right"
-          />
+          <div className="no-print flex items-center gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={printDashboard}>
+              <Printer className="h-3.5 w-3.5" />
+              Print / PDF
+            </Button>
+            <PeriodSelect
+              value={period}
+              onChange={setPeriod}
+              range={customRange}
+              onRangeChange={setCustomRange}
+              variant="range"
+              align="right"
+            />
+          </div>
         }
       />
+
+      <div className="hidden print:block">
+        <h1 className="text-lg font-bold text-foreground">Opal Line Billing — Dashboard</h1>
+        <p className="text-xs text-muted-foreground">
+          Generated {new Date().toLocaleString('en-IN')} · {periodRangeLabel(period, customRange)}
+        </p>
+      </div>
 
                 <ConnectionBanner rate={silverRate?.rate ?? null} shopifyStatus={shopifyStatus} />
 
@@ -195,20 +227,37 @@ export default function DashboardPage() {
         <DashboardSkeleton />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-            {kpis.map((kpi) => (
-              <StatCard
-                key={kpi.key}
-                icon={kpiIcons[kpi.icon] ?? Banknote}
-                title={kpi.label}
-                value={kpi.value}
-                trend={kpi.trend}
-                delta={kpi.delta}
-                support={kpi.deltaLabel}
-                accent={kpi.accent as 'purple'}
-              />
-            ))}
-          </div>
+          {kpis.length > 0 ? (
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+              {kpis.map((kpi) => (
+                <StatCard
+                  key={kpi.key}
+                  icon={kpiIcons[kpi.icon] ?? Banknote}
+                  title={kpi.label}
+                  value={kpi.value}
+                  trend={kpi.trend}
+                  delta={kpi.delta}
+                  support={kpi.deltaLabel}
+                  accent={kpi.accent as 'purple'}
+                />
+              ))}
+            </div>
+          ) : (
+            <Card>
+              <CardContent>
+                <EmptyState
+                  icon={TrendingUp}
+                  title="Nothing to report yet"
+                  description="Add products, set today's silver rate or create your first invoice — the dashboard fills up as you work."
+                  action={
+                    <Button size="sm" variant="soft-primary" onClick={() => navigate('/inventory/products')}>
+                      Add Products
+                    </Button>
+                  }
+                />
+              </CardContent>
+            </Card>
+          )}
 
           {summary ? <OperationalStrip summary={summary} /> : null}
 
@@ -237,6 +286,7 @@ export default function DashboardPage() {
                 </Button>
               </CardHeader>
               <CardContent className="p-0">
+                {topProducts.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -270,6 +320,18 @@ export default function DashboardPage() {
                     })}
                   </TableBody>
                 </Table>
+                ) : (
+                  <EmptyState
+                    icon={ShoppingBag}
+                    title="No sales recorded yet"
+                    description="Your best sellers will appear here once the first invoice is raised."
+                    action={
+                      <Button size="sm" variant="soft-primary" onClick={() => navigate('/sales/invoices')}>
+                        Create Invoice
+                      </Button>
+                    }
+                  />
+                )}
               </CardContent>
             </Card>
 
@@ -279,7 +341,7 @@ export default function DashboardPage() {
                 <Badge variant="muted" className="text-[10px]">{formatCurrency(paymentStatus?.total ?? 0, { compact: true })}</Badge>
               </CardHeader>
               <CardContent>
-                {paymentStatus ? (
+                {paymentStatus && paymentStatus.total > 0 ? (
                   <>
                     <PaymentDonutChart data={paymentStatus.segments} centerTotal={paymentStatus.total} />
                     <div className="mt-2 space-y-1.5">
@@ -305,6 +367,12 @@ export default function DashboardPage() {
                       View Details
                     </Button>
                   </>
+                ) : paymentStatus ? (
+                  <EmptyState
+                    icon={IndianRupee}
+                    title="No payments yet"
+                    description="Once you record invoices, their paid and pending amounts break down here."
+                  />
                 ) : null}
               </CardContent>
             </Card>
@@ -322,7 +390,20 @@ export default function DashboardPage() {
                 </Badge>
               </CardHeader>
               <CardContent>
-                <SilverRateChart data={silverHistory} />
+                {silverHistory.length > 0 ? (
+                  <SilverRateChart data={silverHistory} />
+                ) : (
+                  <EmptyState
+                    icon={Tag}
+                    title="No silver rate history"
+                    description="Update today's rate to start the 7-day trend line."
+                    action={
+                      <Button size="sm" variant="soft-primary" onClick={() => navigate('/silver-rate')}>
+                        Set Silver Rate
+                      </Button>
+                    }
+                  />
+                )}
               </CardContent>
             </Card>
 
@@ -334,6 +415,7 @@ export default function DashboardPage() {
                 </Button>
               </CardHeader>
               <CardContent className="p-0">
+                {lowStock.length > 0 ? (
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -368,6 +450,83 @@ export default function DashboardPage() {
                     ))}
                   </TableBody>
                 </Table>
+                ) : (
+                  <EmptyState
+                    icon={PackageX}
+                    title="Stock levels look healthy"
+                    description="Products at or below their reorder level will be flagged here."
+                    action={
+                      <Button size="sm" variant="soft-primary" onClick={() => navigate('/inventory/products')}>
+                        Manage Products
+                      </Button>
+                    }
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="xl:col-span-1">
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <div>
+                  <CardTitle className="text-sm">Receivables Aging</CardTitle>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">Outstanding by due date</p>
+                </div>
+                {aging && aging.overdueCount > 0 ? (
+                  <Badge variant="warning" className="text-[10px]">{compactCurrency(aging.overdueTotal)} overdue</Badge>
+                ) : aging && aging.invoiceCount > 0 ? (
+                  <Badge variant="success" className="text-[10px]">Nothing overdue</Badge>
+                ) : null}
+              </CardHeader>
+              <CardContent>
+                {aging ? (
+                  aging.invoiceCount > 0 ? (
+                    <>
+                      <div className="space-y-3">
+                        {aging.buckets.map((b) => (
+                          <div key={b.key}>
+                            <div className="flex items-center gap-2 text-[12px]">
+                              <span
+                                className={cn(
+                                  'h-2 w-2 rounded-full',
+                                  b.key === 'current' && 'bg-success',
+                                  b.key === 'd1_30' && 'bg-amber-500',
+                                  b.key === 'd31_60' && 'bg-orange-500',
+                                  b.key === 'd60plus' && 'bg-destructive',
+                                )}
+                              />
+                              <span className="text-muted-foreground">{b.label}</span>
+                              <span className="ml-auto font-semibold tabular-nums text-foreground">{compactCurrency(b.value)}</span>
+                              <span className="w-14 text-right tabular-nums text-muted-foreground">{b.count} inv</span>
+                            </div>
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className={cn(
+                                  'h-full rounded-full',
+                                  b.key === 'current' && 'bg-success',
+                                  b.key === 'd1_30' && 'bg-amber-500',
+                                  b.key === 'd31_60' && 'bg-orange-500',
+                                  b.key === 'd60plus' && 'bg-destructive',
+                                )}
+                                style={{ width: `${aging.total > 0 ? Math.max(2, Math.round((b.value / aging.total) * 100)) : 0}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <Button variant="soft-primary" className="mt-4 w-full" size="sm" onClick={() => navigate('/reports/dues')}>
+                        View Dues
+                      </Button>
+                    </>
+                  ) : (
+                    <EmptyState
+                      icon={Clock}
+                      title="No outstanding receivables"
+                      description="Invoices awaiting payment will be grouped here by how overdue they are."
+                    />
+                  )
+                ) : (
+                  <p className="py-6 text-center text-sm text-muted-foreground">Aging snapshot unavailable.</p>
+                )}
               </CardContent>
             </Card>
 
@@ -416,7 +575,14 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent className="p-0">
                 <div className="relative px-5 pb-5">
-                  {activities.map((a, i) => {
+                  {activities.length === 0 ? (
+                    <EmptyState
+                      icon={Repeat}
+                      title="No activity yet"
+                      description="Invoice, payment and sync events will show up here as you work."
+                    />
+                  ) : (
+                  activities.map((a, i) => {
                     const cfg = activityIcons[a.type]
                     return (
                       <div key={a.id} className="relative flex gap-3 pb-4 last:pb-0">
@@ -437,7 +603,8 @@ export default function DashboardPage() {
                         </div>
                       </div>
                     )
-                  })}
+                  })
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -215,4 +215,30 @@
   .no-print {
     display: none !important;
   }
+
+  /* Dashboard snapshot (Print / PDF on the dashboard): unwrap the app shell
+     so the dashboard flows as a normal document instead of being trapped in
+     the screen-only scroll container, hide the chrome, then show only the
+     dashboard marked .print-area. */
+  body.print-dashboard .print-area,
+  body.print-dashboard .print-area * {
+    visibility: visible !important;
+  }
+  body.print-dashboard #root,
+  body.print-dashboard .app-shell,
+  body.print-dashboard .app-content-col,
+  body.print-dashboard .app-main {
+    display: contents !important;
+  }
+  body.print-dashboard .app-sidebar-wrap,
+  body.print-dashboard .app-header-wrap,
+  body.print-dashboard .print-area button,
+  body.print-dashboard .print-area a {
+    display: none !important;
+  }
+  body.print-dashboard .print-area {
+    max-width: none !important;
+    width: 100% !important;
+    padding: 8mm 10mm !important;
+  }
 }

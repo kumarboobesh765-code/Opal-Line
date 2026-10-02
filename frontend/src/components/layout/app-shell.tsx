@@ -79,7 +79,7 @@ export function AppShell() {
   }, [isMobile])
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background">
+    <div className="app-shell flex h-screen w-screen overflow-hidden bg-background">
       {isMobile && mobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 transition-opacity"
@@ -88,7 +88,7 @@ export function AppShell() {
       )}
 
       <div
-        className={`
+        className={`app-sidebar-wrap
           ${isMobile ? 'fixed inset-y-0 left-0 z-50' : 'relative'}
           ${isMobile && !mobileOpen ? '-translate-x-full' : 'translate-x-0'}
           transition-transform duration-200 ease-in-out
@@ -97,10 +97,12 @@ export function AppShell() {
         <Sidebar collapsed={isMobile ? false : collapsed} onNavigate={closeMobileSidebar} />
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Header onToggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} />
-        <UpdateBanner />
-        <main className="flex-1 overflow-y-auto">
+      <div className="app-content-col flex min-w-0 flex-1 flex-col">
+        <div className="app-header-wrap">
+          <Header onToggleSidebar={toggleSidebar} onOpenSearch={() => setSearchOpen(true)} />
+          <UpdateBanner />
+        </div>
+        <main className="app-main flex-1 overflow-y-auto">
           <Outlet />
         </main>
       </div>
