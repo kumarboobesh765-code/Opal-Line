@@ -312,7 +312,12 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
       const body = buildBody(form, silverRate, sellingPrice)
       let saved: Product
       if (mode === 'edit' && product) {
-        saved = await dbApi.update<Product>('products', product.id, body)
+        // Stock is owned by the ledger now. Sending it would be rejected, and
+        // even if it were not, the next movement of any kind would recompute
+        // products.stock and silently undo the edit. Change stock with a stock
+        // count at a location, or a transfer.
+        const { stock: _stock, ...editable } = body
+        saved = await dbApi.update<Product>('products', product.id, editable)
       } else {
         saved = await dbApi.create<Product>('products', {
           ...body,
@@ -454,9 +459,15 @@ export function ProductDialog({ open, onOpenChange, mode, product, onSaved }: Pr
               <Field label="Compare-at price (₹)">
                 <Input type="number" step="0.01" value={form.compareAtPrice} onChange={(e) => set('compareAtPrice', e.target.value)} placeholder="Optional strikethrough" />
               </Field>
-              <Field label="Stock (pcs)">
-                <Input type="number" step="1" value={form.stock} onChange={(e) => set('stock', e.target.value)} />
+              <Field label={mode === 'edit' ? 'Stock (pcs)' : 'Opening stock (pcs)'}>
+                <Input type="number" step="1" value={form.stock} onChange={(e) => set('stock', e.target.value)} disabled={mode === 'edit'} />
               </Field>
+              {mode === 'edit' ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Managed by the stock ledger. Use <span className="font-medium text-foreground">Scan Stock Count</span> for
+                  this location or a <span className="font-medium text-foreground">Stock Transfer</span> to move stock.
+                </p>
+              ) : null}
             </div>
             {hasAutoPrice ? (
               <p className="text-[11px] text-muted-foreground">

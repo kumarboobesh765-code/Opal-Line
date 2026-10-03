@@ -336,16 +336,23 @@ export const dbApi = {
     request<{ data: { id: string; name: string; sku: string; barcode: string | null; stock: number | null; category: string | null } }>(
       `/db/products/scan?code=${encodeURIComponent(code)}`,
     ),
+  /**
+   * Apply a counted stock sheet at ONE location. The backend reads that
+   * location's balance as the baseline and adjusts it, so a count never
+   * silently corrects a different shop. Omitting locationId falls back to the
+   * default store.
+   */
   applyStockCount: (
     counts: Array<{ id: string; counted: number }>,
     mode: 'set' | 'adjust',
     pushToShopify?: boolean,
+    locationId?: string,
   ) =>
     request<{ ok: boolean; applied: number; mode: string; errors: string[]; shopifyPush?: { ok: boolean; updated: number; skipped: number; errors: string[] } | null }>(
       '/db/inventory/stock-count',
       {
         method: 'POST',
-        body: JSON.stringify({ counts, mode, pushToShopify: pushToShopify === true }),
+        body: JSON.stringify({ counts, mode, pushToShopify: pushToShopify === true, locationId }),
       },
     ),
   createInvoiceForOrder: (orderId: string) =>

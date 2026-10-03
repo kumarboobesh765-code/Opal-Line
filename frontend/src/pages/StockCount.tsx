@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -15,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { dbApi } from '@/lib/api'
+import type { InventoryLocation } from '@/types'
 import { Switch } from '@/components/ui/switch'
 
 interface ScannedItem {
@@ -30,6 +32,17 @@ export default function StockCountPage() {
   const [items, setItems] = useState<ScannedItem[]>([])
   const [code, setCode] = useState('')
   const [mode, setMode] = useState<'set' | 'adjust'>('set')
+  // A count is taken at ONE location. The backend adjusts that location's
+  // balance, so the user has to say which shop they are standing in.
+  const [locations, setLocations] = useState<InventoryLocation[]>([])
+  const [locationId, setLocationId] = useState('')
+  // Stock on hand AT the chosen location, used for the variance column so the
+  // number shown matches the number the backend will act on.
+  const [levels, setLevels] = useState<Record<string, number>>({})
+  // Mirrors `levels` so the scan handler can read the current per-location
+  // balance without taking it as a dependency — adding it would rebuild the
+  // callback on every load and risk it closing over a stale map.
+  const levelsRef = useRef<Record<string, number>>({})
   const [pushToShopify, setPushToShopify] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -39,6 +52,43 @@ export default function StockCountPage() {
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      dbApi.getInventoryLocations()
+        .then((locs) => {
+          if (cancelled || !locs.length) return
+          setLocations(locs)
+          // Default to the first location so the field is never blank and a
+          // count can never be filed against the wrong shop by accident.
+          setLocationId((prev) => prev || locs[0].id)
+        })
+        .catch(() => undefined)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  // Reload per-location balances when the counted location changes, so the
+  // variance column reflects that location rather than the global total.
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!locationId) {
+        setLevels({})
+        return
+      }
+      dbApi.getStockLevels()
+        .then((rows) => {
+          if (cancelled) return
+          const next = Object.fromEntries(rows.filter((r) => r.locationId === locationId).map((r) => [r.productId, r.qty]))
+          levelsRef.current = next
+          setLevels(next)
+        })
+        .catch(() => { if (!cancelled) setLevels({}) })
+    })
+    return () => { cancelled = true }
+  }, [locationId])
 
   const lookup = useCallback(async (rawCode: string) => {
     const c = rawCode.trim()
@@ -60,7 +110,7 @@ export default function StockCountPage() {
             name: p.name,
             sku: p.sku,
             barcode: p.barcode,
-            systemStock: p.stock,
+            systemStock: levelsRef.current[p.id] ?? p.stock,
             counted: 1,
           },
         ]
@@ -83,8 +133,10 @@ export default function StockCountPage() {
         items.map((x) => ({ id: x.id, counted: x.counted })),
         mode,
         pushToShopify,
+        locationId,
       )
-      let msg = `Applied ${res.applied} item(s) (${mode === 'set' ? 'set stock' : 'adjust stock'}).`
+      const where = locations.find((l) => l.id === locationId)?.name ?? 'the selected location'
+      let msg = `Applied ${res.applied} item(s) (${mode === 'set' ? 'set stock' : 'adjust stock'}) at ${where}.`
       if (res.shopifyPush) {
         msg += res.shopifyPush.ok
           ? ` Pushed ${res.shopifyPush.updated} stock level(s) to Shopify.`
@@ -99,7 +151,13 @@ export default function StockCountPage() {
     }
   }
 
-  const totalVariance = items.reduce((a, x) => a + (x.systemStock != null ? x.counted - x.systemStock : 0), 0)
+  // Prefer the live per-location balance over the snapshot taken at scan time, so
+  // switching the counted location re-bases every row already on the sheet.
+  const baselineFor = (x: ScannedItem): number | null => levels[x.id] ?? x.systemStock
+  const totalVariance = items.reduce((a, x) => {
+    const base = baselineFor(x)
+    return a + (base != null ? x.counted - base : 0)
+  }, 0)
 
   return (
     <div className="mx-auto w-full max-w-[1100px] space-y-5 px-4 py-4 sm:py-6 lg:px-6">
@@ -137,6 +195,16 @@ export default function StockCountPage() {
                   }}
                 />
               </div>
+            </div>
+            <div>
+              <Label>Count at</Label>
+              <Select
+                className="mt-1"
+                options={locations.map((l) => ({ value: l.id, label: l.name }))}
+                value={locationId}
+                onValueChange={setLocationId}
+                placeholder="Select location"
+              />
             </div>
             <div>
               <Label>Apply mode</Label>
@@ -196,7 +264,7 @@ export default function StockCountPage() {
                     <TableRow key={x.id}>
                       <TableCell className="text-sm font-medium">{x.name}</TableCell>
                       <TableCell className="font-mono text-xs">{x.sku}</TableCell>
-                      <TableCell className="text-right text-sm">{x.systemStock ?? '—'}</TableCell>
+                      <TableCell className="text-right text-sm">{baselineFor(x) ?? '—'}</TableCell>
                       <TableCell className="text-right">
                         <Input
                           type="number"
@@ -211,14 +279,14 @@ export default function StockCountPage() {
                         />
                       </TableCell>
                       <TableCell className="text-right">
-                        {x.systemStock == null ? (
+                        {baselineFor(x) == null ? (
                           <Badge variant="muted">—</Badge>
-                        ) : x.counted === x.systemStock ? (
+                        ) : x.counted === baselineFor(x) ? (
                           <Badge variant="success">OK</Badge>
                         ) : (
-                          <Badge variant={x.counted > x.systemStock ? 'info' : 'warning'}>
-                            {x.counted > x.systemStock ? '+' : ''}
-                            {x.counted - x.systemStock}
+                          <Badge variant={x.counted > baselineFor(x)! ? 'info' : 'warning'}>
+                            {x.counted > baselineFor(x)! ? '+' : ''}
+                            {x.counted - baselineFor(x)!}
                           </Badge>
                         )}
                       </TableCell>

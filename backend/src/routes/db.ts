@@ -10,7 +10,7 @@ import { encrypt, decrypt, mask, encryptSecret } from '../lib/crypto'
 import { isConfigured as isShopifyConfigured, config as shopifyConfig, normalizeShopDomain } from '../config'
 import { upsertEnvVar } from '../lib/envfile'
 import { logger } from '../logger'
-import { buildStockCountRows } from '../stockCount'
+import { buildStockCountRows, stockCountDelta, stockAtLocation } from '../stockCount'
 import { pushInventoryToShopify } from '../shopify'
 import { escapeHtml } from '../htmlEscape'
 
@@ -247,7 +247,8 @@ dbRouter.get('/products/scan', requirePermission('inventory', 'view'), async (re
 })
 
 // Bulk stock-count: apply counted quantities for many products at once.
-// body: { counts: [{ id, counted }], mode: 'set' | 'adjust', pushToShopify?: boolean }
+// body: { counts: [{ id, counted }], mode: 'set' | 'adjust', locationId?: string,
+//         pushToShopify?: boolean }
 dbRouter.post('/inventory/stock-count', requirePermission('inventory', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
@@ -255,14 +256,21 @@ dbRouter.post('/inventory/stock-count', requirePermission('inventory', 'edit'), 
     const mode = req.body?.mode === 'adjust' ? 'adjust' : 'set'
     const pushToShopify = req.body?.pushToShopify === true
     if (counts.length === 0) return res.status(400).json({ error: 'counts array is required' })
+
+    // A count is always taken at ONE location. Counting a branch must adjust
+    // that branch's balance, so the target has to be read from stock_levels at
+    // that location — never from products.stock, which is the cross-location
+    // rollup and would make counting one shop silently correct another.
+    const locationRaw = String(req.body?.locationId ?? '').trim()
+    const locationId = locationRaw ? await resolveLocation(locationRaw) : await ensureDefaultLocation()
+    if (!locationId) return res.status(400).json({ error: `Unknown location "${locationRaw}"` })
+
     const { rows, errors } = buildStockCountRows(counts)
     let applied = 0
     for (const c of rows) {
       try {
-        // A count is a correction, not a silent overwrite: record the delta as
-        // a count_adjust movement so the ledger explains the new balance.
         const [product] = await db!
-          .select({ sku: s.products.sku, stock: s.products.stock })
+          .select({ id: s.products.id, sku: s.products.sku })
           .from(s.products)
           .where(eq(s.products.id, c.id))
           .limit(1)
@@ -270,19 +278,27 @@ dbRouter.post('/inventory/stock-count', requirePermission('inventory', 'edit'), 
           errors.push(`${c.id}: product not found`)
           continue
         }
-        const current = Number(product.stock ?? 0)
-        const target = mode === 'set' ? c.counted : Math.max(0, current + c.counted)
-        const delta = target - current
+        const [level] = await db!
+          .select({ qty: s.stockLevels.qty })
+          .from(s.stockLevels)
+          .where(and(eq(s.stockLevels.productId, product.id), eq(s.stockLevels.locationId, locationId)))
+          .limit(1)
+        const current = stockAtLocation(level?.qty)
+        const delta = stockCountDelta(current, c.counted, mode)
         if (delta === 0) {
           applied++
           continue
         }
+        // A count is a correction, not a silent overwrite: record the delta as
+        // a count_adjust movement so the ledger explains the new balance.
         await applyStockMovement({
           sku: String(product.sku ?? ''),
           qty: delta,
           type: 'count_adjust',
+          locationId,
           refType: 'stock_count',
-          note: mode === 'set' ? `counted ${target} (was ${current})` : `counted adjustment ${delta > 0 ? '+' : ''}${delta}`,
+          note: mode === 'set' ? `counted ${c.counted} at ${locationId} (was ${current})` : `counted adjustment ${delta > 0 ? '+' : ''}${delta} at ${locationId}`,
+          createdBy: actorFromRequest(req).userId ?? 'system',
         })
         applied++
       } catch (err) {
@@ -2969,6 +2985,72 @@ dbRouter.get('/settings/db-status', requirePermission('system', 'view'), async (
     })
   } catch {
     res.json({ connected: false, error: 'Health check failed' })
+  }
+})
+
+// products.stock is the rollup across stock_levels, recomputed on every
+// movement. These two routes shadow the generic resource CRUD for products so
+// the ledger stays the only writer: a direct write would be silently reverted
+// by the next movement of any kind, which reads to a user as "my edit didn't
+// save". Stock is changed by a stock count at a location, or by a transfer.
+dbRouter.patch('/products/:id', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const body = sanitize(req.body ?? {}, s.products)
+    delete body.id
+    if (body.stock != null) {
+      return res.status(400).json({
+        error: 'Stock is managed by the stock ledger. Use a stock count for the location, or a transfer.',
+      })
+    }
+    if (Object.keys(body).length === 0) return res.status(400).json({ error: 'No valid fields provided' })
+    const [row] = await db!.update(s.products).set(body).where(eq(s.products.id, req.params.id)).returning()
+    if (!row) return res.status(404).json({ error: 'Not found' })
+    recordCrud('products', 'Updated', req, row)
+    res.json(row)
+  } catch (err) {
+    logger.error({ err }, 'product update failed')
+    res.status(400).json({ error: 'Failed to update product' })
+  }
+})
+
+// Creating a product may state an opening quantity, but it is posted through
+// the ledger as an `opening` movement so the new product has real history
+// rather than a balance that appears from nowhere.
+dbRouter.post('/products', requirePermission('inventory', 'create'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const body = sanitize(req.body ?? {}, s.products)
+    const openingQty = Math.floor(Number(body.stock ?? 0))
+    delete body.stock
+    if (Object.keys(body).length === 0) return res.status(400).json({ error: 'No valid fields provided' })
+    if (!body.id) body.id = randomUUID()
+
+    const locationRaw = String((req.body as { locationId?: unknown })?.locationId ?? '').trim()
+    const locationId = openingQty > 0 ? (locationRaw ? await resolveLocation(locationRaw) : await ensureDefaultLocation()) : null
+    if (openingQty > 0 && !locationId) return res.status(400).json({ error: `Unknown location "${locationRaw}"` })
+
+    const row = await db!.transaction(async (tx) => {
+      const [created] = await tx.insert(s.products).values(body as never).returning()
+      if (openingQty > 0 && created.sku) {
+        await applyStockMovement({
+          sku: String(created.sku),
+          qty: openingQty,
+          type: 'opening',
+          locationId,
+          note: 'opening stock recorded when the product was created',
+          createdBy: actorFromRequest(req).userId ?? 'system',
+          tx,
+        })
+      }
+      return created
+    })
+    recordCrud('products', 'Created', req, row)
+    res.status(201).json(row)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    logger.error({ err }, 'product create failed')
+    res.status(400).json({ error: msg.includes('duplicate') ? 'A product with that SKU already exists' : 'Failed to create product' })
   }
 })
 
