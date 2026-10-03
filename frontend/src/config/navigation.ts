@@ -37,6 +37,7 @@ import {
   Upload,
   UsersRound,
   Wallet,
+  Warehouse,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -90,6 +91,7 @@ export const navSections: NavSection[] = [
       { title: 'Products', path: '/inventory/products', icon: Gem },
       { title: 'Stock Overview', path: '/inventory/stock', icon: Boxes },
       { title: 'Stock Transfer', path: '/inventory/transfers', icon: ArrowLeftRight },
+      { title: 'Stock Locations', path: '/inventory/locations', icon: Warehouse },
       { title: 'Barcode / Labels', path: '/inventory/barcode', icon: Barcode },
       { title: 'Low Stock Alert', path: '/inventory/low-stock', icon: PackageX },
       { title: 'Scan Stock Count', path: '/inventory/stock-count', icon: Barcode },

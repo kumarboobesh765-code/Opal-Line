@@ -81,6 +81,11 @@ const STOCK_LEDGER_DDL: string[] = [
   `CREATE INDEX IF NOT EXISTS stock_movements_location_id_idx ON stock_movements (location_id)`,
   `CREATE INDEX IF NOT EXISTS stock_movements_date_idx ON stock_movements (date)`,
   `CREATE INDEX IF NOT EXISTS stock_movements_ref_idx ON stock_movements (ref_type, ref_id)`,
+  // Receipt variance. These live on stock_transfers, which predates this array,
+  // so the columns are added rather than created. ADD COLUMN IF NOT EXISTS is
+  // idempotent, which keeps this array safe to run on every boot.
+  `ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_qty integer`,
+  `ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS variance integer`,
 ]
 
 async function createSchema(sql: postgres.Sql): Promise<void> {

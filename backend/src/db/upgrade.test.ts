@@ -41,6 +41,11 @@ const KEY_COLUMNS = [
   'purchase_invoices.supplier_gstin',
   'purchase_invoices.tcs_amount',
   'purchase_returns.invoice_id',
+  // Receipt variance was added to an existing table, so the upgrade path has
+  // to ALTER it back in. Emulated as pre-feature below, because a column the
+  // fresh path creates is not evidence the upgrade path can.
+  'stock_transfers.received_qty',
+  'stock_transfers.variance',
 ]
 
 test('upgrade restores the full purchase schema on a pre-purchase database', async (t) => {
@@ -73,6 +78,9 @@ test('upgrade restores the full purchase schema on a pre-purchase database', asy
            purchase_invoices, purchase_orders, stock_movements, stock_levels cascade`,
       )
       await sql.unsafe('alter table products drop column if exists cost_price')
+      // Emulate an install that predates transfer receipt variance.
+      await sql.unsafe('alter table stock_transfers drop column if exists received_qty')
+      await sql.unsafe('alter table stock_transfers drop column if exists variance')
 
       assert.deepEqual(
         await purchaseTables(sql),

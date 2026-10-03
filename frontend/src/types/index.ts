@@ -294,6 +294,13 @@ export interface InventoryLocation {
   manager: string
 }
 
+/** Per-location aggregates shown on the locations list. */
+export interface LocationStockSummary {
+  products: number
+  quantity: number
+  valueAtCost: number
+}
+
 export type TransferStatus = 'pending' | 'in-transit' | 'received' | 'cancelled'
 
 export interface StockTransfer {
@@ -308,6 +315,10 @@ export interface StockTransfer {
   initiatedBy: string
   status: TransferStatus
   date: string
+  /** Quantity counted on arrival. Undefined when received in full. */
+  receivedQty?: number
+  /** receivedQty - qty. Negative is short in transit, positive is an overage. */
+  variance?: number
 }
 
 export interface StockCategory {

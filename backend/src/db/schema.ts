@@ -445,6 +445,10 @@ export const stockTransfers = pgTable('stock_transfers', {
   initiatedBy: text('initiated_by'),
   status: text('status'),
   date: ts('date'),
+  /** Quantity actually counted on arrival. Null means it matched `qty` exactly. */
+  receivedQty: integer('received_qty'),
+  /** receivedQty - qty: negative is short in transit, positive is an overage. */
+  variance: integer('variance'),
 }, (table) => ({
   numberIdx: uniqueIndex('stock_transfers_number_idx').on(table.number),
   skuIdx: index('stock_transfers_sku_idx').on(table.sku),

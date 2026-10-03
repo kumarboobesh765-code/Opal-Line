@@ -33,6 +33,7 @@ const ProductsPage = lazy(() => import('@/pages/Products'))
 const ProductDetailPage = lazy(() => import('@/pages/ProductDetail'))
 const StockOverviewPage = lazy(() => import('@/pages/StockOverview'))
 const StockTransfersPage = lazy(() => import('@/pages/StockTransfers'))
+const StockLocationsPage = lazy(() => import('@/pages/StockLocations'))
 const BarcodeLabelsPage = lazy(() => import('@/pages/BarcodeLabels'))
 const LowStockAlertPage = lazy(() => import('@/pages/LowStockAlert'))
 const StockRunningPage = lazy(() => import('@/pages/StockRunning'))
@@ -136,6 +137,7 @@ function App() {
             <Route path="/inventory/products/:id" element={guarded('inventory', <ProductDetailPage />)} />
             <Route path="/inventory/stock" element={guarded('inventory', <StockOverviewPage />)} />
             <Route path="/inventory/transfers" element={guarded('inventory', <StockTransfersPage />)} />
+            <Route path="/inventory/locations" element={guarded('inventory', <StockLocationsPage />)} />
             <Route path="/inventory/barcode" element={guarded('inventory', <BarcodeLabelsPage />)} />
             <Route path="/inventory/low-stock" element={guarded('inventory', <LowStockAlertPage />)} />
             <Route path="/inventory/stock-count" element={guarded('inventory', <StockCountPage />)} />

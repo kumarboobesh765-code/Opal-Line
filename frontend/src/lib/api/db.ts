@@ -21,6 +21,7 @@ import type {
   GstReportResult,
   Invoice,
   InventoryLocation,
+  LocationStockSummary,
   InvoiceItem,
   KpiCardData,
   LedgerEntry,
@@ -506,9 +507,13 @@ export const dbApi = {
     }
   },
   /** Append-only stock ledger, optionally scoped to one SKU. */
-  getStockMovements: async (sku?: string) => {
-    const qs = sku ? `?sku=${encodeURIComponent(sku)}&limit=200` : '?limit=200'
-    const res = await request(`/db/inventory/movements${qs}`)
+  getStockMovements: async (sku?: string, range?: { from?: string; to?: string }) => {
+    const params = new URLSearchParams()
+    if (sku) params.set('sku', sku)
+    if (range?.from) params.set('from', range.from)
+    if (range?.to) params.set('to', range.to)
+    params.set('limit', '500')
+    const res = await request(`/db/inventory/movements?${params.toString()}`)
     return res as Array<{
       id: string
       productId: string | null
@@ -541,9 +546,39 @@ export const dbApi = {
   /** Dispatch a pending transfer — the goods leave the source location. */
   dispatchStockTransfer: async (id: string) =>
     request<{ id: string; status: string }>(`/db/inventory/transfers/${id}/dispatch`, { method: 'POST' }),
-  /** Receive an in-transit transfer — the goods arrive at the destination. */
-  receiveStockTransfer: async (id: string) =>
-    request<{ id: string; status: string }>(`/db/inventory/transfers/${id}/receive`, { method: 'POST' }),
+  /**
+   * Receive an in-transit transfer — the goods arrive at the destination.
+   * Pass the counted quantity when it differs from what was dispatched; the
+   * shortfall or overage is recorded on the transfer rather than silently
+   * absorbed. Omitting it receives the dispatched quantity in full.
+   */
+  receiveStockTransfer: async (id: string, receivedQty?: number) =>
+    request<{ id: string; status: string; receivedQty: number; variance: number }>(
+      `/db/inventory/transfers/${id}/receive`,
+      { method: 'POST', body: JSON.stringify(receivedQty == null ? {} : { receivedQty }) },
+    ),
+  /** Aggregates (product count, units, value at cost) per location id. */
+  getLocationStockSummary: async () => {
+    const res = await request('/db/inventory/locations/stock-summary')
+    return res as Record<string, LocationStockSummary>
+  },
+  /**
+   * Create a location, optionally counting stock in at the point of opening it.
+   * The counted quantities post as `opening` movements, so the total across all
+   * locations rises — this is stock coming into the business, not a split of an
+   * existing position (that is a transfer).
+   */
+  createInventoryLocation: async (body: {
+    name: string
+    type?: string
+    city?: string
+    manager?: string
+    openingBalances?: Array<{ sku: string; qty: number }>
+  }) =>
+    request<InventoryLocation & { openingLines: number }>('/db/inventory/locations', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   /** Cancel a transfer; an in-transit one returns its stock to the source. */
   cancelStockTransfer: async (id: string) =>
     request<{ id: string; status: string }>(`/db/inventory/transfers/${id}/cancel`, { method: 'POST' }),

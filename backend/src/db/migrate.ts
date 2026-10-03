@@ -240,6 +240,8 @@ async function main() {
   await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_date_idx" ON "stock_movements" ("date");`)
   await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_ref_idx" ON "stock_movements" ("ref_type", "ref_id");`)
   await client.unsafe(`INSERT INTO "inventory_locations" ("id", "name", "type") VALUES ('LOC-DEFAULT', 'Main Store', 'store') ON CONFLICT DO NOTHING;`)
+  await client.unsafe(`ALTER TABLE "stock_transfers" ADD COLUMN IF NOT EXISTS "received_qty" integer;`)
+  await client.unsafe(`ALTER TABLE "stock_transfers" ADD COLUMN IF NOT EXISTS "variance" integer;`)
 
   console.log('Seeding default roles (idempotent)...')
   for (const [i, name] of roleNames.entries()) {

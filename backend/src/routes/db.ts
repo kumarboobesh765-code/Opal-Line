@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Router, type Request, type Response, json as expressJson } from 'express'
 import argon2 from 'argon2'
-import { desc, eq, ilike, inArray, or, sql, and } from 'drizzle-orm'
+import { desc, eq, ilike, inArray, or, sql, and, gte, lte } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
 import { applyStockMovement, transferStock, ensureDefaultLocation } from '../stock'
 import { requirePermission } from '../rbac'
@@ -2204,21 +2204,151 @@ dbRouter.get('/purchase-orders/:id/receipt', requirePermission('purchase', 'view
 dbRouter.get('/purchase-returns/:id', oneOf(s.purchaseReturns, s.purchaseReturns.id))
 
 dbRouter.get('/inventory/locations', listOf(s.inventoryLocations, s.inventoryLocations.name))
+
+/**
+ * Per-location aggregates for the locations list: how many products are held
+ * there, how many units in total, and what they are worth at cost. Kept out of
+ * the plain list route so the existing `/inventory/locations` shape (used by
+ * the transfer dropdowns) does not change.
+ *
+ * Registered before `/inventory/locations/:id` so "stock-summary" is not
+ * swallowed by the :id pattern.
+ */
+dbRouter.get('/inventory/locations/stock-summary', requirePermission('inventory', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const rows = await db!
+      .select({
+        locationId: s.stockLevels.locationId,
+        products: sql<number>`count(distinct ${s.stockLevels.productId})::int`,
+        quantity: sql<string>`coalesce(sum(${s.stockLevels.qty}), 0)`,
+        valueAtCost: sql<string>`coalesce(sum(${s.stockLevels.qty} * coalesce(${s.products.costPrice}, 0)), 0)`,
+      })
+      .from(s.stockLevels)
+      .innerJoin(s.products, eq(s.products.id, s.stockLevels.productId))
+      .groupBy(s.stockLevels.locationId)
+
+    const summary = new Map(rows.map((r) => [r.locationId, {
+      products: Number(r.products ?? 0),
+      quantity: Number(r.quantity ?? 0),
+      valueAtCost: Number(r.valueAtCost ?? 0),
+    }]))
+    res.json(summary)
+  } catch (err) {
+    logger.error({ err }, 'location stock summary failed')
+    res.status(500).json({ error: 'Could not load location stock summary' })
+  }
+})
+
+/**
+ * Create a location, optionally counting stock in at the point of opening it.
+ *
+ * A new location starts empty, so without this the only way to give it stock is
+ * a transfer or a stock count some time later. The counted quantities post as
+ * `opening` movements at the new location, which is deliberate: they are stock
+ * that physically exists and belongs to the business, so the total across all
+ * locations goes UP. This is not a split of an existing position — that is what
+ * a transfer is for.
+ */
+dbRouter.post('/inventory/locations', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const name = String(req.body?.name ?? '').trim()
+    if (!name) return res.status(400).json({ error: 'Location name is required' })
+    if (name.length > 120) return res.status(400).json({ error: 'Location name is too long' })
+
+    const [existing] = await db!.select({ id: s.inventoryLocations.id }).from(s.inventoryLocations).where(eq(s.inventoryLocations.name, name)).limit(1)
+    if (existing) return res.status(400).json({ error: `A location called "${name}" already exists` })
+
+    const opening = Array.isArray(req.body?.openingBalances) ? req.body.openingBalances : []
+
+    // Resolve every SKU up front so a typo fails the whole request instead of
+    // silently opening a location that is missing stock the user counted.
+    const wanted = new Map<string, number>()
+    for (const entry of opening) {
+      const sku = String((entry as { sku?: unknown })?.sku ?? '').trim()
+      const qty = Math.floor(Number((entry as { qty?: unknown })?.qty ?? 0))
+      if (!sku || Number.isNaN(qty) || qty === 0) continue
+      wanted.set(sku, (wanted.get(sku) ?? 0) + qty)
+    }
+    const skus = [...wanted.keys()]
+    const products = skus.length
+      ? await db!.select({ id: s.products.id, sku: s.products.sku }).from(s.products).where(inArray(s.products.sku, skus))
+      : []
+    const found = new Set(products.map((p) => p.sku))
+    const missing = skus.filter((sku) => !found.has(sku))
+    if (missing.length) return res.status(400).json({ error: `Unknown SKU: ${missing.join(', ')}` })
+
+    const result = await db!.transaction(async (tx) => {
+      const [location] = await tx
+        .insert(s.inventoryLocations)
+        .values({
+          id: randomUUID(),
+          name,
+          type: String(req.body?.type ?? '').trim() || 'store',
+          city: req.body?.city != null && String(req.body.city).trim() ? String(req.body.city).trim() : null,
+          manager: req.body?.manager != null && String(req.body.manager).trim() ? String(req.body.manager).trim() : null,
+        })
+        .returning()
+
+      const actor = actorFromRequest(req).userId ?? 'system'
+      for (const product of products) {
+        await applyStockMovement({
+          sku: product.sku,
+          qty: wanted.get(product.sku) ?? 0,
+          type: 'opening',
+          locationId: location.id,
+          refType: 'inventory_location',
+          refId: location.id,
+          note: `opening balance for ${name}`,
+          createdBy: actor,
+          tx,
+        })
+      }
+      return location
+    })
+
+    recordCrud('inventory/locations', 'Created', req, { name, type: result.type, openingLines: products.length })
+    res.status(201).json({ ...result, openingLines: products.length })
+  } catch (err) {
+    logger.error({ err }, 'location create failed')
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Could not create location' })
+  }
+})
+
 dbRouter.get('/inventory/locations/:id', oneOf(s.inventoryLocations, s.inventoryLocations.id))
 
 dbRouter.get('/inventory/transfers', listOf(s.stockTransfers, s.stockTransfers.date))
 dbRouter.get('/inventory/transfers/:id', oneOf(s.stockTransfers, s.stockTransfers.id))
 
 // The stock ledger: every movement, newest first. Optionally filtered to one
-// SKU, which is what the product page shows.
+// SKU and/or a date window, which is what the product page shows.
 dbRouter.get('/inventory/movements', requirePermission('inventory', 'view'), async (req, res) => {
   if (!requireDb(res)) return
   try {
     const sku = typeof req.query.sku === 'string' ? req.query.sku.trim() : ''
     const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200) || 200))
-    const rows = sku
-      ? await db!.select().from(s.stockMovements).where(eq(s.stockMovements.sku, sku)).orderBy(desc(s.stockMovements.date)).limit(limit)
-      : await db!.select().from(s.stockMovements).orderBy(desc(s.stockMovements.date)).limit(limit)
+
+    // A date-only "to" bound is inclusive, so widen it to the end of that day —
+    // otherwise everything on the final day is silently dropped.
+    const fromRaw = typeof req.query.from === 'string' ? req.query.from.trim() : ''
+    const toRaw = typeof req.query.to === 'string' ? req.query.to.trim() : ''
+    const from = fromRaw ? new Date(fromRaw) : null
+    let to = toRaw ? new Date(toRaw) : null
+    if (to && /^\d{4}-\d{2}-\d{2}$/.test(toRaw)) to = new Date(to.getTime() + 86_399_999)
+
+    const filters = []
+    if (sku) filters.push(eq(s.stockMovements.sku, sku))
+    if (from && !Number.isNaN(from.getTime())) filters.push(gte(s.stockMovements.date, from.toISOString()))
+    if (to && !Number.isNaN(to.getTime())) filters.push(lte(s.stockMovements.date, to.toISOString()))
+    const where = filters.length ? and(...filters) : undefined
+
+    const rows = await db!
+      .select()
+      .from(s.stockMovements)
+      .where(where)
+      .orderBy(desc(s.stockMovements.date))
+      .limit(limit)
     res.json(rows)
   } catch (err) {
     logger.error({ err }, 'stock movements list failed')
@@ -2378,7 +2508,17 @@ dbRouter.post('/inventory/transfers/:id/dispatch', requirePermission('inventory'
   }
 })
 
-/** Receive: the goods arrive, so the destination balance rises. */
+/**
+ * Receive: the goods arrive, so the destination balance rises.
+ *
+ * The counted quantity may differ from what was dispatched — goods go missing
+ * or turn up extra between stores. That variance needs no correcting movement:
+ * dispatch already removed the dispatched quantity from the source, so posting
+ * only what was actually counted leaves the total across locations correctly
+ * lower (or higher) by exactly the variance. Recording it on the transfer and
+ * in the movement note is what makes the difference explainable rather than a
+ * mystery discrepancy.
+ */
 dbRouter.post('/inventory/transfers/:id/receive', requirePermission('inventory', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
@@ -2390,23 +2530,46 @@ dbRouter.post('/inventory/transfers/:id/receive', requirePermission('inventory',
       }
       const to = await resolveLocation(String(transfer.to ?? ''))
       if (!to) throw Object.assign(new Error('Destination location no longer exists'), { status: 400 })
-      await applyStockMovement({
-        sku: String(transfer.sku ?? ''),
-        qty: Number(transfer.qty ?? 0),
-        type: 'transfer_in',
-        locationId: to,
-        refType: 'stock_transfer',
-        refId: transfer.id,
-        createdBy: actorFromRequest(req).userId ?? 'system',
-      })
+
+      const dispatched = Math.floor(Number(transfer.qty ?? 0))
+      // Absent means "received in full", so callers that post no body keep the
+      // previous behaviour unchanged.
+      const raw = req.body?.receivedQty
+      const received = raw == null || raw === '' ? dispatched : Math.floor(Number(raw))
+      if (!Number.isFinite(received) || received < 0) {
+        throw Object.assign(new Error('Counted quantity must be zero or more'), { status: 400 })
+      }
+      const variance = received - dispatched
+
+      // received === 0 is legitimate (everything was lost or refused); it just
+      // has no inbound movement to post.
+      if (received > 0) {
+        await applyStockMovement({
+          sku: String(transfer.sku ?? ''),
+          qty: received,
+          type: 'transfer_in',
+          locationId: to,
+          refType: 'stock_transfer',
+          refId: transfer.id,
+          note: variance === 0 ? undefined : `received ${received} of ${dispatched} (${variance < 0 ? `${-variance} short` : `${variance} over`})`,
+          createdBy: actorFromRequest(req).userId ?? 'system',
+          tx,
+        })
+      }
+
       const [row] = await tx
         .update(s.stockTransfers)
-        .set({ status: 'received' })
+        .set({ status: 'received', receivedQty: received, variance })
         .where(eq(s.stockTransfers.id, transfer.id))
         .returning()
       return row
     })
-    recordCrud('stockTransfers', 'Updated', req, { id: req.params.id, status: 'received' })
+    recordCrud('stockTransfers', 'Updated', req, {
+      id: req.params.id,
+      status: 'received',
+      receivedQty: updated.receivedQty,
+      variance: updated.variance,
+    })
     res.json(updated)
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500

@@ -155,17 +155,53 @@ export default function StockTransfersPage() {
 
   // Status is not a free-text field: each transition moves stock, so it has to
   // go through the endpoint that performs the matching ledger entries.
-  const updateStatus = useCallback(async (id: string, status: TransferStatus) => {
+  const updateStatus = useCallback(async (id: string, status: TransferStatus, receivedQty?: number) => {
     try {
-      if (status === 'received') await dbApi.receiveStockTransfer(id)
+      if (status === 'received') await dbApi.receiveStockTransfer(id, receivedQty)
       else if (status === 'cancelled') await dbApi.cancelStockTransfer(id)
       else if (status === 'in-transit') await dbApi.dispatchStockTransfer(id)
       else return
       load()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to update transfer')
+      throw e
     }
   }, [load])
+
+  /**
+   * Counted quantity per in-transit transfer. Seeded with the dispatched
+   * quantity so a good delivery needs no typing, and any edit becomes the
+   * variance the backend records.
+   */
+  const [receiveQty, setReceiveQty] = useState<Record<string, string>>({})
+
+  const openReceive = useCallback((id: string, dispatched: number) => {
+    setReceiveQty((prev) => ({ ...prev, [id]: prev[id] ?? String(dispatched) }))
+    setReceiveDialogOpen(true)
+  }, [])
+
+  const receive = useCallback(async (t: StockTransfer) => {
+    const raw = receiveQty[t.id]
+    const counted = raw == null || raw === '' ? Number(t.qty) : Math.floor(Number(raw))
+    if (!Number.isFinite(counted) || counted < 0) {
+      toast.error('Enter a counted quantity of zero or more')
+      return
+    }
+    const variance = counted - Number(t.qty)
+    try {
+      await dbApi.receiveStockTransfer(t.id, counted)
+      setReceiveDialogOpen(false)
+      setReceiveQty((prev) => { const next = { ...prev }; delete next[t.id]; return next })
+      toast.success(
+        variance === 0
+          ? `${t.number} received in full`
+          : `${t.number} received ${counted} of ${t.qty} — ${Math.abs(variance)} ${variance < 0 ? 'short' : 'over'}`,
+      )
+      load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to receive transfer')
+    }
+  }, [receiveQty, load])
 
   const columns = useMemo<ColumnDef<StockTransfer>[]>(
     () => [
@@ -220,6 +256,24 @@ export default function StockTransfersPage() {
         cell: ({ row }) => <span className="tabular-nums text-muted-foreground">{formatWeight(row.original.weight)}</span>,
       },
       { accessorKey: 'initiatedBy', header: 'By', cell: ({ row }) => <span className="text-muted-foreground">{row.original.initiatedBy}</span> },
+      {
+        id: 'variance',
+        header: 'Variance',
+        meta: { align: 'right' as const },
+        cell: ({ row }) => {
+          const v = row.original.variance
+          // Only a variance is news; a clean receipt shows a quiet dash.
+          if (row.original.status !== 'received' || v == null || v === 0) {
+            return <span className="text-xs text-muted-foreground">—</span>
+          }
+          return (
+            <span className={`text-xs font-medium ${v < 0 ? 'text-destructive' : 'text-warning-600 dark:text-warning-500'}`}>
+              {v < 0 ? `${Math.abs(v)} short` : `${v} over`}
+              <span className="ml-1 font-normal text-muted-foreground">of {row.original.qty}</span>
+            </span>
+          )
+        },
+      },
       {
         id: 'status',
         header: 'Status',
@@ -289,7 +343,11 @@ export default function StockTransfersPage() {
         subtitle="Move silver stock between stores, warehouses and the workshop."
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => setReceiveDialogOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => {
+              const inTransit = transfers.find((t) => t.status === 'in-transit')
+              if (inTransit) openReceive(inTransit.id, Number(inTransit.qty))
+              else setReceiveDialogOpen(true)
+            }}>
               <ArrowDownToLine className="h-3.5 w-3.5" /> Receive
             </Button>
             <Dialog open={receiveDialogOpen} onOpenChange={setReceiveDialogOpen}>
@@ -301,18 +359,44 @@ export default function StockTransfersPage() {
                 {transfers.filter((t) => t.status === 'in-transit').length === 0 ? (
                   <p className="py-4 text-sm text-muted-foreground">No transfers in transit.</p>
                 ) : (
-                  <div className="max-h-[300px] space-y-2 overflow-y-auto">
-                    {transfers.filter((t) => t.status === 'in-transit').map((t) => (
-                      <div key={t.id} className="flex items-center justify-between rounded-lg border p-3">
-                        <div>
-                          <p className="font-medium text-foreground">{t.number}</p>
-                          <p className="text-xs text-muted-foreground">{t.product} · {t.qty} pcs · {t.from} → {t.to}</p>
+                  <div className="max-h-[340px] space-y-2 overflow-y-auto">
+                    {transfers.filter((t) => t.status === 'in-transit').map((t) => {
+                      const raw = receiveQty[t.id] ?? String(t.qty)
+                      const counted = Number(raw)
+                      const variance = Number.isFinite(counted) ? Math.floor(counted) - Number(t.qty) : 0
+                      const invalid = raw === '' || !Number.isFinite(counted) || Math.floor(counted) < 0
+                      return (
+                        <div key={t.id} className="rounded-lg border p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-medium text-foreground">{t.number}</p>
+                              <p className="truncate text-xs text-muted-foreground">{t.product} · dispatched {t.qty} pcs · {t.from} → {t.to}</p>
+                            </div>
+                            <Button size="sm" disabled={invalid} onClick={() => receive(t)}>
+                              <CheckCircle2 className="h-3.5 w-3.5" /> Receive
+                            </Button>
+                          </div>
+                          <div className="mt-2.5 flex items-center gap-2">
+                            <Label htmlFor={`recv-${t.id}`} className="text-xs text-muted-foreground">Counted</Label>
+                            <Input
+                              id={`recv-${t.id}`}
+                              type="number"
+                              min={0}
+                              className="h-8 w-24 text-xs"
+                              value={raw}
+                              onChange={(e) => setReceiveQty((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                            />
+                            {variance === 0 ? (
+                              <span className="text-xs text-muted-foreground">matches dispatch</span>
+                            ) : (
+                              <span className={`text-xs font-medium ${variance < 0 ? 'text-destructive' : 'text-warning-600 dark:text-warning-500'}`}>
+                                {variance < 0 ? `${Math.abs(variance)} short` : `${variance} over`}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <Button size="sm" onClick={() => { updateStatus(t.id, 'received'); setReceiveDialogOpen(false) }}>
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Receive
-                        </Button>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </DialogContent>
