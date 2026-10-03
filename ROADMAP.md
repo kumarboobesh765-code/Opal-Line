@@ -1,6 +1,7 @@
 # Roadmap
 
-Last updated at v1.0.9. This file previously described "v1.0.2 planned
+Last updated after v1.0.9. Work since the `v1.0.9` tag is collected in
+`docs/release-notes-v1.0.10-draft.md` until the next version is cut. This file previously described "v1.0.2 planned
 scope", including the purchase input-GST work that shipped in v1.0.9 — treat
 anything below as current, and check the release notes for what a version did.
 
@@ -58,12 +59,32 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   pre-ledger products have real history — but the backfill cannot know *when*
   the stock actually arrived, so the quantity is the current balance as of the
   upgrade and any earlier in-and-out is invisible.
-- **Location stock starts empty.** A new location begins at zero and is not
-  seeded from the current balance, so opening a second store means counting it
-  rather than splitting the existing position.
-- **Backend oxlint sits at 47 warnings** (frontend is at 0).
+- **A new location still has to be counted in, not split.** Creating a location
+  now offers to count stock in as it opens, which posts `opening` movements and
+  correctly RAISES total stock — but splitting an existing position between
+  shops is still all-or-nothing through manual transfers, there is no "split
+  half of this line across both" action.
+- **Documents created before locations keep no location of record.**
+  `sales_orders.location_id` and `purchase_invoices.location_id` are nullable
+  and NULL resolves to the default store, which is where those movements already
+  went. Nothing backfills them, so a historic branch sale is still attributed to
+  Main Store and cannot be re-attributed without editing the row.
+- **The stock ledger's pure rules are unit-tested; its database behaviour is
+  not.** The signed-quantity convention, cost revaluation, backfill eligibility
+  and location rules have 45 tests, but `applyStockMovement`'s locking and
+  rollup behaviour is only covered by throwaway live scripts that get deleted.
+- **Backend oxlint sits at 98 warnings** (frontend is at 0). The number has
+  drifted from the 47 recorded here previously; nothing in CI enforces either
+  side, so it grows unnoticed.
 
 ## Next candidates
+
+- Support partial and split shipments on a transfer. Dispatch currently moves
+  the full quantity or fails, so a transfer that ships part today and the rest
+  tomorrow is not representable — the normal case for real inter-store transport.
+- Per-location days-of-stock. Values and quantities break down by location, but
+  velocity is still computed per SKU across all locations, so a branch with
+  5 units shows the same days-of-stock as the chain total.
 
 - Watch one real update cycle end-to-end (1.0.8 → 1.0.9) on a live machine
   before announcing the release; CI pins checks to `ubuntu-24.04` ahead of
