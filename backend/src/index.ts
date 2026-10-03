@@ -11,7 +11,7 @@ import { config, isConfigured, loadSecretsFromDb } from './config'
 import { applyPriceSync, applySilverRate, createShopifyDraftOrder, ensureSynced, getLatestSilverRate, importShopifyOrders, purgeProducts, pushInventoryToShopify, pushProductPriceToShopify, pushProductsToShopify, runSync, store, syncProductsToDb, testShopifyConnection, updateShopifyOrder } from './shopify'
 import type { SyncResource } from './types'
 import { db, schema, checkDbHealth, getDbStats } from './db/client'
-import { applyStockMovement } from './stock'
+import { applyStockMovement, resolveMovementLocation, levelAt } from './stock'
 import { authRouter } from './routes/auth'
 import { dbRouter } from './routes/db'
 import { dashboardRouter } from './routes/dashboard'
@@ -289,12 +289,14 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, rejectReplayedWebhook
         try {
           const restored = await db.transaction(async (tx) => {
             const [local] = await tx
-              .select({ id: schema.salesOrders.id, status: schema.salesOrders.status, lineItems: schema.salesOrders.lineItems })
+              .select({ id: schema.salesOrders.id, status: schema.salesOrders.status, lineItems: schema.salesOrders.lineItems, locationId: schema.salesOrders.locationId })
               .from(schema.salesOrders)
               .where(eq(schema.salesOrders.shopifyId, shopifyId))
               .limit(1)
             if (!local || local.status === 'cancelled') return { skipped: true, items: 0 }
             const items = Array.isArray(local.lineItems) ? (local.lineItems as Array<{ sku?: string; quantity?: number }>) : []
+            // Cancelling puts the goods back where the sale actually left them.
+            const locationId = await resolveMovementLocation(local.locationId as string | null, tx as never)
             let itemsRestored = 0
             for (const li of items) {
               const sku = String(li.sku ?? '').trim()
@@ -307,7 +309,7 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, rejectReplayedWebhook
                 .limit(1)
                 .for('update')
               if (!p) continue
-              await applyStockMovement({ sku, qty, type: 'sale_return_in', refType: 'sales_order', tx })
+              await applyStockMovement({ sku, qty, type: 'sale_return_in', refType: 'sales_order', locationId, tx })
               itemsRestored += qty
             }
             await tx
@@ -1613,7 +1615,7 @@ app.post('/api/v1/shopify/enrich', requirePermission('shopify', 'view'), async (
 // This bypasses the Admin API PII limitations on development stores.
 // The Flow sends: order name, customer name, email, phone, billing/shipping addresses
 app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create'), validate(createOrderSchema), async (req, res) => {
-  const { customer, email, phone, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
+  const { customer, email, phone, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify, locationId: reqLocation } = req.body
 
   // Normalize payment and fulfillment values to handle non-standard values from Shopify/webhooks
   const payment = rawPayment === 'Online' || rawPayment === 'online' ? 'paid' : (rawPayment ?? 'pending')
@@ -1653,17 +1655,23 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
   const affectedProductIds: string[] = []
   try {
     await db.transaction(async (tx) => {
+      // Where this order was rung up. Absent means the default store, which is
+      // where such orders already went before locations existed.
+      const locationId = await resolveMovementLocation(reqLocation as string | undefined, tx as never)
       for (const li of items) {
         const sku = String(li.sku ?? '').trim()
         const qty = Math.max(0, Math.floor(Number(li.quantity ?? 0)))
         if (!sku || qty <= 0) continue
-        const [row] = await tx.select({ id: schema.products.id, stock: schema.products.stock }).from(schema.products).where(eq(schema.products.sku, sku)).limit(1).for('update')
+        const [row] = await tx.select({ id: schema.products.id }).from(schema.products).where(eq(schema.products.sku, sku)).limit(1).for('update')
         if (!row) continue
-        const current = Number(row.stock ?? 0)
+        // Availability is checked AT this location, not against the global
+        // rollup: a chain can hold 12 units while the shop actually taking the
+        // sale has 2, and the sale would drive that shop negative.
+        const current = await levelAt(tx as never, row.id, locationId)
         if (current - qty < 0) {
-          throw new Error(`Insufficient stock for SKU ${sku}: available ${current}, requested ${qty}`)
+          throw new Error(`Insufficient stock for SKU ${sku} at this location: available ${current}, requested ${qty}`)
         }
-        await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'sales_order', tx })
+        await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'sales_order', locationId, tx })
         affectedProductIds.push(row.id)
       }
 
@@ -1687,6 +1695,7 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
           lineItems: items,
           billingAddress: billingAddress ?? null,
           shippingAddress: shippingAddress ?? null,
+          locationId,
         })
         .returning()
       order = row
@@ -1825,23 +1834,28 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
         ? (existing.lineItems as Array<{ sku?: string | null; quantity?: number | null }>)
         : []
       updated = await db.transaction(async (tx) => {
+        // Reversals go back to the location the order was rung up at, never to
+        // the default store — otherwise editing a branch order would silently
+        // restock the wrong shop. NULL means the order predates locations,
+        // which is exactly where its movements already went.
+        const locationId = await resolveMovementLocation(existing.locationId as string | null, tx as never)
         for (const oi of oldItems) {
           const sku = String(oi?.sku ?? '').trim()
           const qty = Math.max(0, Math.floor(Number(oi?.quantity ?? 0)))
           if (!sku || qty <= 0) continue
-          await applyStockMovement({ sku, qty, type: 'sale_return_in', refType: 'sales_order', tx })
+          await applyStockMovement({ sku, qty, type: 'sale_return_in', refType: 'sales_order', locationId, tx })
         }
         for (const li of mappedLineItems) {
           const sku = String(li.sku ?? '').trim()
           const qty = Math.max(0, Math.floor(Number(li.quantity ?? 0)))
           if (!sku || qty <= 0) continue
-          const [row] = await tx.select({ id: schema.products.id, stock: schema.products.stock }).from(schema.products).where(eq(schema.products.sku, sku)).limit(1).for('update')
+          const [row] = await tx.select({ id: schema.products.id }).from(schema.products).where(eq(schema.products.sku, sku)).limit(1).for('update')
           if (!row) continue
-          const current = Number(row.stock ?? 0)
+          const current = await levelAt(tx as never, row.id, locationId)
           if (current - qty < 0) {
-            throw new Error(`Insufficient stock for SKU ${sku}: available ${current}, requested ${qty}`)
+            throw new Error(`Insufficient stock for SKU ${sku} at this location: available ${current}, requested ${qty}`)
           }
-          await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'sales_order', tx })
+          await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'sales_order', locationId, tx })
           affectedProductIds.push(row.id)
         }
         const [u] = await tx

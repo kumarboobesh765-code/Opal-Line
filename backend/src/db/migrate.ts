@@ -242,6 +242,8 @@ async function main() {
   await client.unsafe(`INSERT INTO "inventory_locations" ("id", "name", "type") VALUES ('LOC-DEFAULT', 'Main Store', 'store') ON CONFLICT DO NOTHING;`)
   await client.unsafe(`ALTER TABLE "stock_transfers" ADD COLUMN IF NOT EXISTS "received_qty" integer;`)
   await client.unsafe(`ALTER TABLE "stock_transfers" ADD COLUMN IF NOT EXISTS "variance" integer;`)
+  await client.unsafe(`ALTER TABLE "sales_orders" ADD COLUMN IF NOT EXISTS "location_id" text;`)
+  await client.unsafe(`ALTER TABLE "purchase_invoices" ADD COLUMN IF NOT EXISTS "location_id" text;`)
 
   console.log('Seeding default roles (idempotent)...')
   for (const [i, name] of roleNames.entries()) {

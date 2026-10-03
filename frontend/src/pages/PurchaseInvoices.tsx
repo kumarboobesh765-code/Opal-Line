@@ -33,7 +33,7 @@ import {
 } from '@/components/ui/dialog'
 import { dbApi } from '@/lib/api'
 import { exportTable } from '@/lib/export'
-import type { Product, PurchaseInvoice, PurchaseInvoiceDetail, Supplier } from '@/types'
+import type { InventoryLocation, Product, PurchaseInvoice, PurchaseInvoiceDetail, Supplier } from '@/types'
 import { formatCurrency, formatDate, formatNumber, formatWeight, todayIST } from '@/lib/format'
 
 const statusBadge: Record<string, { label: string; variant: 'success' | 'warning' | 'info' | 'muted' }> = {
@@ -91,6 +91,25 @@ export default function PurchaseInvoicesPage() {
 
   // Create / edit form
   const [formOpen, setFormOpen] = useState(false)
+  // Which shop this document belongs to. Stock movements follow it, so picking
+  // the wrong one puts the goods on the wrong shelf.
+  const [locations, setLocations] = useState<InventoryLocation[]>([])
+  const [locationId, setLocationId] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      dbApi.getInventoryLocations()
+        .then((locs) => {
+          if (cancelled || !locs.length) return
+          setLocations(locs)
+          setLocationId((prev) => prev || locs[0].id)
+        })
+        .catch(() => undefined)
+    })
+    return () => { cancelled = true }
+  }, [])
+
   const [editing, setEditing] = useState<PurchaseInvoiceDetail | null>(null)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
@@ -255,6 +274,8 @@ export default function PurchaseInvoicesPage() {
       date: header.date,
       supplierGstin: header.supplierGstin.trim() || null,
       tcsRate: Number(header.tcsRate) || 0,
+      // Goods may be delivered to a branch rather than the main store.
+      locationId: locationId || undefined,
       items: usable.map((l) => ({
         product: l.product.trim(),
         sku: l.sku.trim(),
@@ -620,6 +641,14 @@ export default function PurchaseInvoicesPage() {
                   onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))}
                 />
               </Field>
+              <Field label="Receive at" hint="Goods can be delivered to a branch instead of the main store.">
+                <Select
+                  options={locations.map((l) => ({ value: l.id, label: l.name }))}
+                  value={locationId}
+                  onValueChange={setLocationId}
+                  placeholder="Select location"
+                />
+              </Field>
               <Field label="Supplier GSTIN (optional)">
                 <Input
                   value={header.supplierGstin}
@@ -773,11 +802,12 @@ export default function PurchaseInvoicesPage() {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
       {children}
+      {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
     </div>
   )
 }

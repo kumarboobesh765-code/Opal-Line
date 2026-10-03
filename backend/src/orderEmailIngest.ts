@@ -6,7 +6,7 @@ import { db } from './db/client'
 import * as schema from './db/schema'
 import { decryptSecret } from './lib/crypto'
 import { recountCustomerStatsBoth } from './customerStats'
-import { applyStockMovement } from './stock'
+import { applyStockMovement, resolveMovementLocation } from './stock'
 import { logger } from './logger'
 
 /**
@@ -725,11 +725,24 @@ async function nextInvoiceNumber(prefix: string): Promise<string> {
   return `${prefix}${stamp}${Date.now().toString().slice(-6)}`
 }
 
-/** Deduct sold quantity from product stock. Never blocks invoicing on stock gaps. */
-async function deductStock(tx: any, sku: string, qty: number): Promise<void> {
+/**
+ * Deduct sold quantity from product stock. Never blocks invoicing on stock gaps.
+ *
+ * Email orders carry no shop, so they deduct from the default location unless
+ * the order row already records one — which keeps a later reversal (edit or
+ * cancellation) landing on the same balance the deduction did.
+ */
+async function deductStock(tx: any, sku: string, qty: number, locationId?: string | null): Promise<void> {
   if (!sku || !qty) return
   try {
-    await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'email_order', tx })
+    await applyStockMovement({
+      sku,
+      qty: -qty,
+      type: 'sale_out',
+      refType: 'email_order',
+      locationId: await resolveMovementLocation(locationId ?? null, tx),
+      tx,
+    })
   } catch { /* stock tracking optional for email orders */ }
 }
 
@@ -806,10 +819,13 @@ export async function createInvoiceForOrderRow(order: typeof schema.salesOrders.
       status: order.payment === 'paid' ? 'paid' : 'issued',
       date: order.date ?? new Date().toISOString(),
     })
+    const orderLocationId = (order as { locationId?: string | null }).locationId ?? null
     for (const it of items) {
       await tx.insert(schema.salesInvoiceItems).values({ ...it, id: crypto.randomUUID(), invoiceId })
-      // Deduct stock for the sold SKU, same rule as manual invoices
-      await deductStock(tx, it.sku, it.qty)
+      // Deduct stock for the sold SKU, same rule as manual invoices. The
+      // order's own location is honoured so the deduction and any later
+      // reversal agree on which balance they touch.
+      await deductStock(tx, it.sku, it.qty, orderLocationId)
     }
     await tx.update(schema.salesOrders).set({ invoice: number }).where(eq(schema.salesOrders.id, order.id))
   })

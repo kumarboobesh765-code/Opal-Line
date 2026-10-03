@@ -86,6 +86,12 @@ const STOCK_LEDGER_DDL: string[] = [
   // idempotent, which keeps this array safe to run on every boot.
   `ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_qty integer`,
   `ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS variance integer`,
+  // Which location a sale or a purchase belongs to. Without these the movements
+  // fall back to the default store, so a sale rung up at a branch debits the
+  // wrong balance. Existing documents keep NULL and resolve to the default,
+  // which is what they already did.
+  `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS location_id text`,
+  `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS location_id text`,
 ]
 
 async function createSchema(sql: postgres.Sql): Promise<void> {
@@ -499,6 +505,7 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         id text PRIMARY KEY,
         number text NOT NULL,
         supplier text,
+        location_id text,
         items integer,
         qty integer,
         weight numeric,
@@ -1438,6 +1445,7 @@ async function applyUpgrades(sql: postgres.Sql): Promise<void> {
         id text PRIMARY KEY,
         number text NOT NULL,
         supplier text,
+        location_id text,
         items integer,
         qty integer,
         weight numeric,

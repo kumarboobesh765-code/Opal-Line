@@ -56,7 +56,7 @@ import {
 import { dbApi, shopifyApi, printTemplatesApi } from '@/lib/api'
 import { printDocument, printDocuments, mergePrintConfig, DEFAULT_PRINT_CONFIG, type PrintDoc, type PrintDesignerConfig } from '@/lib/printTemplate'
 import { exportTable } from '@/lib/export'
-import type { Customer, Customer360, OrderEvent, OrderFullDetail, OrderStatus, Product, SalesOrder } from '@/types'
+import type { Customer, Customer360, InventoryLocation, OrderEvent, OrderFullDetail, OrderStatus, Product, SalesOrder } from '@/types'
 import { cn } from '@/lib/utils'
 import { formatCurrency, formatDate, formatDateTime, todayIST } from '@/lib/format'
 
@@ -228,6 +228,25 @@ export default function SalesOrdersPage() {
   const [payment, setPayment] = useState('paid')
   const [fulfillment, setFulfillment] = useState('unfulfilled')
   const [orderStatus, setOrderStatus] = useState('confirmed')
+  // Which shop this document belongs to. Stock movements follow it, so picking
+  // the wrong one puts the goods on the wrong shelf.
+  const [locations, setLocations] = useState<InventoryLocation[]>([])
+  const [locationId, setLocationId] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      dbApi.getInventoryLocations()
+        .then((locs) => {
+          if (cancelled || !locs.length) return
+          setLocations(locs)
+          setLocationId((prev) => prev || locs[0].id)
+        })
+        .catch(() => undefined)
+    })
+    return () => { cancelled = true }
+  }, [])
+
   const [note, setNote] = useState('')
   const [syncToShopify, setSyncToShopify] = useState(true)
   const [lineItems, setLineItems] = useState<OrderLineItem[]>([emptyLine()])
@@ -826,6 +845,9 @@ export default function SalesOrdersPage() {
         billingAddress: billing,
         shippingAddress: shipping,
         syncToShopify,
+        // Where the sale is rung up. Its stock movements — and every later
+        // reversal of them — land on this location's balance.
+        locationId: locationId || undefined,
       }
       const res = editing
         ? await shopifyApi.updateOrder(editing.id, { ...common, ...(itemsChanged ? { items } : {}) })
@@ -1189,6 +1211,16 @@ export default function SalesOrdersPage() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Rung up at</Label>
+                    <Select
+                      options={locations.map((l) => ({ value: l.id, label: l.name }))}
+                      value={locationId}
+                      onValueChange={setLocationId}
+                      placeholder="Select location"
+                    />
+                  </div>
+
                   <div>
                     <Label className="text-xs text-muted-foreground">Order Date</Label>
                     <Input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />

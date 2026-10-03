@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm'
 import { db } from './db/client'
 import * as schema from './db/schema'
-import { applyStockMovement } from './stock'
+import { applyStockMovement, resolveMovementLocation } from './stock'
 import { logger } from './logger'
 
 /**
@@ -160,7 +160,7 @@ export async function getBusinessGstin(): Promise<string> {
 export async function applyPurchaseStock(
   sku: string,
   qty: number,
-  opts?: { unitValue?: number; tx?: Tx },
+  opts?: { unitValue?: number; locationId?: string | null; tx?: Tx },
 ): Promise<boolean> {
   const delta = Math.floor(Number(qty ?? 0))
   if (!sku || delta === 0) return false
@@ -172,9 +172,29 @@ export async function applyPurchaseStock(
     type: delta > 0 ? 'purchase_in' : 'purchase_return_out',
     unitCost: Number(opts?.unitValue ?? 0),
     refType: 'purchase_invoice',
+    // Goods received at a specific branch must land in that branch's balance.
+    // Absent means the default store, which is where these already went.
+    locationId: await resolveMovementLocation(opts?.locationId ?? null, opts?.tx),
     tx: opts?.tx,
   })
   return result !== null
+}
+
+/**
+ * The location a purchase invoice's stock lives at.
+ *
+ * Reversals MUST resolve back to this rather than defaulting, or cancelling an
+ * invoice removes stock from a different branch than the one it was received
+ * into. NULL means the invoice predates locations, and its stock is where it
+ * already went.
+ */
+async function invoiceLocation(client: NonNullable<typeof db>, invoiceId: string): Promise<string | null> {
+  const [row] = await client
+    .select({ locationId: schema.purchaseInvoices.locationId })
+    .from(schema.purchaseInvoices)
+    .where(eq(schema.purchaseInvoices.id, invoiceId))
+    .limit(1)
+  return (row?.locationId as string | null) ?? null
 }
 
 /** Reverse the stock a purchase invoice added (edit / cancel / delete). */
@@ -185,11 +205,12 @@ export async function reversePurchaseStock(invoiceId: string, tx?: Tx): Promise<
     .select()
     .from(schema.purchaseInvoiceItems)
     .where(eq(schema.purchaseInvoiceItems.invoiceId, invoiceId))
+  const locationId = await invoiceLocation(client, invoiceId)
   let reversed = 0
   for (const it of items) {
     const sku = String(it.sku ?? '')
     if (!sku) continue
-    if (await applyPurchaseStock(sku, -Math.floor(Number(it.qty ?? 0)), { tx })) reversed += 1
+    if (await applyPurchaseStock(sku, -Math.floor(Number(it.qty ?? 0)), { locationId, tx })) reversed += 1
   }
   return reversed
 }
@@ -206,11 +227,12 @@ export async function restorePurchaseStock(invoiceId: string, tx?: Tx): Promise<
     .select()
     .from(schema.purchaseInvoiceItems)
     .where(eq(schema.purchaseInvoiceItems.invoiceId, invoiceId))
+  const locationId = await invoiceLocation(client, invoiceId)
   let restored = 0
   for (const it of items) {
     const sku = String(it.sku ?? '')
     if (!sku) continue
-    if (await applyPurchaseStock(sku, Math.floor(Number(it.qty ?? 0)), { tx })) restored += 1
+    if (await applyPurchaseStock(sku, Math.floor(Number(it.qty ?? 0)), { locationId, tx })) restored += 1
   }
   return restored
 }
@@ -292,7 +314,7 @@ export async function saveInvoiceItems(
   tx: DbClient,
   invoiceId: string,
   items: PurchaseItemInput[],
-  opts: { addStock: boolean },
+  opts: { addStock: boolean; locationId?: string | null },
 ): Promise<{ lines: number; stocked: number }> {
   let lines = 0
   let stocked = 0
@@ -316,7 +338,7 @@ export async function saveInvoiceItems(
       opts.addStock &&
       it.sku &&
       it.qty > 0 &&
-      (await applyPurchaseStock(it.sku, it.qty, { unitValue, tx: tx as never }))
+      (await applyPurchaseStock(it.sku, it.qty, { unitValue, locationId: opts.locationId ?? null, tx: tx as never }))
     ) {
       stocked += 1
     }
@@ -455,7 +477,7 @@ export async function saveReturnLines(
   tx: DbClient,
   returnId: string,
   lines: PurchaseReturnLineInput[],
-  opts: { reverseStock: boolean },
+  opts: { reverseStock: boolean; locationId?: string | null },
 ): Promise<{ lines: number; reversed: number }> {
   let written = 0
   let reversed = 0
@@ -474,7 +496,7 @@ export async function saveReturnLines(
     if (opts.reverseStock && l.sku && l.qty > 0) {
       // Returns must never drive stock negative — you cannot send back metal
       // the shop never received.
-      const ok = await applyPurchaseStock(l.sku, -l.qty, { tx: tx as never })
+      const ok = await applyPurchaseStock(l.sku, -l.qty, { locationId: opts.locationId ?? null, tx: tx as never })
       if (ok) reversed += 1
       else logger.warn({ sku: l.sku, qty: l.qty, returnId }, 'Purchase return skipped: SKU not found')
     }
@@ -490,11 +512,19 @@ export async function restoreReturnStock(returnId: string, tx?: Tx): Promise<num
     .select()
     .from(schema.purchaseReturnItems)
     .where(eq(schema.purchaseReturnItems.returnId, returnId))
+  // A return leaves the shop the goods were received into, so it resolves
+  // through the original invoice rather than defaulting to the main store.
+  const [ret] = await client
+    .select({ invoiceId: schema.purchaseReturns.invoiceId })
+    .from(schema.purchaseReturns)
+    .where(eq(schema.purchaseReturns.id, returnId))
+    .limit(1)
+  const locationId = ret?.invoiceId ? await invoiceLocation(client, String(ret.invoiceId)) : null
   let restored = 0
   for (const l of lines) {
     const sku = String(l.sku ?? '')
     if (!sku) continue
-    if (await applyPurchaseStock(sku, Math.floor(Number(l.qty ?? 0)), { tx })) restored += 1
+    if (await applyPurchaseStock(sku, Math.floor(Number(l.qty ?? 0)), { locationId, tx })) restored += 1
   }
   return restored
 }
@@ -507,11 +537,17 @@ export async function reverseReturnStock(returnId: string, tx?: Tx): Promise<num
     .select()
     .from(schema.purchaseReturnItems)
     .where(eq(schema.purchaseReturnItems.returnId, returnId))
+  const [ret] = await client
+    .select({ invoiceId: schema.purchaseReturns.invoiceId })
+    .from(schema.purchaseReturns)
+    .where(eq(schema.purchaseReturns.id, returnId))
+    .limit(1)
+  const locationId = ret?.invoiceId ? await invoiceLocation(client, String(ret.invoiceId)) : null
   let reversed = 0
   for (const l of lines) {
     const sku = String(l.sku ?? '')
     if (!sku) continue
-    if (await applyPurchaseStock(sku, -Math.floor(Number(l.qty ?? 0)), { tx })) reversed += 1
+    if (await applyPurchaseStock(sku, -Math.floor(Number(l.qty ?? 0)), { locationId, tx })) reversed += 1
   }
   return reversed
 }

@@ -24,6 +24,10 @@ export const createOrderSchema = z.object({
   status: z.string().max(50).optional().or(z.literal('')),
   date: z.string().datetime().optional().or(z.literal('')),
   note: z.string().max(1000).optional().or(z.literal('')),
+  // Which shop the order was rung up at. Zod strips keys the schema does not
+  // declare, so omitting this here silently discarded the location before the
+  // handler ever saw it.
+  locationId: z.string().max(100).optional().or(z.literal('')),
   items: z.array(z.object({
     title: z.string().min(1).max(255),
     sku: z.string().max(100).optional(),

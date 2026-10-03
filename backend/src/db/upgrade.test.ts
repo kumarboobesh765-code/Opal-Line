@@ -46,6 +46,10 @@ const KEY_COLUMNS = [
   // fresh path creates is not evidence the upgrade path can.
   'stock_transfers.received_qty',
   'stock_transfers.variance',
+  // Same reason: these are ALTERed onto pre-existing tables, and a column the
+  // fresh path creates proves nothing about the upgrade path.
+  'sales_orders.location_id',
+  'purchase_invoices.location_id',
 ]
 
 test('upgrade restores the full purchase schema on a pre-purchase database', async (t) => {
@@ -81,6 +85,11 @@ test('upgrade restores the full purchase schema on a pre-purchase database', asy
       // Emulate an install that predates transfer receipt variance.
       await sql.unsafe('alter table stock_transfers drop column if exists received_qty')
       await sql.unsafe('alter table stock_transfers drop column if exists variance')
+      // …and one that predates per-location sales. purchase_invoices is dropped
+      // wholesale above, so its location_id is covered by the upgrade recreating
+      // the table rather than by the ALTER; the column assertion below still
+      // guards that it exists afterwards.
+      await sql.unsafe('alter table sales_orders drop column if exists location_id')
 
       assert.deepEqual(
         await purchaseTables(sql),

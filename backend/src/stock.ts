@@ -198,6 +198,36 @@ export async function ensureDefaultLocation(tx?: Tx): Promise<string> {
 }
 
 /**
+ * The location a document's stock should move against.
+ *
+ * Documents created before locations existed have no location, and resolving
+ * that to the default store is correct: it is exactly where their movements
+ * already went. An explicit id wins so a caller can always say where the goods
+ * really are.
+ */
+export async function resolveMovementLocation(explicit?: string | null, tx?: Tx): Promise<string> {
+  const value = explicit == null ? '' : String(explicit).trim()
+  return value || ensureDefaultLocation(tx)
+}
+
+/**
+ * Balance for ONE product at ONE location, on a caller-supplied client so it
+ * can join an in-flight transaction and see that transaction's own writes.
+ *
+ * Availability must be checked against this and not products.stock: the global
+ * rollup says a chain has 12 units when the branch actually being rung up has
+ * 2, and the sale would drive that branch negative.
+ */
+export async function levelAt(client: Client, productId: string, locationId: string): Promise<number> {
+  const [row] = await client
+    .select({ qty: schema.stockLevels.qty })
+    .from(schema.stockLevels)
+    .where(and(eq(schema.stockLevels.productId, productId), eq(schema.stockLevels.locationId, locationId)))
+    .limit(1)
+  return Math.floor(num(row?.qty))
+}
+
+/**
  * Applies one stock movement.
  *
  * Returns the product's new total across all locations, or null when the SKU

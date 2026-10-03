@@ -138,6 +138,11 @@ export const salesOrders = pgTable('sales_orders', {
   shippingAddress: jsonb('shipping_address'),
   isBooking: boolean('is_booking'),
   advancePaid: numericNumber('advance_paid'),
+  /**
+   * Where this order was rung up, so its stock movements — and every reversal
+   * of them — land on the same location's balance rather than the default one.
+   */
+  locationId: text('location_id'),
 }, (table) => ({
   shopifyIdIdx: uniqueIndex('sales_orders_shopify_id_idx').on(table.shopifyId),
   customerShopifyIdIdx: index('sales_orders_customer_shopify_id_idx').on(table.customerShopifyId),
@@ -226,6 +231,8 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   id: text('id').primaryKey(),
   number: text('number').notNull().unique(),
   supplier: text('supplier'),
+  /** Where the goods were received, so the stock lands in the right balance. */
+  locationId: text('location_id'),
   items: integer('items'),
   qty: integer('qty'),
   weight: numericNumber('weight'),
