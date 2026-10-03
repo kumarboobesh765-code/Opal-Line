@@ -65,9 +65,20 @@ test.describe('bulk fulfilment printing and pipeline moves', () => {
       expect(html).toContain('Deliver To')
       expect(html).toContain('Packed By')
     }
-    // At least one of the two must render a thumbnail <img> (the dev store
-    // products carry Shopify-hosted photos).
-    expect(printed.some((html) => html.includes('<img')), 'thumbnail img rendered for imaged products').toBe(true)
+    // At least one of the two must render a thumbnail <img>. Only meaningful
+    // when the products actually carry photos: the dev store syncs Shopify
+    // images, but a seeded database has none, and asserting a thumbnail there
+    // only proved the seed lacks images rather than that printing works.
+    const hasImagery = await page.evaluate(async () => {
+      const res = await fetch('/api/v1/db/products?limit=200')
+      if (!res.ok) return false
+      const body = await res.json() as { data?: Array<{ image?: string | null }> }
+      const rows = body.data ?? []
+      return rows.some((p) => typeof p.image === 'string' && p.image.length > 0)
+    })
+    if (hasImagery) {
+      expect(printed.some((html) => html.includes('<img')), 'thumbnail img rendered for imaged products').toBe(true)
+    }
   })
 
   test('order pipeline supports checkbox selection and bulk move toolbar', async ({ page }) => {
