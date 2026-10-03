@@ -75,17 +75,31 @@ export const salesInvoiceItems = [
   { id: 'INV007-I1', invoiceId: 'INV007', product: 'Silver Nose Pin', sku: 'SLV-NSP-00044', qty: 3, weight: 3, silverRate: 92.8, makingCharge: 15, tax: 3, amount: 465 },
 ]
 
+// Orders used to declare an `items` count but ship no line-item payload, so
+// everything downstream that reads `line_items` — packing slips, pick lists,
+// the bulk printer — treated every seeded order as empty and silently printed
+// nothing. Build the lines from the real products above so the count and the
+// payload agree, and so SKUs resolve against seeded product photos.
+type SeedLineItem = { title: string; sku: string; quantity: number; price: number }
+
+function seedLineItems(count: number, offset: number): SeedLineItem[] {
+  return Array.from({ length: count }, (_, i) => {
+    const p = products[(offset + i) % products.length]
+    return { title: p.name, sku: p.sku, quantity: 1, price: p.sellingPrice }
+  })
+}
+
 export const salesOrders = [
-  { id: 'O1', shopifyId: '#10235', internalId: 'SO-2026-00051', customer: 'Rajesh Kumar', value: 5230, payment: 'paid', fulfillment: 'processing', invoice: 'SI-2026-00047', status: 'processing', date: '2026-08-10T08:40:00', items: 3 },
-  { id: 'O2', shopifyId: '#10234', internalId: 'SO-2026-00050', customer: 'Priya Sharma', value: 1126.82, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00046', status: 'fulfilled', date: '2026-08-09T19:15:00', items: 1 },
-  { id: 'O3', shopifyId: '#10233', internalId: 'SO-2026-00049', customer: 'Amit Patel', value: 2527.1, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00045', status: 'fulfilled', date: '2026-08-09T13:58:00', items: 2 },
-  { id: 'O4', shopifyId: '#10232', internalId: 'SO-2026-00048', customer: 'Sneha Reddy', value: 1291.62, payment: 'pending', fulfillment: 'unfulfilled', invoice: 'SI-2026-00044', status: 'confirmed', date: '2026-08-08T11:30:00', items: 2 },
-  { id: 'O5', shopifyId: '#10231', internalId: 'SO-2026-00047', customer: 'Ananya Gupta', value: 1448.65, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00043', status: 'fulfilled', date: '2026-08-08T09:05:00', items: 1 },
-  { id: 'O6', shopifyId: '#10230', internalId: 'SO-2026-00046', customer: 'Vikram Singh', value: 2156.82, payment: 'pending', fulfillment: 'unfulfilled', invoice: 'SI-2026-00042', status: 'imported', date: '2026-08-07T20:25:00', items: 1 },
-  { id: 'O7', shopifyId: '#10229', internalId: 'SO-2026-00045', customer: 'Kavita Joshi', value: 332.69, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00041', status: 'fulfilled', date: '2026-08-07T17:41:00', items: 3 },
-  { id: 'O8', shopifyId: '#10228', internalId: 'SO-2026-00044', customer: 'Rohit Malhotra', value: 1840, payment: 'refunded', fulfillment: 'returned', invoice: 'SI-2026-00040', status: 'returned', date: '2026-08-06T15:10:00', items: 2 },
-  { id: 'O9', shopifyId: '#10227', internalId: 'SO-2026-00043', customer: 'Sneha Reddy', value: 995, payment: 'refunded', fulfillment: 'returned', invoice: 'SI-2026-00039', status: 'refunded', date: '2026-08-05T12:44:00', items: 1 },
-  { id: 'O10', shopifyId: '#10226', internalId: 'SO-2026-00042', customer: 'Amit Patel', value: 1210, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00038', status: 'fulfilled', date: '2026-08-04T10:02:00', items: 1 },
+  { id: 'O1', shopifyId: '#10235', internalId: 'SO-2026-00051', customer: 'Rajesh Kumar', value: 5230, payment: 'paid', fulfillment: 'processing', invoice: 'SI-2026-00047', status: 'processing', date: '2026-08-10T08:40:00', items: 3, lineItems: seedLineItems(3, 0) },
+  { id: 'O2', shopifyId: '#10234', internalId: 'SO-2026-00050', customer: 'Priya Sharma', value: 1126.82, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00046', status: 'fulfilled', date: '2026-08-09T19:15:00', items: 1, lineItems: seedLineItems(1, 3) },
+  { id: 'O3', shopifyId: '#10233', internalId: 'SO-2026-00049', customer: 'Amit Patel', value: 2527.1, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00045', status: 'fulfilled', date: '2026-08-09T13:58:00', items: 2, lineItems: seedLineItems(2, 4) },
+  { id: 'O4', shopifyId: '#10232', internalId: 'SO-2026-00048', customer: 'Sneha Reddy', value: 1291.62, payment: 'pending', fulfillment: 'unfulfilled', invoice: 'SI-2026-00044', status: 'confirmed', date: '2026-08-08T11:30:00', items: 2, lineItems: seedLineItems(2, 6) },
+  { id: 'O5', shopifyId: '#10231', internalId: 'SO-2026-00047', customer: 'Ananya Gupta', value: 1448.65, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00043', status: 'fulfilled', date: '2026-08-08T09:05:00', items: 1, lineItems: seedLineItems(1, 8) },
+  { id: 'O6', shopifyId: '#10230', internalId: 'SO-2026-00046', customer: 'Vikram Singh', value: 2156.82, payment: 'pending', fulfillment: 'unfulfilled', invoice: 'SI-2026-00042', status: 'imported', date: '2026-08-07T20:25:00', items: 1, lineItems: seedLineItems(1, 9) },
+  { id: 'O7', shopifyId: '#10229', internalId: 'SO-2026-00045', customer: 'Kavita Joshi', value: 332.69, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00041', status: 'fulfilled', date: '2026-08-07T17:41:00', items: 3, lineItems: seedLineItems(3, 10) },
+  { id: 'O8', shopifyId: '#10228', internalId: 'SO-2026-00044', customer: 'Rohit Malhotra', value: 1840, payment: 'refunded', fulfillment: 'returned', invoice: 'SI-2026-00040', status: 'returned', date: '2026-08-06T15:10:00', items: 2, lineItems: seedLineItems(2, 1) },
+  { id: 'O9', shopifyId: '#10227', internalId: 'SO-2026-00043', customer: 'Sneha Reddy', value: 995, payment: 'refunded', fulfillment: 'returned', invoice: 'SI-2026-00039', status: 'refunded', date: '2026-08-05T12:44:00', items: 1, lineItems: seedLineItems(1, 5) },
+  { id: 'O10', shopifyId: '#10226', internalId: 'SO-2026-00042', customer: 'Amit Patel', value: 1210, payment: 'paid', fulfillment: 'fulfilled', invoice: 'SI-2026-00038', status: 'fulfilled', date: '2026-08-04T10:02:00', items: 1, lineItems: seedLineItems(1, 7) },
 ]
 
 export const purchaseOrders = [

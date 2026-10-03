@@ -57,11 +57,23 @@ async function runMonthlyStatements(): Promise<void> {
   }
 }
 
+// setTimeout clamps any delay above 2^31-1 ms (~24.85 days) to 1 ms, firing
+// immediately. The next 1st-of-month is routinely ~29 days out, so an unclamped
+// timeout fired at once, re-armed, and ran the whole job again — a hot loop that
+// pinned a core and starved the event loop (health checks stopped responding).
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
+
 function schedule(): void {
   timer = setTimeout(() => {
+    const remaining = msUntilNextRun()
+    if (remaining > 0) {
+      // The clamped timer fired before the real due time. Re-arm only.
+      schedule()
+      return
+    }
     schedule()
     void runMonthlyStatements()
-  }, msUntilNextRun())
+  }, Math.min(msUntilNextRun(), MAX_TIMEOUT_MS))
   timer.unref()
 }
 

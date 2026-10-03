@@ -1352,6 +1352,54 @@ async function applyUpgrades(sql: postgres.Sql): Promise<void> {
       // Purchase lines, input-GST split, TCS and the supplier payment ledger.
       // These also live in createSchema, but that only runs on a brand-new
       // database — an existing install gets them from here.
+      //
+      // The three parent tables must be CREATED here, not just altered. An
+      // install whose bootstrap ran before purchases existed never had them,
+      // and every statement below (the ALTERs and the line-item tables, which
+      // reference these by foreign key) fails against a missing relation. Those
+      // failures are swallowed per-statement, so the install booted clean with
+      // a silently non-functional purchase module.
+      `CREATE TABLE IF NOT EXISTS purchase_orders (
+        id text PRIMARY KEY,
+        number text NOT NULL,
+        supplier text,
+        items integer,
+        qty integer,
+        weight numeric,
+        value numeric,
+        status text,
+        date timestamp
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_number_idx ON purchase_orders (number)`,
+      `CREATE INDEX IF NOT EXISTS purchase_orders_supplier_idx ON purchase_orders (supplier)`,
+      `CREATE TABLE IF NOT EXISTS purchase_invoices (
+        id text PRIMARY KEY,
+        number text NOT NULL,
+        supplier text,
+        items integer,
+        qty integer,
+        weight numeric,
+        rate numeric,
+        cost numeric,
+        tax numeric,
+        total numeric,
+        status text,
+        date timestamp
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS purchase_invoices_number_idx ON purchase_invoices (number)`,
+      `CREATE TABLE IF NOT EXISTS purchase_returns (
+        id text PRIMARY KEY,
+        number text NOT NULL,
+        supplier text,
+        items integer,
+        weight numeric,
+        amount numeric,
+        status text,
+        date timestamp
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS purchase_returns_number_idx ON purchase_returns (number)`,
+      `CREATE INDEX IF NOT EXISTS purchase_returns_supplier_idx ON purchase_returns (supplier)`,
+      `CREATE INDEX IF NOT EXISTS purchase_returns_date_idx ON purchase_returns (date)`,
       `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS paid_amount numeric DEFAULT 0`,
       `ALTER TABLE purchase_invoices ADD COLUMN IF NOT EXISTS order_id text`,
       `CREATE INDEX IF NOT EXISTS purchase_invoices_order_id_idx ON purchase_invoices (order_id)`,

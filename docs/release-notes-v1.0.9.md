@@ -61,6 +61,20 @@ These matter most on installs that predate v1.0.9:
 - **Purchase tables were never created on upgrade.** The purchase DDL lived only
   in the fresh-install path, so an existing installation that ran the upgrade
   found no purchase tables at all. The DDL now runs from the upgrade path too.
+  Both upgrade paths (`bootstrap.ts` and `migrate.ts`) now *create* the three
+  parent tables rather than only altering them — altering a table that was never
+  created fails, and because upgrade statements are swallowed per-statement the
+  install booted looking healthy with a completely non-functional purchase
+  module. Verified against a database reconstructed from a pre-purchase commit.
+- **The monthly statements scheduler could wedge the whole backend.** It armed a
+  `setTimeout` for the next 1st-of-month, roughly 29 days out. That exceeds the
+  2³¹−1 ms (~24.85 day) ceiling, so Node clamped it to 1 ms and fired
+  immediately; the callback re-armed and ran the whole job again, forever,
+  pinning a core until health checks stopped responding. Only schedulers further
+  out than ~24 days were affected.
+- **Seeded sales orders had no line items.** They declared an `items` count but
+  no `line_items` payload, so the bulk packing-slip printer treated every seeded
+  order as empty and printed nothing.
 - **Inter-state purchases were charged CGST+SGST.** The business state code was
   derived from the address instead of the GSTIN, so a purchase from outside the
   state was taxed twice at the state level. The GSTIN state code is now
@@ -87,6 +101,14 @@ the same tables up front.
 
 - Backend: 146/146 tests, `tsc --noEmit` clean.
 - Frontend: oxlint 0 warnings / 0 errors, `tsc -b` + production build OK.
+- E2E: 49 passed / 4 skipped / 0 failed (Playwright, against the dev stack).
+- Upgrade path: a database reconstructed from the pre-purchase commit
+  `d6de561`, with all purchase tables removed, was upgraded through both
+  `applyUpgrades` and `migrate.ts`; all 8 purchase/supplier-payment tables and
+  the `products.cost_price`, `purchase_invoices.order_id`,
+  `purchase_invoices.tcs_amount` and `purchase_returns.invoice_id` columns were
+  present afterwards. Before the fix the same run left 6 of the 8 tables missing
+  while reporting success.
 - Live checks against a real PostgreSQL database covering all seven purchase
   followups (50 assertions) plus 27 regression checks over the earlier purchase
   work, with the database returned to a clean state afterwards.
