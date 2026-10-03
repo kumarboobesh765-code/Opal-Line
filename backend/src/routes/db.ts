@@ -3,7 +3,7 @@ import { Router, type Request, type Response, json as expressJson } from 'expres
 import argon2 from 'argon2'
 import { desc, eq, ilike, inArray, or, sql, and, gte, lte } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
-import { applyStockMovement, transferStock, ensureDefaultLocation } from '../stock'
+import { applyStockMovement, transferStock, ensureDefaultLocation, resolveMovementLocation } from '../stock'
 import { requirePermission } from '../rbac'
 import { actorFromRequest, moduleLabel, recordActivity } from '../activity'
 import { encrypt, decrypt, mask, encryptSecret } from '../lib/crypto'
@@ -1803,6 +1803,8 @@ dbRouter.post('/purchase-invoices', requirePermission('purchase', 'create'), asy
     const tcs = computeTcs(totals.cost, body.tcsRate as number | null | undefined)
     const date = body.date ? String(body.date) : new Date().toISOString()
     const id = randomUUID()
+    // Where the goods are being received. Absent means the default store.
+    const locationId = await resolveMovementLocation(body.locationId as string | undefined)
 
     const result = await db!.transaction(async (tx) => {
       const [row] = await tx
@@ -1830,9 +1832,11 @@ dbRouter.post('/purchase-invoices', requirePermission('purchase', 'create'), asy
           orderId: body.orderId ? String(body.orderId) : null,
           status: String(body.status ?? 'pending'),
           date,
+          // Goods can be delivered to a branch rather than the main store.
+          locationId,
         } as any)
         .returning()
-      const saved = await saveInvoiceItems(tx as never, id, items, { addStock: true })
+      const saved = await saveInvoiceItems(tx as never, id, items, { addStock: true, locationId })
       return { row, saved }
     })
 
@@ -1918,7 +1922,7 @@ dbRouter.patch('/purchase-invoices/:id', requirePermission('purchase', 'edit'), 
         reversed = await reversePurchaseStock(existing.id, tx as never)
         await tx.delete(s.purchaseInvoiceItems).where(eq(s.purchaseInvoiceItems.invoiceId, existing.id))
         // A cancelled invoice still records its lines — they just don't move stock.
-        stocked = (await saveInvoiceItems(tx as never, existing.id, rawItems!, { addStock: !beingCancelled })).stocked
+        stocked = (await saveInvoiceItems(tx as never, existing.id, rawItems!, { addStock: !beingCancelled, locationId: existing.locationId ?? null })).stocked
       } else if (beingCancelled) {
         // Cancelling reverses the stock but KEEPS the lines, so the invoice
         // still shows what was received and can be reinstated as-is.
@@ -2128,6 +2132,18 @@ dbRouter.post('/purchase-returns', requirePermission('purchase', 'create'), asyn
     const totals = returnLineTotals(lines)
     const status = String(body.status ?? 'pending')
     const reverseStock = status === 'received'
+    // Goods go back to the shop they were received into, so resolve through the
+    // original invoice rather than defaulting to the main store.
+    const invoiceId = body.invoiceId ? String(body.invoiceId) : null
+    let existingInvoiceLocation: string | null = null
+    if (invoiceId) {
+      const [inv] = await db!
+        .select({ locationId: s.purchaseInvoices.locationId })
+        .from(s.purchaseInvoices)
+        .where(eq(s.purchaseInvoices.id, invoiceId))
+        .limit(1)
+      existingInvoiceLocation = inv?.locationId ?? null
+    }
 
     const id = randomUUID()
     const result = await db!.transaction(async (tx) => {
@@ -2137,7 +2153,7 @@ dbRouter.post('/purchase-returns', requirePermission('purchase', 'create'), asyn
           id,
           number,
           supplier,
-          invoiceId: body.invoiceId ? String(body.invoiceId) : null,
+          invoiceId: invoiceId,
           items: totals.items,
           weight: totals.weight,
           amount: totals.amount,
@@ -2145,7 +2161,7 @@ dbRouter.post('/purchase-returns', requirePermission('purchase', 'create'), asyn
           date: body.date ? String(body.date) : new Date().toISOString(),
         } as any)
         .returning()
-      const saved = await saveReturnLines(tx as never, id, lines, { reverseStock })
+      const saved = await saveReturnLines(tx as never, id, lines, { reverseStock, locationId: existingInvoiceLocation ?? null })
       return { row, saved }
     })
 
