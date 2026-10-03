@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { Router, type Request, type Response, json as expressJson } from 'express'
 import argon2 from 'argon2'
-import { desc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
+import { desc, eq, ilike, inArray, or, sql, and } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
+import { applyStockMovement, transferStock, ensureDefaultLocation } from '../stock'
 import { requirePermission } from '../rbac'
 import { actorFromRequest, moduleLabel, recordActivity } from '../activity'
 import { encrypt, decrypt, mask, encryptSecret } from '../lib/crypto'
@@ -258,11 +259,31 @@ dbRouter.post('/inventory/stock-count', requirePermission('inventory', 'edit'), 
     let applied = 0
     for (const c of rows) {
       try {
-        if (mode === 'set') {
-          await db!.update(s.products).set({ stock: c.counted }).where(eq(s.products.id, c.id))
-        } else {
-          await db!.update(s.products).set({ stock: sql`greatest(0, ${s.products.stock} + ${c.counted})` }).where(eq(s.products.id, c.id))
+        // A count is a correction, not a silent overwrite: record the delta as
+        // a count_adjust movement so the ledger explains the new balance.
+        const [product] = await db!
+          .select({ sku: s.products.sku, stock: s.products.stock })
+          .from(s.products)
+          .where(eq(s.products.id, c.id))
+          .limit(1)
+        if (!product) {
+          errors.push(`${c.id}: product not found`)
+          continue
         }
+        const current = Number(product.stock ?? 0)
+        const target = mode === 'set' ? c.counted : Math.max(0, current + c.counted)
+        const delta = target - current
+        if (delta === 0) {
+          applied++
+          continue
+        }
+        await applyStockMovement({
+          sku: String(product.sku ?? ''),
+          qty: delta,
+          type: 'count_adjust',
+          refType: 'stock_count',
+          note: mode === 'set' ? `counted ${target} (was ${current})` : `counted adjustment ${delta > 0 ? '+' : ''}${delta}`,
+        })
         applied++
       } catch (err) {
         errors.push(`${c.id}: ${err instanceof Error ? err.message : 'update failed'}`)
@@ -2187,6 +2208,109 @@ dbRouter.get('/inventory/locations/:id', oneOf(s.inventoryLocations, s.inventory
 
 dbRouter.get('/inventory/transfers', listOf(s.stockTransfers, s.stockTransfers.date))
 dbRouter.get('/inventory/transfers/:id', oneOf(s.stockTransfers, s.stockTransfers.id))
+
+// The stock ledger: every movement, newest first. Optionally filtered to one
+// SKU, which is what the product page shows.
+dbRouter.get('/inventory/movements', requirePermission('inventory', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const sku = typeof req.query.sku === 'string' ? req.query.sku.trim() : ''
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200) || 200))
+    const rows = sku
+      ? await db!.select().from(s.stockMovements).where(eq(s.stockMovements.sku, sku)).orderBy(desc(s.stockMovements.date)).limit(limit)
+      : await db!.select().from(s.stockMovements).orderBy(desc(s.stockMovements.date)).limit(limit)
+    res.json(rows)
+  } catch (err) {
+    logger.error({ err }, 'stock movements list failed')
+    res.status(500).json({ error: 'Could not load stock movements' })
+  }
+})
+
+// Stock on hand per location for one product, or for everything.
+dbRouter.get('/inventory/levels', requirePermission('inventory', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const sku = typeof req.query.sku === 'string' ? req.query.sku.trim() : ''
+    const rows = sku
+      ? await db!.select().from(s.stockLevels).innerJoin(s.products, eq(s.products.id, s.stockLevels.productId)).where(eq(s.products.sku, sku))
+      : await db!.select().from(s.stockLevels)
+    res.json(rows.map((r) => {
+      const level = 'stock_levels' in r ? r.stock_levels : r
+      const product = 'products' in r ? r.products : null
+      return {
+        productId: level.productId,
+        sku: product?.sku ?? null,
+        locationId: level.locationId,
+        qty: Number(level.qty ?? 0),
+      }
+    }))
+  } catch (err) {
+    logger.error({ err }, 'stock levels list failed')
+    res.status(500).json({ error: 'Could not load stock levels' })
+  }
+})
+
+// Create a transfer. This is what makes a transfer actually move stock: the
+// record and the paired ledger movements are written together, so the document
+// and the balances can never disagree.
+dbRouter.post('/inventory/transfers', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const sku = String(req.body?.sku ?? '').trim()
+    const qty = Math.floor(Number(req.body?.qty ?? 0))
+    const from = String(req.body?.from ?? '').trim()
+    const to = String(req.body?.to ?? '').trim()
+    if (!sku || qty <= 0 || !from || !to) {
+      return res.status(400).json({ error: 'sku, qty, from and to are required' })
+    }
+    if (from === to) return res.status(400).json({ error: 'Source and destination must differ' })
+
+    const [product] = await db!.select({ id: s.products.id, name: s.products.name }).from(s.products).where(eq(s.products.sku, sku)).limit(1)
+    if (!product) return res.status(404).json({ error: `Unknown SKU ${sku}` })
+
+    const number = String(req.body?.number ?? '').trim() || `ST-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
+    const id = randomUUID()
+    const created = await db!.transaction(async (tx) => {
+      const [fromLevel] = await tx.select({ qty: s.stockLevels.qty }).from(s.stockLevels).where(and(eq(s.stockLevels.productId, product.id), eq(s.stockLevels.locationId, from))).limit(1)
+      const available = Number(fromLevel?.qty ?? 0)
+      if (available < qty) {
+        throw Object.assign(new Error(`Only ${available} in stock at ${from}, tried to move ${qty}`), { status: 400 })
+      }
+      await transferStock({
+        sku,
+        qty,
+        fromLocationId: from,
+        toLocationId: to,
+        refType: 'stock_transfer',
+        refId: id,
+        createdBy: actorFromRequest(req).userId ?? 'system',
+      })
+      const [row] = await tx
+        .insert(s.stockTransfers)
+        .values({
+          id,
+          number,
+          from,
+          to,
+          product: product.name ?? null,
+          sku,
+          qty,
+          initiatedBy: actorFromRequest(req).userId ?? 'system',
+          status: 'completed',
+          date: new Date().toISOString(),
+        })
+        .returning()
+      return row
+    })
+
+    recordCrud('stockTransfers', 'Created', req, { number, sku, qty, from, to })
+    res.status(201).json(created)
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    if (status === 500) logger.error({ err }, 'stock transfer failed')
+    res.status(status).json({ error: err instanceof Error ? err.message : 'Transfer failed' })
+  }
+})
 
 dbRouter.get('/bank-accounts', async (req, res) => {
   if (!requireDb(res)) return

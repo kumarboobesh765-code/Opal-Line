@@ -107,6 +107,7 @@ export default function ProductDetailPage() {
   const makingCharge = product.makingCharge ?? 0
   const stock = product.stock ?? 0
   const reorderLevel = product.reorderLevel ?? 0
+  const costPrice = Number(product.costPrice ?? 0)
   const silverValue = netWeight * rate
   const makingTotal = netWeight * makingCharge
   const subtotal = silverValue + makingTotal
@@ -316,8 +317,16 @@ export default function ProductDetailPage() {
               <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
                 <MiniStat label="Available" value={`${stock} pcs`} />
                 <MiniStat label="Weight on hand" value={formatWeight(netWeight * stock)} />
-                <MiniStat label="Inventory value" value={formatCurrency(silverValue * stock)} />
-                <MiniStat label="Low stock at" value={`${reorderLevel} pcs`} />
+                <MiniStat
+                  label="Value at cost"
+                  value={costPrice > 0 ? formatCurrency(costPrice * stock) : '—'}
+                  sub={costPrice > 0 ? `₹${costPrice.toFixed(0)}/pc` : 'no purchase cost yet'}
+                />
+                <MiniStat
+                  label="Value at retail"
+                  value={formatCurrency(silverValue * stock)}
+                  sub={costPrice > 0 && silverValue > 0 ? `margin ${(((silverValue - costPrice) / silverValue) * 100).toFixed(1)}%` : undefined}
+                />
               </div>
             </CardContent>
           </Card>
@@ -385,11 +394,12 @@ function PriceRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-md border bg-card p-3">
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-0.5 text-sm font-semibold text-foreground">{value}</p>
+      {sub ? <p className="mt-0.5 text-[11px] text-muted-foreground">{sub}</p> : null}
     </div>
   )
 }

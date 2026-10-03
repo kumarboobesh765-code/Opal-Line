@@ -45,6 +45,44 @@ async function tableExists(sql: postgres.Sql, name: string): Promise<boolean> {
   return rows.length > 0
 }
 
+/**
+ * Per-location stock balances and the append-only movement ledger.
+ *
+ * Declared once and applied from both createSchema (fresh installs) and
+ * applyUpgrades (existing installs). The purchase tables showed exactly what
+ * happens when that DDL is duplicated and the copies drift: an existing
+ * install never received the tables and booted looking healthy.
+ */
+const STOCK_LEDGER_DDL: string[] = [
+  `CREATE TABLE IF NOT EXISTS stock_levels (
+    product_id text NOT NULL,
+    location_id text NOT NULL,
+    qty integer NOT NULL DEFAULT 0,
+    CONSTRAINT stock_levels_product_location_idx UNIQUE (product_id, location_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS stock_levels_location_idx ON stock_levels (location_id)`,
+  `CREATE TABLE IF NOT EXISTS stock_movements (
+    id text PRIMARY KEY,
+    product_id text,
+    sku text,
+    location_id text,
+    type text NOT NULL,
+    qty numeric NOT NULL,
+    stock_after numeric,
+    unit_cost numeric,
+    ref_type text,
+    ref_id text,
+    note text,
+    created_by text,
+    date timestamp
+  )`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_sku_idx ON stock_movements (sku)`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_product_id_idx ON stock_movements (product_id)`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_location_id_idx ON stock_movements (location_id)`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_date_idx ON stock_movements (date)`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_ref_idx ON stock_movements (ref_type, ref_id)`,
+]
+
 async function createSchema(sql: postgres.Sql): Promise<void> {
   await sql.begin(async (tx) => {
     // ── Identity ──────────────────────────────────────────────────────────
@@ -563,6 +601,8 @@ async function createSchema(sql: postgres.Sql): Promise<void> {
         date timestamp
       )`)
     await tx.unsafe(`CREATE UNIQUE INDEX IF NOT EXISTS stock_transfers_number_idx ON stock_transfers (number)`)
+
+    for (const stmt of STOCK_LEDGER_DDL) await tx.unsafe(stmt)
 
     // ── Finance ───────────────────────────────────────────────────────────
     await tx.unsafe(`
@@ -1087,6 +1127,8 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
  */
 async function applyUpgrades(sql: postgres.Sql): Promise<void> {
   const upgrades: string[] = [
+    ...STOCK_LEDGER_DDL,
+    `INSERT INTO inventory_locations (id, name, type) VALUES ('LOC-DEFAULT', 'Main Store', 'store') ON CONFLICT DO NOTHING`,
       `CREATE TABLE IF NOT EXISTS loyalty_transactions (
         id text PRIMARY KEY,
         customer_id text NOT NULL,

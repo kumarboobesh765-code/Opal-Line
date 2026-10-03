@@ -6,6 +6,7 @@ import { db } from './db/client'
 import * as schema from './db/schema'
 import { decryptSecret } from './lib/crypto'
 import { recountCustomerStatsBoth } from './customerStats'
+import { applyStockMovement } from './stock'
 import { logger } from './logger'
 
 /**
@@ -728,10 +729,7 @@ async function nextInvoiceNumber(prefix: string): Promise<string> {
 async function deductStock(tx: any, sku: string, qty: number): Promise<void> {
   if (!sku || !qty) return
   try {
-    const [row] = await tx.select({ stock: schema.products.stock }).from(schema.products).where(eq(schema.products.sku, sku)).limit(1).for('update')
-    if (!row) return
-    const next = Number(row.stock ?? 0) - qty
-    await tx.update(schema.products).set({ stock: next }).where(eq(schema.products.sku, sku))
+    await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'email_order', tx })
   } catch { /* stock tracking optional for email orders */ }
 }
 

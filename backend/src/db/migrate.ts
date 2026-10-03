@@ -207,6 +207,40 @@ async function main() {
   await client.unsafe(`CREATE INDEX IF NOT EXISTS "supplier_payment_allocations_payment_id_idx" ON "supplier_payment_allocations" ("payment_id");`)
   await client.unsafe(`CREATE INDEX IF NOT EXISTS "supplier_payment_allocations_invoice_id_idx" ON "supplier_payment_allocations" ("invoice_id");`)
 
+  console.log('Stock ledger and per-location balances (idempotent)...')
+  // Self-contained (no foreign keys), so this is safe on any database. Mirrors
+  // STOCK_LEDGER_DDL in bootstrap.ts — keep the two in step.
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "stock_levels" (
+      "product_id" text NOT NULL,
+      "location_id" text NOT NULL,
+      "qty" integer NOT NULL DEFAULT 0,
+      CONSTRAINT "stock_levels_product_location_idx" UNIQUE ("product_id", "location_id")
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_levels_location_idx" ON "stock_levels" ("location_id");`)
+  await client.unsafe(`
+    CREATE TABLE IF NOT EXISTS "stock_movements" (
+      "id" text PRIMARY KEY NOT NULL,
+      "product_id" text,
+      "sku" text,
+      "location_id" text,
+      "type" text NOT NULL,
+      "qty" numeric NOT NULL,
+      "stock_after" numeric,
+      "unit_cost" numeric,
+      "ref_type" text,
+      "ref_id" text,
+      "note" text,
+      "created_by" text,
+      "date" timestamp
+    );`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_sku_idx" ON "stock_movements" ("sku");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_product_id_idx" ON "stock_movements" ("product_id");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_location_id_idx" ON "stock_movements" ("location_id");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_date_idx" ON "stock_movements" ("date");`)
+  await client.unsafe(`CREATE INDEX IF NOT EXISTS "stock_movements_ref_idx" ON "stock_movements" ("ref_type", "ref_id");`)
+  await client.unsafe(`INSERT INTO "inventory_locations" ("id", "name", "type") VALUES ('LOC-DEFAULT', 'Main Store', 'store') ON CONFLICT DO NOTHING;`)
+
   console.log('Seeding default roles (idempotent)...')
   for (const [i, name] of roleNames.entries()) {
     const existing = await db.select().from(schema.roles).where(eq(schema.roles.name, name)).limit(1)

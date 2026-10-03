@@ -11,6 +11,7 @@ import { config, isConfigured, loadSecretsFromDb } from './config'
 import { applyPriceSync, applySilverRate, createShopifyDraftOrder, ensureSynced, getLatestSilverRate, importShopifyOrders, purgeProducts, pushInventoryToShopify, pushProductPriceToShopify, pushProductsToShopify, runSync, store, syncProductsToDb, testShopifyConnection, updateShopifyOrder } from './shopify'
 import type { SyncResource } from './types'
 import { db, schema, checkDbHealth, getDbStats } from './db/client'
+import { applyStockMovement } from './stock'
 import { authRouter } from './routes/auth'
 import { dbRouter } from './routes/db'
 import { dashboardRouter } from './routes/dashboard'
@@ -306,10 +307,7 @@ app.post('/api/v1/webhooks/shopify', verifyShopifyWebhook, rejectReplayedWebhook
                 .limit(1)
                 .for('update')
               if (!p) continue
-              await tx
-                .update(schema.products)
-                .set({ stock: sql`${schema.products.stock} + ${qty}` })
-                .where(eq(schema.products.sku, sku))
+              await applyStockMovement({ sku, qty, type: 'sale_return_in', refType: 'sales_order', tx })
               itemsRestored += qty
             }
             await tx
@@ -1665,7 +1663,7 @@ app.post('/api/v1/shopify/orders/create', requirePermission('shopify', 'create')
         if (current - qty < 0) {
           throw new Error(`Insufficient stock for SKU ${sku}: available ${current}, requested ${qty}`)
         }
-        await tx.update(schema.products).set({ stock: sql`${schema.products.stock} - ${qty}` }).where(eq(schema.products.sku, sku))
+        await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'sales_order', tx })
         affectedProductIds.push(row.id)
       }
 
@@ -1831,10 +1829,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
           const sku = String(oi?.sku ?? '').trim()
           const qty = Math.max(0, Math.floor(Number(oi?.quantity ?? 0)))
           if (!sku || qty <= 0) continue
-          await tx
-            .update(schema.products)
-            .set({ stock: sql`${schema.products.stock} + ${qty}` })
-            .where(eq(schema.products.sku, sku))
+          await applyStockMovement({ sku, qty, type: 'sale_return_in', refType: 'sales_order', tx })
         }
         for (const li of mappedLineItems) {
           const sku = String(li.sku ?? '').trim()
@@ -1846,7 +1841,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
           if (current - qty < 0) {
             throw new Error(`Insufficient stock for SKU ${sku}: available ${current}, requested ${qty}`)
           }
-          await tx.update(schema.products).set({ stock: sql`${schema.products.stock} - ${qty}` }).where(eq(schema.products.sku, sku))
+          await applyStockMovement({ sku, qty: -qty, type: 'sale_out', refType: 'sales_order', tx })
           affectedProductIds.push(row.id)
         }
         const [u] = await tx

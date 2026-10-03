@@ -277,6 +277,36 @@ export default function ProductsPage() {
       { accessorKey: 'makingCharge', header: 'Making', cell: ({ row }) => <span className="tabular-nums text-muted-foreground">{row.original.makingCharge != null ? `${row.original.makingCharge} ₹/g` : '—'}</span>, meta: { align: 'right' as const } },
       { accessorKey: 'silverRate', header: 'Silver Rate', cell: ({ row }) => <span className="tabular-nums text-muted-foreground">₹{row.original.silverRate?.toFixed(2) ?? '—'}/g</span>, meta: { align: 'right' as const } },
       { accessorKey: 'sellingPrice', header: 'Selling Price', cell: ({ row }) => <span className="font-semibold tabular-nums text-foreground">{formatCurrency(row.original.sellingPrice)}</span>, meta: { align: 'right' as const } },
+      {
+        id: 'cost',
+        header: 'Cost',
+        meta: { align: 'right' as const },
+        cell: ({ row }) => {
+          const cost = row.original.costPrice
+          if (cost == null || !Number.isFinite(cost) || cost <= 0) {
+            return <span className="text-[11px] text-muted-foreground">not set</span>
+          }
+          return <span className="tabular-nums text-muted-foreground">{formatCurrency(cost)}</span>
+        },
+      },
+      {
+        id: 'margin',
+        header: 'Margin',
+        meta: { align: 'right' as const },
+        cell: ({ row }) => {
+          const cost = row.original.costPrice
+          const sell = row.original.sellingPrice
+          if (cost == null || !Number.isFinite(cost) || cost <= 0 || !sell) {
+            return <span className="text-[11px] text-muted-foreground">—</span>
+          }
+          const pct = ((sell - cost) / sell) * 100
+          return (
+            <span className={cn('tabular-nums', pct < 10 ? 'text-warning-600' : 'text-success-600')}>
+              {pct.toFixed(1)}%
+            </span>
+          )
+        },
+      },
       { accessorKey: 'stock', header: 'Stock', cell: ({ row }) => {
         const stock = row.original.stock ?? 0
         const low = stock <= (row.original.reorderLevel ?? 0)

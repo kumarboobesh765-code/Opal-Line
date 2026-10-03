@@ -1098,31 +1098,59 @@ dashboardRouter.get('/reports/gst/export', async (req, res) => {
 dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
   if (!requireDb(res)) return
   try {
-    const [items, products] = await Promise.all([
-      db!.select().from(schema.salesInvoiceItems),
-      db!.select().from(schema.products),
-    ])
+    // Velocity needs the invoice date, and must ignore cancelled invoices —
+    // counting them made stock look like it sold more than it did.
+    const items = await db!
+      .select({
+        sku: schema.salesInvoiceItems.sku,
+        qty: schema.salesInvoiceItems.qty,
+        date: schema.salesInvoices.date,
+        status: schema.salesInvoices.status,
+      })
+      .from(schema.salesInvoiceItems)
+      .innerJoin(schema.salesInvoices, eq(schema.salesInvoices.id, schema.salesInvoiceItems.invoiceId))
 
-    const salesBySku = new Map<string, number>()
+    const [products] = await Promise.all([db!.select().from(schema.products)])
+
+    const salesBySku = new Map<string, { qty: number; firstSale: number }>()
     for (const it of items) {
       const sku = String(it.sku ?? '').toLowerCase()
       if (!sku) continue
-      salesBySku.set(sku, (salesBySku.get(sku) ?? 0) + num(it.qty))
+      if (String(it.status ?? '').toLowerCase() === 'cancelled') continue
+      const soldAt = it.date ? new Date(String(it.date)).getTime() : NaN
+      const entry = salesBySku.get(sku) ?? { qty: 0, firstSale: Number.POSITIVE_INFINITY }
+      entry.qty += num(it.qty)
+      if (!Number.isNaN(soldAt) && soldAt < entry.firstSale) entry.firstSale = soldAt
+      salesBySku.set(sku, entry)
     }
 
     const now = Date.now()
     const msPerDay = 86400000
+    // Cap the window so a slow starter doesn't drag the average down forever,
+    // while still giving a recent product a window proportional to its life.
+    const MAX_WINDOW_DAYS = 180
 
     const results = products.map((p) => {
       const sku = String(p.sku ?? '').toLowerCase()
-      const totalSold = salesBySku.get(sku) ?? 0
-      const createdAt = p.createdAt ? new Date(String(p.createdAt)) : null
-      const daysSinceCreation = createdAt && !Number.isNaN(createdAt.getTime()) ? Math.max(1, Math.floor((now - createdAt.getTime()) / msPerDay)) : 1
-      const avgDailySales = totalSold / daysSinceCreation
+      const entry = salesBySku.get(sku)
+      const totalSold = entry?.qty ?? 0
+      // Measure demand over the period the product has actually been selling,
+      // not since the row was created. A product listed two years ago and selling
+      // steadily every week was being reported as near-dead.
+      const activeDays =
+        entry && Number.isFinite(entry.firstSale)
+          ? Math.min(MAX_WINDOW_DAYS, Math.max(1, Math.floor((now - entry.firstSale) / msPerDay)))
+          : MAX_WINDOW_DAYS
+      const avgDailySales = totalSold / activeDays
       const stock = num(p.stock)
       const daysOfStock = avgDailySales > 0 ? Math.round(stock / avgDailySales) : 999
       const demandLevel: 'high' | 'medium' | 'low' | 'none' = avgDailySales >= 2 ? 'high' : avgDailySales >= 0.5 ? 'medium' : avgDailySales > 0 ? 'low' : 'none'
       const stockValue = round2(stock * num(p.sellingPrice))
+      // Inventory value is what the stock cost, not what it would sell for.
+      // Both are reported so margin on hand is visible too.
+      const stockValueAtCost = round2(stock * num(p.costPrice))
+      const potentialMargin = round2(stockValue - stockValueAtCost)
+      const marginPct = stockValue > 0 ? round2((potentialMargin / stockValue) * 100) : 0
 
       return {
         id: p.id,
@@ -1136,6 +1164,10 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
         daysOfStock,
         demandLevel,
         stockValue,
+        stockValueAtCost,
+        potentialMargin,
+        marginPct,
+        activeDays,
       }
     })
 
@@ -1146,6 +1178,10 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
     const mediumDemand = top50.filter((p) => p.demandLevel === 'medium').length
     const atRisk = top50.filter((p) => p.avgDailySales > 0 && p.daysOfStock <= 7).length
     const totalStockValue = round2(top50.reduce((a, p) => a + p.stockValue, 0))
+    const totalStockValueAtCost = round2(top50.reduce((a, p) => a + p.stockValueAtCost, 0))
+    const totalPotentialMargin = round2(totalStockValue - totalStockValueAtCost)
+
+    res.setHeader('Cache-Control', 'no-store')
 
     res.json({
       products: top50,
@@ -1155,6 +1191,8 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
         mediumDemand,
         atRisk,
         totalStockValue,
+        totalStockValueAtCost,
+        totalPotentialMargin,
       },
     })
   } catch (err) {

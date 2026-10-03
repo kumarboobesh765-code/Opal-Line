@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm'
 import { db } from './db/client'
 import * as schema from './db/schema'
+import { applyStockMovement } from './stock'
 import { logger } from './logger'
 
 /**
@@ -161,30 +162,19 @@ export async function applyPurchaseStock(
   qty: number,
   opts?: { unitValue?: number; tx?: Tx },
 ): Promise<boolean> {
-  const client = opts?.tx ?? db
-  if (!client || !sku || !qty) return false
-  const delta = Math.floor(qty)
-  if (delta === 0) return false
-  const [row] = await client
-    .select({ id: schema.products.id, stock: schema.products.stock, costPrice: schema.products.costPrice })
-    .from(schema.products)
-    .where(eq(schema.products.sku, sku))
-    .limit(1)
-  if (!row) return false
-
-  const patch: Record<string, unknown> = { stock: sql`${schema.products.stock} + ${delta}` }
-  const unitValue = Number(opts?.unitValue ?? 0)
-  const oldStock = Number(row.stock ?? 0)
-  if (delta > 0 && unitValue > 0) {
-    const newStock = oldStock + delta
-    const oldCost = Number(row.costPrice ?? 0)
-    // A product with stock on hand but no cost recorded: adopt the buy price
-    // rather than averaging against a meaningless zero.
-    const weighted = oldStock > 0 && oldCost > 0 ? (oldStock * oldCost + delta * unitValue) / newStock : unitValue
-    patch.costPrice = round2(weighted)
-  }
-  await client.update(schema.products).set(patch as never).where(eq(schema.products.id, row.id))
-  return true
+  const delta = Math.floor(Number(qty ?? 0))
+  if (!sku || delta === 0) return false
+  // Stock-in and stock-reversal share the ledger; the sign of qty decides
+  // which way it moves and whether cost is revalued.
+  const result = await applyStockMovement({
+    sku,
+    qty: delta,
+    type: delta > 0 ? 'purchase_in' : 'purchase_return_out',
+    unitCost: Number(opts?.unitValue ?? 0),
+    refType: 'purchase_invoice',
+    tx: opts?.tx,
+  })
+  return result !== null
 }
 
 /** Reverse the stock a purchase invoice added (edit / cancel / delete). */

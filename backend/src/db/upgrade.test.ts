@@ -32,6 +32,8 @@ const PURCHASE_TABLES = [
   'supplier_payment_allocations',
 ]
 
+const STOCK_TABLES = ['stock_levels', 'stock_movements']
+
 const KEY_COLUMNS = [
   'products.cost_price',
   'purchase_invoices.order_id',
@@ -68,7 +70,7 @@ test('upgrade restores the full purchase schema on a pre-purchase database', asy
       await sql.unsafe(
         `drop table if exists purchase_return_items, purchase_invoice_items, purchase_order_items,
            supplier_payment_allocations, supplier_payments, purchase_returns,
-           purchase_invoices, purchase_orders cascade`,
+           purchase_invoices, purchase_orders, stock_movements, stock_levels cascade`,
       )
       await sql.unsafe('alter table products drop column if exists cost_price')
 
@@ -88,6 +90,17 @@ test('upgrade restores the full purchase schema on a pre-purchase database', asy
         [...PURCHASE_TABLES].sort(),
         'upgrade must produce every purchase table',
       )
+
+      // …and so must the stock ledger and per-location balances.
+      for (const table of STOCK_TABLES) {
+        const rows = await sql.unsafe(
+          `select 1 from information_schema.tables where table_schema = 'public' and table_name = $1`,
+          [table],
+        )
+        assert.equal(rows.length, 1, `upgrade must produce ${table}`)
+      }
+      const [defaultLoc] = await sql.unsafe(`select id from inventory_locations where id = 'LOC-DEFAULT'`)
+      assert.ok(defaultLoc, 'upgrade must seed the default stock location')
 
       // …and the columns added alongside them.
       for (const col of KEY_COLUMNS) {

@@ -362,6 +362,8 @@ export interface Product {
   supplier: string
   silverRate: number
   sellingPrice: number
+  /** Weighted-average unit cost, maintained from purchase invoices. */
+  costPrice?: number | null
   compareAtPrice?: number | null
   stock: number
   reorderLevel: number

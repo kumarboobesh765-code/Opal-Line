@@ -489,6 +489,10 @@ export const dbApi = {
         daysOfStock: number
         demandLevel: 'high' | 'medium' | 'low' | 'none'
         stockValue: number
+        stockValueAtCost: number
+        potentialMargin: number
+        marginPct: number
+        activeDays: number
       }>
       summary: {
         totalProducts: number
@@ -496,8 +500,43 @@ export const dbApi = {
         mediumDemand: number
         atRisk: number
         totalStockValue: number
+        totalStockValueAtCost: number
+        totalPotentialMargin: number
       }
     }
+  },
+  /** Append-only stock ledger, optionally scoped to one SKU. */
+  getStockMovements: async (sku?: string) => {
+    const qs = sku ? `?sku=${encodeURIComponent(sku)}&limit=200` : '?limit=200'
+    const res = await request(`/db/inventory/movements${qs}`)
+    return res as Array<{
+      id: string
+      productId: string | null
+      sku: string | null
+      locationId: string | null
+      type: string
+      qty: number
+      stockAfter: number | null
+      unitCost: number | null
+      refType: string | null
+      refId: string | null
+      note: string | null
+      createdBy: string | null
+      date: string | null
+    }>
+  },
+  /** Stock on hand per location. */
+  getStockLevels: async (sku?: string) => {
+    const qs = sku ? `?sku=${encodeURIComponent(sku)}` : ''
+    const res = await request(`/db/inventory/levels${qs}`)
+    return res as Array<{ productId: string; sku: string | null; locationId: string; qty: number }>
+  },
+  /** Move stock between locations. This is what makes a transfer actually move stock. */
+  createStockTransfer: async (body: { sku: string; qty: number; from: string; to: string; number?: string }) => {
+    return request<{ id: string; number: string; status: string }>('/db/inventory/transfers', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
   },
   search: (q: string) =>
     request<SearchResults>(`/db/search?q=${encodeURIComponent(q)}`),

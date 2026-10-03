@@ -451,6 +451,55 @@ export const stockTransfers = pgTable('stock_transfers', {
   dateIdx: index('stock_transfers_date_idx').on(table.date),
 }))
 
+/**
+ * Per-location stock balance.
+ *
+ * Stock used to live only on products.stock, which made it impossible to say
+ * how much was in which store or why a balance changed. This holds the balance
+ * per location; products.stock is kept as the rollup across all locations so
+ * every existing query keeps working.
+ */
+export const stockLevels = pgTable('stock_levels', {
+  productId: text('product_id').notNull(),
+  locationId: text('location_id').notNull(),
+  qty: integer('qty').notNull().default(0),
+}, (table) => ({
+  productLocationIdx: uniqueIndex('stock_levels_product_location_idx').on(table.productId, table.locationId),
+  locationIdx: index('stock_levels_location_idx').on(table.locationId),
+}))
+
+/**
+ * Append-only record of every stock change.
+ *
+ * Every write goes through applyStockMovement in src/stock.ts, so this is the
+ * audit trail for a balance: what moved, which direction, why, and what the
+ * balance became. Nothing here is ever updated or deleted.
+ */
+export const stockMovements = pgTable('stock_movements', {
+  id: text('id').primaryKey(),
+  productId: text('product_id'),
+  sku: text('sku'),
+  locationId: text('location_id'),
+  /** purchase_in, purchase_return_out, sale_out, sale_return_in, transfer_in, transfer_out, count_adjust, shopify_sync, manual */
+  type: text('type').notNull(),
+  /** Signed: positive adds stock, negative removes it. */
+  qty: numericNumber('qty').notNull(),
+  /** Balance at this location immediately after the movement. */
+  stockAfter: numericNumber('stock_after'),
+  unitCost: numericNumber('unit_cost'),
+  refType: text('ref_type'),
+  refId: text('ref_id'),
+  note: text('note'),
+  createdBy: text('created_by'),
+  date: ts('date'),
+}, (table) => ({
+  skuIdx: index('stock_movements_sku_idx').on(table.sku),
+  productIdx: index('stock_movements_product_id_idx').on(table.productId),
+  locationIdx: index('stock_movements_location_id_idx').on(table.locationId),
+  dateIdx: index('stock_movements_date_idx').on(table.date),
+  refIdx: index('stock_movements_ref_idx').on(table.refType, table.refId),
+}))
+
 export const bankAccounts = pgTable('bank_accounts', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),

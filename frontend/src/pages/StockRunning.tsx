@@ -36,6 +36,10 @@ export interface StockRunningProduct {
   daysOfStock: number
   demandLevel: 'high' | 'medium' | 'low' | 'none'
   stockValue: number
+  stockValueAtCost: number
+  potentialMargin: number
+  marginPct: number
+  activeDays: number
 }
 
 interface StockRunningResponse {
@@ -46,6 +50,8 @@ interface StockRunningResponse {
     mediumDemand: number
     atRisk: number
     totalStockValue: number
+    totalStockValueAtCost: number
+    totalPotentialMargin: number
   }
 }
 
@@ -153,9 +159,9 @@ export default function StockRunningPage() {
       },
       {
         accessorKey: 'stockValue',
-        header: 'Stock Value',
+        header: 'Value at Cost',
         meta: { align: 'right' as const },
-        cell: ({ row }) => <span className="font-mono tabular-nums text-foreground">{formatCurrency(row.original.stockValue)}</span>,
+        cell: ({ row }) => <span className="font-mono tabular-nums text-foreground">{formatCurrency(row.original.stockValueAtCost)}</span>,
       },
       {
         accessorKey: 'demandLevel',
@@ -213,8 +219,11 @@ export default function StockRunningPage() {
         </Card>
         <Card>
           <CardContent className="p-5">
-            <p className="text-sm text-muted-foreground">Total Stock Value</p>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(data?.summary.totalStockValue || 0)}</p>
+            <p className="text-sm text-muted-foreground">Inventory Value at Cost</p>
+            <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{formatCurrency(data?.summary.totalStockValueAtCost || 0)}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Retail {formatCurrency(data?.summary.totalStockValue || 0)} · margin {formatCurrency(data?.summary.totalPotentialMargin || 0)}
+            </p>
           </CardContent>
         </Card>
       </div>
