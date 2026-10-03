@@ -23,6 +23,11 @@ Not outstanding. Listed so the next reader can see what is already done.
   rollup. Transfers move stock for real, stock counts record an adjustment
   instead of overwriting silently, and inventory value is reported at cost with
   retail and margin alongside.
+- **Transfers UI and stock history** — transfers follow dispatch → receive →
+  cancel, the Transfers page shows per-location availability and offers a
+  Dispatch action, and the product page carries a Stock History tab that
+  explains any balance on screen. Installations that predate the ledger are
+  backfilled with dated opening movements on boot.
 
 ## Known gaps in what shipped
 
@@ -48,9 +53,11 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   which is why the packing-slip thumbnail assertion is now conditional.
 - **Stock predates the ledger.** Existing balances were never backfilled as
   movements; the first movement for a product at the default location adopts
-  its pre-existing balance as an opening entry. Any product whose stock changed
-  before the ledger existed therefore has no history, and its opening balance
-  appears dated to whenever that first sale or purchase happened.
+  its pre-existing balance as an opening entry. The opening-balance backfill now
+  runs on boot and dates the entry from the product's own creation date, so
+  pre-ledger products have real history — but the backfill cannot know *when*
+  the stock actually arrived, so the quantity is the current balance as of the
+  upgrade and any earlier in-and-out is invisible.
 - **Location stock starts empty.** A new location begins at zero and is not
   seeded from the current balance, so opening a second store means counting it
   rather than splitting the existing position.
@@ -63,12 +70,6 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   GitHub's `ubuntu-latest` → Ubuntu 26 migration on October 19, 2026.
 - A shared scheduler helper that clamps long delays and re-checks the due time,
   replacing the per-module `schedule()` implementations.
-- A UI for transfers and per-location balances: the endpoints exist and move
-  stock correctly, but the Transfers page is still a read-only list of records
-  with no way to create one or see per-location stock.
-- A stock ledger view: `GET /db/inventory/movements` exists but nothing in the
-  UI reads it, so a balance still cannot be explained on screen.
-- Backfill opening balances so pre-ledger stock has dated history.
 - Live silver-rate provider hardening (retry/backoff tuning, rate-limited API
   fallback cache).
 - PDF invoice branding options (logo, footer terms) exposed in Settings.
