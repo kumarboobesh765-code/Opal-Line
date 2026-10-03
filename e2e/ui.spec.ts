@@ -16,6 +16,8 @@ const PAGES = [
   '/system/activity',
   '/system/print-designer',
   '/inventory/products',
+  '/inventory/locations',
+  '/inventory/transfers',
   '/sales/invoices',
   '/sales/customers',
   '/sales/quotations',
