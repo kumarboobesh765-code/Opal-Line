@@ -244,6 +244,65 @@ export async function transferStock(input: {
   return source
 }
 
+/**
+ * Gives pre-ledger stock a dated opening entry.
+ *
+ * Stock predates the ledger, so an upgraded install has products with a balance
+ * but no history. Without this, their first real movement silently adopts the
+ * old balance and the ledger shows it as though it happened that day. Opening
+ * entries are dated as early as the product record allows so the history reads
+ * honestly rather than being backdated to the upgrade.
+ *
+ * Idempotent: only touches products with no movements at all.
+ */
+export async function backfillOpeningBalances(client?: Client): Promise<number> {
+  const conn = (client ?? db) as Client | null
+  if (!conn) return 0
+  const locationId = await ensureDefaultLocation()
+
+  const products = await conn
+    .select({ id: schema.products.id, sku: schema.products.sku, stock: schema.products.stock, createdAt: schema.products.createdAt })
+    .from(schema.products)
+
+  let created = 0
+  for (const p of products) {
+    const qty = num(p.stock)
+    if (qty === 0) continue
+
+    const [existing] = await conn
+      .select({ locationId: schema.stockLevels.locationId })
+      .from(schema.stockLevels)
+      .where(eq(schema.stockLevels.productId, p.id))
+      .limit(1)
+    if (existing) continue
+
+    const [moved] = await conn
+      .select({ id: schema.stockMovements.id })
+      .from(schema.stockMovements)
+      .where(eq(schema.stockMovements.productId, p.id))
+      .limit(1)
+    if (moved) continue
+
+    const createdAt = p.createdAt ? new Date(String(p.createdAt)) : null
+    const when = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toISOString() : new Date().toISOString()
+
+    await conn.insert(schema.stockLevels).values({ productId: p.id, locationId, qty: Math.floor(qty) }).onConflictDoNothing()
+    await conn.insert(schema.stockMovements).values({
+      id: newId(),
+      productId: p.id,
+      sku: p.sku ?? null,
+      locationId,
+      type: 'opening',
+      qty: Math.floor(qty),
+      stockAfter: Math.floor(qty),
+      note: 'opening balance carried over from before the stock ledger',
+      date: when,
+    })
+    created += 1
+  }
+  return created
+}
+
 /** Stock on hand at one location (or across all of them when omitted). */
 export async function stockAt(sku: string, locationId?: string | null): Promise<number> {
   if (!db) return 0

@@ -1112,6 +1112,10 @@ export async function bootstrapDatabase(): Promise<{ ran: boolean; tablesCreated
     const upgradeDb = drizzle(sql, { schema })
     await repairAdminRolePermissions(upgradeDb).catch(() => undefined)
     await repairAdminUserOverride(upgradeDb).catch(() => undefined)
+    // Stock balances predate the movement ledger. Give them a dated opening
+    // entry so an upgraded install has real history instead of a balance that
+    // appears from nowhere on the day of its first sale.
+    await import('../stock').then((m) => m.backfillOpeningBalances(upgradeDb)).catch(() => undefined)
     return { ran: true, tablesCreated: false }
   } finally {
     await sql.end({ timeout: 5 })
