@@ -57,7 +57,7 @@ function pgBin(name: string): string | null {
 
 function haveSystemPostgres(): boolean {
   try {
-    execSync('psql --version', { encoding: 'utf8', timeout: 4000, stdio: 'pipe' })
+    execSync('psql --version', { encoding: 'utf8', timeout: 4000, stdio: 'pipe', windowsHide: true })
     return true
   } catch { return false }
 }
@@ -106,7 +106,7 @@ function startPostgresWithRetry(pgCtl: string): void {
           '-o', `"${toPgOptionPort()}"`,
           '-l', join(LOG_DIR, 'postgres.log'),
           'start', '-w', '-t', '15',
-        ], { stdio: ['ignore', pgctlLog, pgctlLog], timeout: 30000 })
+        ], { stdio: ['ignore', pgctlLog, pgctlLog], timeout: 30000, windowsHide: true })
       } finally { closeSync(pgctlLog) }
       if (isPostgresRunning()) {
         localPostgresStarted = true
@@ -120,7 +120,7 @@ function startPostgresWithRetry(pgCtl: string): void {
       logLine('postgres', `start attempt ${attempt}/${ATTEMPTS} failed: ${err?.message}`)
       // Clear stale pid/crash state before retrying
       try {
-        execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'immediate'], { stdio: 'ignore', timeout: 5000 })
+        execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'immediate'], { stdio: 'ignore', timeout: 5000, windowsHide: true })
       } catch { /* not running — expected */ }
     }
     if (attempt < ATTEMPTS) sleep(1500)
@@ -145,7 +145,7 @@ async function ensurePostgres(): Promise<string> {
       console.log('[postgres] Initializing data directory…')
       logLine('postgres', 'initdb ' + PGDATA)
       try {
-        execFileSync(initdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe' })
+        execFileSync(initdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe', windowsHide: true })
       } catch (err: any) {
         console.error('[postgres] initdb failed:', err.message)
         logLine('postgres', 'initdb failed: ' + err.message)
@@ -160,7 +160,7 @@ async function ensurePostgres(): Promise<string> {
     waitForPostgres(PG_PORT)
     if (createdb) {
       try {
-        execFileSync(createdb, ['-h', '127.0.0.1', '-p', String(PG_PORT), '-U', 'postgres', dbName], { stdio: 'pipe' })
+        execFileSync(createdb, ['-h', '127.0.0.1', '-p', String(PG_PORT), '-U', 'postgres', dbName], { stdio: 'pipe', windowsHide: true })
         console.log('[postgres] Database created')
       } catch { /* already exists */ }
     }
@@ -176,7 +176,7 @@ async function ensurePostgres(): Promise<string> {
         if (!existsSync(join(PGDATA, 'PG_VERSION'))) {
           console.log('[postgres] Initializing data directory (system postgres)…')
           try {
-            execFileSync(sysInitdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe' })
+            execFileSync(sysInitdb, ['-D', PGDATA, '-U', 'postgres', '-E', 'UTF8', '--auth=trust'], { stdio: 'pipe', windowsHide: true })
           } catch (err: any) {
             throw new Error(`PostgreSQL initdb failed: ${err.stderr?.toString() || err.message}`)
           }
@@ -188,7 +188,7 @@ async function ensurePostgres(): Promise<string> {
         const sysCreatedb = join(sysPgRootW, 'createdb.exe')
         if (existsSync(sysCreatedb)) {
           try {
-            execFileSync(sysCreatedb, ['-h', '127.0.0.1', '-p', String(PG_PORT), '-U', 'postgres', dbName], { stdio: 'pipe' })
+            execFileSync(sysCreatedb, ['-h', '127.0.0.1', '-p', String(PG_PORT), '-U', 'postgres', dbName], { stdio: 'pipe', windowsHide: true })
           } catch { /* exists */ }
         }
         return url
@@ -207,7 +207,7 @@ function toPgOptionPort(): string {
 
 function isPostgresRunning(): boolean {
   try {
-    execSync(`netstat -ano | findstr :${PG_PORT} | findstr LISTENING`, { encoding: 'utf8', timeout: 4000, stdio: 'pipe', shell: 'cmd.exe' })
+    execSync(`netstat -ano | findstr :${PG_PORT} | findstr LISTENING`, { encoding: 'utf8', timeout: 4000, stdio: 'pipe', shell: 'cmd.exe', windowsHide: true })
     return true
   } catch { return false }
 }
@@ -222,7 +222,7 @@ function waitForPostgres(port: number, tries = 30): void {
 
 function processNameForPid(pid: string): string {
   try {
-    const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', shell: 'cmd.exe' })
+    const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', shell: 'cmd.exe', windowsHide: true })
     const first = out.split('\n').find((l) => l.trim().startsWith('"'))
     return first ? first.split('","')[0].replace(/^"/, '') : 'unknown process'
   } catch { return 'unknown process' }
@@ -230,7 +230,7 @@ function processNameForPid(pid: string): string {
 
 function pidListeningOn(port: number): string | null {
   try {
-    const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', shell: 'cmd.exe' })
+    const out = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', shell: 'cmd.exe', windowsHide: true })
     const line = out.split('\n').find((l) => l.trim().length > 0)
     if (!line) return null
     const pid = line.trim().split(/\s+/).pop() ?? ''
@@ -301,7 +301,7 @@ function findNode(): string {
     'C:\\Program Files (x86)\\nodejs\\node.exe',
   ]
   try {
-    const path = execSync('where node', { encoding: 'utf8', timeout: 3000 }).trim().split('\n')[0]
+    const path = execSync('where node', { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim().split('\n')[0]
     if (path && existsSync(path)) return path
   } catch {}
   for (const c of candidates) if (existsSync(c)) return c
@@ -330,6 +330,7 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
         env: { ...process.env, PORT: String(BACKEND_PORT), DOTENV_CONFIG_PATH: envPath, APP_VERSION: app.getVersion(), LOG_DIR },
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: true,
+        windowsHide: true,
       })
     } else {
       const backendRoot = join(process.resourcesPath, 'backend')
@@ -359,7 +360,7 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
         return
       }
       console.log('[electron] Backend entry:', entry, 'exists:', existsSync(entry))
-      backendProcess = spawn(cmd, args, { cwd, env: backendEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+      backendProcess = spawn(cmd, args, { cwd, env: backendEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     }
 
     let started = false
@@ -461,7 +462,7 @@ function stopPostgres(): void {
   try {
     const pgCtl = pgBin('pg_ctl') ?? join(systemPostgresRoot() ?? '', 'pg_ctl.exe')
     if (pgCtl && existsSync(PGDATA)) {
-      execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'fast'], { stdio: 'pipe', timeout: 10000 })
+      execFileSync(pgCtl, ['-D', PGDATA, 'stop', '-m', 'fast'], { stdio: 'pipe', timeout: 10000, windowsHide: true })
     }
   } catch { /* best effort */ }
   localPostgresStarted = false
@@ -655,7 +656,7 @@ function verifyInstallerSignature(file: string): void {
     "if ($s.SignerCertificate.Subject -notlike '*Opal Line Billing*') { exit 4 }",
     'exit 0',
   ].join('; ')
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: 'ignore', timeout: 60000 })
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: 'ignore', timeout: 60000, windowsHide: true })
 }
 
 function isNewerVersion(current: string, latest: string): boolean {
