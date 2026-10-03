@@ -1183,8 +1183,55 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
 
     res.setHeader('Cache-Control', 'no-store')
 
+    // Per-location breakdown. The product rows above are the cross-location
+    // rollup, which answers "what do we hold" but never "what is sitting in
+    // the Andheri branch". Per-location stock exists, so the report should be
+    // able to say it.
+    const [levels, locRows] = await Promise.all([
+      db!.select({ locationId: schema.stockLevels.locationId, productId: schema.stockLevels.productId, qty: schema.stockLevels.qty }).from(schema.stockLevels),
+      db!.select({ id: schema.inventoryLocations.id, name: schema.inventoryLocations.name, type: schema.inventoryLocations.type }).from(schema.inventoryLocations),
+    ])
+    const byProductId = new Map(products.map((p) => [p.id, p]))
+    const locationMeta = new Map(locRows.map((l) => [l.id, l]))
+    const acc = new Map<string, { name: string; type: string; products: number; quantity: number; valueAtCost: number; valueAtRetail: number }>()
+    for (const lv of levels) {
+      const product = byProductId.get(lv.productId)
+      const qty = num(lv.qty)
+      const cur = acc.get(lv.locationId) ?? {
+        name: locationMeta.get(lv.locationId)?.name ?? lv.locationId,
+        type: locationMeta.get(lv.locationId)?.type ?? 'store',
+        products: 0,
+        quantity: 0,
+        valueAtCost: 0,
+        valueAtRetail: 0,
+      }
+      if (qty > 0) cur.products += 1
+      cur.quantity += qty
+      cur.valueAtCost += qty * num(product?.costPrice)
+      cur.valueAtRetail += qty * num(product?.sellingPrice)
+      acc.set(lv.locationId, cur)
+    }
+    const byLocation = [...acc.entries()]
+      .map(([id, v]) => {
+        const valueAtCost = round2(v.valueAtCost)
+        const valueAtRetail = round2(v.valueAtRetail)
+        return {
+          id,
+          name: v.name,
+          type: v.type,
+          products: v.products,
+          quantity: v.quantity,
+          valueAtCost,
+          valueAtRetail,
+          margin: round2(valueAtRetail - valueAtCost),
+          marginPct: valueAtRetail > 0 ? round2(((valueAtRetail - valueAtCost) / valueAtRetail) * 100) : 0,
+        }
+      })
+      .sort((a, b) => b.valueAtCost - a.valueAtCost)
+
     res.json({
       products: top50,
+      byLocation,
       summary: {
         totalProducts: top50.length,
         highDemand,

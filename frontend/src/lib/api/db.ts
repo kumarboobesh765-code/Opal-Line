@@ -485,6 +485,18 @@ export const dbApi = {
   getStockRunning: async () => {
     const res = await request('/db/dashboard/stock-running')
     return res as {
+      /** Per-location breakdown; the product rows below are the rollup. */
+      byLocation: Array<{
+        id: string
+        name: string
+        type: string
+        products: number
+        quantity: number
+        valueAtCost: number
+        valueAtRetail: number
+        margin: number
+        marginPct: number
+      }>
       products: Array<{
         id: string
         name: string

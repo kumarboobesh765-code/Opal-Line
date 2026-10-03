@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@/lib/table'
-import { AlertTriangle, ArrowUpRight, Boxes, Download, Search, TrendingUp } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Boxes, Download, Search, TrendingUp, Warehouse } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, type SelectOption } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +23,18 @@ const demandFilterOptions: SelectOption[] = [
 ]
 
 type DemandFilter = 'all' | 'high' | 'medium' | 'low' | 'none' | 'at-risk'
+
+export interface StockRunningLocation {
+  id: string
+  name: string
+  type: string
+  products: number
+  quantity: number
+  valueAtCost: number
+  valueAtRetail: number
+  margin: number
+  marginPct: number
+}
 
 export interface StockRunningProduct {
   id: string
@@ -44,6 +56,7 @@ export interface StockRunningProduct {
 
 interface StockRunningResponse {
   products: StockRunningProduct[]
+  byLocation: StockRunningLocation[]
   summary: {
     totalProducts: number
     highDemand: number
@@ -67,6 +80,10 @@ export default function StockRunningPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [demandFilter, setDemandFilter] = useState<DemandFilter>('all')
+  // The product table is the cross-location rollup, which cannot answer
+  // "what is sitting in the Andheri branch". This switches to the per-location
+  // view that can.
+  const [groupByLocation, setGroupByLocation] = useState(false)
 
   useEffect(() => {
     const fetch = async () => {
@@ -176,6 +193,27 @@ export default function StockRunningPage() {
     []
   )
 
+  const locationColumns = useMemo<ColumnDef<StockRunningLocation>[]>(
+    () => [
+      { accessorKey: 'name', header: 'Location', cell: ({ row }) => <span className="font-medium text-foreground">{row.original.name}</span> },
+      { accessorKey: 'type', header: 'Type', cell: ({ row }) => <Badge variant="muted">{row.original.type}</Badge> },
+      { accessorKey: 'products', header: 'Products', meta: { align: 'right' as const }, cell: ({ row }) => <span className="tabular-nums">{formatNumber(row.original.products)}</span> },
+      { accessorKey: 'quantity', header: 'Units', meta: { align: 'right' as const }, cell: ({ row }) => <span className="tabular-nums font-medium">{formatNumber(row.original.quantity)}</span> },
+      { accessorKey: 'valueAtCost', header: 'Value at Cost', meta: { align: 'right' as const }, cell: ({ row }) => <span className="tabular-nums">{formatCurrency(row.original.valueAtCost)}</span> },
+      {
+        id: 'margin',
+        header: 'Retail / Margin',
+        meta: { align: 'right' as const },
+        cell: ({ row }) => (
+          <span className="tabular-nums text-muted-foreground">
+            {formatCurrency(row.original.valueAtRetail)} · {row.original.marginPct}%
+          </span>
+        ),
+      },
+    ],
+    [],
+  )
+
   const highDemandCount = data?.products.filter(p => p.demandLevel === 'high').length || 0
   const mediumDemandCount = data?.products.filter(p => p.demandLevel === 'medium').length || 0
   const atRiskCount = data?.products.filter(p => p.daysOfStock > 0 && p.daysOfStock <= 7).length || 0
@@ -186,9 +224,14 @@ export default function StockRunningPage() {
         title="Stock Running / Demand Analytics"
         subtitle="Track which products sell fastest, forecast stockouts, and prioritize reorders."
         actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setGroupByLocation((v) => !v)}>
+              <Warehouse className="h-4 w-4" /> {groupByLocation ? 'By location' : 'By product'}
+            </Button>
           <Button variant="outline" size="sm" onClick={() => exportTable('stock-running', columns.filter(c => 'accessorKey' in c && typeof c.accessorKey === 'string'), filteredProducts)}>
             <Download className="h-4 w-4" /> Export CSV
           </Button>
+          </>
         }
       />
 
@@ -227,6 +270,33 @@ export default function StockRunningPage() {
           </CardContent>
         </Card>
       </div>
+
+      {groupByLocation ? (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-sm">Stock by location</CardTitle>
+                <CardDescription>Where the stock physically sits, valued at cost.</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setGroupByLocation(false)}>
+                <Boxes className="h-3.5 w-3.5" /> View by product
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <DataTable
+              columns={locationColumns}
+              data={(data?.byLocation ?? []).filter((l) => {
+                const q = query.trim().toLowerCase()
+                return !q || l.name.toLowerCase().includes(q)
+              })}
+              loading={loading}
+              emptyMessage="No per-location stock recorded yet"
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
