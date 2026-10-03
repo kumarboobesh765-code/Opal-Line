@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeftRight,
   ChevronRight,
+  Download,
   Edit,
   Gem,
   History,
@@ -16,10 +17,12 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatDateTime } from '@/lib/format'
+import { exportTable } from '@/lib/export'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -336,7 +339,7 @@ export default function ProductDetailPage() {
         </TabsContent>
 
         <TabsContent value="movements">
-          <StockHistory sku={product.sku} />
+          <StockHistory sku={product.sku} productName={product.name} />
         </TabsContent>
 
         <TabsContent value="shopify">
@@ -424,20 +427,34 @@ const MOVEMENT_LABEL: Record<string, string> = {
   manual: 'Manual adjustment',
 }
 
+/** Column layout for the CSV export — plain accessors, no cells. */
+const EXPORT_COLUMNS: Array<{ accessorKey: string; header: string }> = [
+  { accessorKey: 'date', header: 'Date' },
+  { accessorKey: 'type', header: 'Movement' },
+  { accessorKey: 'location', header: 'Location' },
+  { accessorKey: 'qty', header: 'Qty' },
+  { accessorKey: 'stockAfter', header: 'Balance After' },
+  { accessorKey: 'reference', header: 'Reference' },
+  { accessorKey: 'note', header: 'Note' },
+]
+
 /**
  * The stock ledger for one product: every movement with the balance it left
  * behind, plus where the stock sits right now. Stock used to be a bare number
  * with no way to ask why.
  */
-function StockHistory({ sku }: { sku: string }) {
+function StockHistory({ sku, productName }: { sku: string; productName: string }) {
   const [movements, setMovements] = useState<Awaited<ReturnType<typeof dbApi.getStockMovements>>>([])
   const [levels, setLevels] = useState<Awaited<ReturnType<typeof dbApi.getStockLevels>>>([])
   const [loading, setLoading] = useState(true)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
 
   useEffect(() => {
     let cancelled = false
     queueMicrotask(() => {
-      Promise.all([dbApi.getStockMovements(sku), dbApi.getStockLevels(sku)])
+      setLoading(true)
+      Promise.all([dbApi.getStockMovements(sku, { from, to }), dbApi.getStockLevels(sku)])
         .then(([m, l]) => {
           if (cancelled) return
           setMovements(m)
@@ -447,7 +464,30 @@ function StockHistory({ sku }: { sku: string }) {
         .finally(() => { if (!cancelled) setLoading(false) })
     })
     return () => { cancelled = true }
-  }, [sku])
+  }, [sku, from, to])
+
+  // Ranges are for reading and reporting ("what left the shop in March"), so the
+  // filtered set is what gets exported — not the whole ledger.
+  const filtered = Boolean(from || to)
+
+  const handleExport = () => {
+    const rows = movements.map((m) => ({
+      date: m.date ? new Date(m.date).toISOString() : '',
+      type: MOVEMENT_LABEL[m.type] ?? m.type,
+      location: m.locationId ?? '',
+      qty: Number(m.qty ?? 0),
+      stockAfter: Number(m.stockAfter ?? 0),
+      reference: m.refType ? `${m.refType}${m.refId ? `:${m.refId}` : ''}` : '',
+      note: m.note ?? '',
+    }))
+    exportTable(`stock-history-${productName.replace(/[^\w-]+/g, '-').toLowerCase()}-${new Date().toISOString().slice(0, 10)}`, EXPORT_COLUMNS, rows)
+    toast.success(`Exported ${rows.length} movement${rows.length === 1 ? '' : 's'}`)
+  }
+
+  const clearRange = () => {
+    setFrom('')
+    setTo('')
+  }
 
   return (
     <div className="space-y-4">
@@ -476,21 +516,58 @@ function StockHistory({ sku }: { sku: string }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Movement history</CardTitle>
-          <CardDescription>
-            Every change to this product&apos;s stock, with the balance it left behind.
-          </CardDescription>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-sm">Movement history</CardTitle>
+              <CardDescription>
+                Every change to this product&apos;s stock, with the balance it left behind.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                type="date"
+                aria-label="From date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-8 w-[140px] text-xs"
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <Input
+                type="date"
+                aria-label="To date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className="h-8 w-[140px] text-xs"
+              />
+              {filtered ? (
+                <Button variant="ghost" size="sm" onClick={clearRange} className="h-8 text-xs">
+                  Clear
+                </Button>
+              ) : null}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExport}
+                disabled={loading || movements.length === 0}
+                className="h-8 text-xs"
+              >
+                <Download className="h-3.5 w-3.5" /> Export CSV
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
             <p className="text-sm text-muted-foreground">Loading history…</p>
           ) : movements.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No movements recorded yet. Stock changes appear here from the moment the ledger starts tracking this product.
+              {filtered
+                ? 'No movements recorded in this date range.'
+                : 'No movements recorded yet. Stock changes appear here from the moment the ledger starts tracking this product.'}
             </p>
           ) : (
             <ul className="divide-y">
-              {movements.map((m) => {
+              {movements.slice(0, 100).map((m) => {
                 const qty = Number(m.qty ?? 0)
                 const incoming = qty > 0
                 return (
@@ -518,6 +595,12 @@ function StockHistory({ sku }: { sku: string }) {
               })}
             </ul>
           )}
+          {!loading && movements.length > 100 ? (
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              Showing the 100 most recent of {movements.length} movements in range. Narrow the dates or export to
+              CSV to see them all.
+            </p>
+          ) : null}
         </CardContent>
       </Card>
     </div>
