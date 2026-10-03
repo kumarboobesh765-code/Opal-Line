@@ -23,6 +23,17 @@ import { logger } from '../logger'
 
 let bootstrapped = false
 
+/**
+ * Clears the once-per-process bootstrap guard.
+ *
+ * Only for tests that need to run the upgrade path twice in one process (a
+ * fresh install, then an upgrade of that same database). Production calls
+ * bootstrapDatabase once per start, which is what the guard is for.
+ */
+export function resetBootstrapForTests(): void {
+  bootstrapped = false
+}
+
 async function createClient(): Promise<postgres.Sql> {
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL is not set')

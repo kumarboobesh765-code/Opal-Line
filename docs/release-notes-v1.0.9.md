@@ -99,7 +99,10 @@ the same tables up front.
 
 ## Verification (this release)
 
-- Backend: 146/146 tests, `tsc --noEmit` clean.
+- Backend: 147 tests, `tsc --noEmit` clean. The upgrade-path test skips unless
+  `UPGRADE_TEST_DATABASE_URL` is set, and CI runs it against a PostgreSQL
+  service so a regression in the upgrade path fails the build instead of
+  shipping silently.
 - Frontend: oxlint 0 warnings / 0 errors, `tsc -b` + production build OK.
 - E2E: 49 passed / 4 skipped / 0 failed (Playwright, against the dev stack).
 - Upgrade path: a database reconstructed from the pre-purchase commit

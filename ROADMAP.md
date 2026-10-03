@@ -25,10 +25,11 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
 
 - **Purchase tables only reach installs whose bootstrap predates purchases via
   the two upgrade paths** (`applyUpgrades` in `bootstrap.ts` and `migrate.ts`).
-  Both now create the parent tables, and this is verified against a
-  reconstructed pre-purchase database. There is still no automated test that
-  runs this on every build — it is verified by hand. A regression here is
-  silent, because upgrade statements are swallowed per-statement.
+  Both now create the parent tables, and a real-database test
+  (`src/db/upgrade.test.ts`, run in CI against a PostgreSQL service) rebuilds
+  the failure case and asserts the full schema comes back. It is verified to
+  fail against the broken code. A regression here is otherwise silent, because
+  upgrade statements are swallowed per-statement.
 - **Scheduler delays are clamped by hand.** `setTimeout` cannot exceed 2³¹−1 ms
   (~24.85 days); anything longer fires immediately and, if the callback
   re-arms and runs the job, spins forever. The monthly statements scheduler hit
@@ -48,8 +49,6 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   GitHub's `ubuntu-latest` → Ubuntu 26 migration on October 19, 2026.
 - A shared scheduler helper that clamps long delays and re-checks the due time,
   replacing the per-module `schedule()` implementations.
-- A migration smoke test: build a pre-purchase database in CI and assert the
-  upgrade path produces the full schema.
 - Live silver-rate provider hardening (retry/backoff tuning, rate-limited API
   fallback cache).
 - PDF invoice branding options (logo, footer terms) exposed in Settings.

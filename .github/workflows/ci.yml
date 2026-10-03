@@ -10,6 +10,18 @@ jobs:
     # Pinned: ubuntu-latest migrates to Ubuntu 26 on 2026-10-19
     # (actions/runner-images#14748); keep the checks job on a stable image.
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
 
@@ -32,6 +44,16 @@ jobs:
 
       - name: Unit tests (backend, node --test)
         run: npm test
+
+      # Upgrade-path regression test. Needs a real PostgreSQL, so it skips on
+      # the plain unit-test step above and runs here for real. This is the test
+      # that catches purchase DDL living only in the fresh-install path: without
+      # it, an existing install boots "successfully" with no purchase tables.
+      - name: Upgrade-path test (needs PostgreSQL)
+        run: node --import tsx --test --test-force-exit "src/db/upgrade.test.ts"
+        working-directory: backend
+        env:
+          UPGRADE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
 
       - name: Build frontend (tsc -b && vite build)
         run: npm run build

@@ -1,0 +1,128 @@
+/**
+ * Upgrade-path regression test.
+ *
+ * The purchase DDL originally lived only in the fresh-install path, so an
+ * existing database never got the purchase tables. The follow-up fix moved it
+ * into applyUpgrades — but only the ALTERs and the line-item tables moved; the
+ * three parent tables were still never CREATEd. Because upgrade statements are
+ * swallowed per-statement, that failure was invisible: bootstrap reported
+ * success and every purchase route failed at runtime.
+ *
+ * This test reproduces the affected install population directly: bootstrap a
+ * database, delete everything purchases added, then upgrade it and assert the
+ * full purchase schema comes back.
+ *
+ * Needs a real PostgreSQL. Set UPGRADE_TEST_DATABASE_URL to run it; without it
+ * the test skips, so `npm test` still passes on a machine with no database.
+ */
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import postgres from 'postgres'
+
+const URL = process.env.UPGRADE_TEST_DATABASE_URL
+
+const PURCHASE_TABLES = [
+  'purchase_orders',
+  'purchase_invoices',
+  'purchase_returns',
+  'purchase_invoice_items',
+  'purchase_order_items',
+  'purchase_return_items',
+  'supplier_payments',
+  'supplier_payment_allocations',
+]
+
+const KEY_COLUMNS = [
+  'products.cost_price',
+  'purchase_invoices.order_id',
+  'purchase_invoices.paid_amount',
+  'purchase_invoices.supplier_gstin',
+  'purchase_invoices.tcs_amount',
+  'purchase_returns.invoice_id',
+]
+
+test('upgrade restores the full purchase schema on a pre-purchase database', async (t) => {
+  if (!URL) {
+    t.skip('set UPGRADE_TEST_DATABASE_URL to run the upgrade-path test')
+    return
+  }
+
+  const admin = postgres(URL, { max: 1 })
+  const previous = process.env.DATABASE_URL
+  process.env.DATABASE_URL = URL
+
+  try {
+    const dbName = (await admin.unsafe('select current_database() as n'))[0].n as string
+    // Start from a genuinely empty database so the first bootstrap takes the
+    // fresh-install path and builds the complete current schema.
+    await dropAndRecreate(admin, dbName)
+
+    const { bootstrapDatabase, resetBootstrapForTests } = await import('./bootstrap')
+
+    const fresh = await bootstrapDatabase()
+    assert.equal(fresh.tablesCreated, true, 'first bootstrap should create the schema')
+
+    const sql = postgres(URL, { max: 1 })
+    try {
+      // Emulate an install whose bootstrap ran before purchases existed.
+      await sql.unsafe(
+        `drop table if exists purchase_return_items, purchase_invoice_items, purchase_order_items,
+           supplier_payment_allocations, supplier_payments, purchase_returns,
+           purchase_invoices, purchase_orders cascade`,
+      )
+      await sql.unsafe('alter table products drop column if exists cost_price')
+
+      assert.deepEqual(
+        await purchaseTables(sql),
+        [],
+        'precondition: no purchase tables before the upgrade',
+      )
+
+      resetBootstrapForTests()
+      const upgraded = await bootstrapDatabase()
+      assert.equal(upgraded.ran, true)
+
+      // The parent tables must exist…
+      assert.deepEqual(
+        (await purchaseTables(sql)).sort(),
+        [...PURCHASE_TABLES].sort(),
+        'upgrade must produce every purchase table',
+      )
+
+      // …and the columns added alongside them.
+      for (const col of KEY_COLUMNS) {
+        const [table, column] = col.split('.')
+        const rows = await sql.unsafe(
+          `select 1 from information_schema.columns
+           where table_schema = 'public' and table_name = $1 and column_name = $2`,
+          [table, column],
+        )
+        assert.equal(rows.length, 1, `upgrade must produce ${col}`)
+      }
+    } finally {
+      await sql.end({ timeout: 5 })
+    }
+  } finally {
+    if (previous === undefined) delete process.env.DATABASE_URL
+    else process.env.DATABASE_URL = previous
+    await admin.end({ timeout: 5 })
+  }
+})
+
+async function purchaseTables(sql: postgres.Sql): Promise<string[]> {
+  const rows = await sql.unsafe(
+    `select table_name from information_schema.tables
+     where table_schema = 'public' and table_name like 'purchase%'
+        or table_schema = 'public' and table_name like 'supplier_payment%'
+     order by table_name`,
+  )
+  return rows.map((r) => r.table_name as string)
+}
+
+async function dropAndRecreate(admin: postgres.Sql, dbName: string): Promise<void> {
+  await admin.unsafe(
+    `drop schema if exists public cascade; create schema public;
+     grant all on schema public to public`,
+  )
+  void dbName
+}
