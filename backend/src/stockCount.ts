@@ -39,3 +39,26 @@ export function buildStockCountRows(raw: unknown): StockCountParseResult {
   }
   return { rows, errors }
 }
+
+/** Coerces a stored per-location balance (which may be null or a string) to a whole number. */
+export function stockAtLocation(stored: unknown): number {
+  const n = Number(stored ?? 0)
+  return Math.floor(Number.isFinite(n) ? n : 0)
+}
+
+/**
+ * The signed movement a count should post for one product.
+ *
+ * `current` MUST be the balance at the location being counted, not the
+ * cross-location total: passing products.stock here makes counting one shop
+ * silently correct another whenever more than one location holds stock.
+ *
+ * `set` treats `counted` as the physical truth at that location. `adjust`
+ * treats it as a delta to apply on top of what the ledger already says.
+ */
+export function stockCountDelta(current: number, counted: number, mode: 'set' | 'adjust'): number {
+  const currentQty = stockAtLocation(current)
+  const countedQty = stockAtLocation(counted)
+  if (mode === 'adjust') return countedQty
+  return countedQty - currentQty
+}

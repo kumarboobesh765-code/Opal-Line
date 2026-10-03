@@ -63,6 +63,116 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure rules, extracted so they can be unit-tested without a database.
+//
+// These are the parts that are easy to get subtly wrong and that silently
+// corrupt the books rather than throwing: the signed-quantity convention, the
+// weighted-average revaluation, and which products the backfill may touch.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Movement types that move stock IN. The type is a label; the sign is the truth. */
+const INFLOW_TYPES = new Set<MovementType>([
+  'purchase_in',
+  'sale_return_in',
+  'transfer_in',
+  'shopify_sync',
+  'opening',
+])
+
+export function isInflow(type: MovementType): boolean {
+  return INFLOW_TYPES.has(type)
+}
+
+/**
+ * Normalises a caller-supplied quantity for a movement.
+ *
+ * Returns null when the movement should be skipped entirely: no SKU, or a
+ * quantity that nets to zero. Callers must check this rather than assuming a
+ * movement was written.
+ */
+export function normalizeMovementQty(input: { sku: string; qty: unknown }): number | null {
+  const sku = String(input.sku ?? '').trim()
+  if (!sku) return null
+  const qty = Math.floor(num(input.qty))
+  return qty === 0 ? null : qty
+}
+
+/**
+ * The balance at a location after a movement, given what was there before.
+ *
+ * Only the DEFAULT location adopts a pre-ledger balance, and only when the
+ * product has never been through the ledger. A genuinely new location starts
+ * at zero — otherwise the first transfer into it would inherit the whole
+ * existing stock and double-count it.
+ */
+export function nextBalanceAtLocation(input: {
+  currentAtLocation: number
+  qty: number
+}): number {
+  return Math.floor(num(input.currentAtLocation)) + Math.floor(num(input.qty))
+}
+
+/** Whether a first-ever movement at a location should adopt products.stock. */
+export function shouldAdoptPreLedgerBalance(input: {
+  isFirstAtLocation: boolean
+  locationId: string
+  productHasAnyLevel: boolean
+}): boolean {
+  return input.isFirstAtLocation && input.locationId === DEFAULT_LOCATION_ID && !input.productHasAnyLevel
+}
+
+/**
+ * Weighted-average cost after stock goes in.
+ *
+ * Stock on hand with no recorded cost adopts the buy price outright rather
+ * than averaging against a meaningless zero, which would divide the new
+ * purchase across nothing and understate it.
+ */
+export function nextCostAfterStockIn(input: {
+  oldStock: number
+  oldCost: number
+  addedQty: number
+  unitValue: number
+}): number {
+  const oldStock = num(input.oldStock)
+  const oldCost = num(input.oldCost)
+  const addedQty = num(input.addedQty)
+  const unitValue = num(input.unitValue)
+  if (addedQty <= 0 || unitValue <= 0) return round2(oldCost)
+  const newStock = oldStock + addedQty
+  if (newStock <= 0) return round2(unitValue)
+  return round2(oldStock > 0 && oldCost > 0 ? (oldStock * oldCost + addedQty * unitValue) / newStock : unitValue)
+}
+
+/** Whether the opening-balance backfill may write an entry for a product. */
+export function shouldBackfillOpening(input: {
+  stock: number
+  hasLevel: boolean
+  hasMovement: boolean
+}): boolean {
+  return num(input.stock) !== 0 && !input.hasLevel && !input.hasMovement
+}
+
+/**
+ * The date to put on a backfilled opening entry.
+ *
+ * Dated from the product's own creation date where available so the history
+ * reads honestly rather than being backdated to the upgrade.
+ */
+export function openingEntryDate(createdAt: unknown, now: Date = new Date()): string {
+  const parsed = createdAt ? new Date(String(createdAt)) : null
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : now.toISOString()
+}
+
+/**
+ * The difference between what was dispatched and what was counted on arrival.
+ * Negative is short in transit, positive is an overage.
+ */
+export function receiptVariance(dispatched: number, counted: number): number {
+  return Math.floor(num(counted)) - Math.floor(num(dispatched))
+}
+
 /**
  * Creates the default location if missing.
  *
@@ -97,8 +207,9 @@ export async function ensureDefaultLocation(tx?: Tx): Promise<string> {
  */
 export async function applyStockMovement(input: StockMovementInput): Promise<number | null> {
   const { sku, type } = input
-  const qty = Math.floor(num(input.qty))
-  if (!sku || qty === 0) return null
+  const normalized = normalizeMovementQty({ sku, qty: input.qty })
+  if (normalized === null) return null
+  const qty = normalized
 
   const client = (input.tx ?? db) as Client
   if (!client) return null
@@ -131,17 +242,21 @@ export async function applyStockMovement(input: StockMovementInput): Promise<num
   // location starts empty — otherwise the first transfer into it would adopt
   // the whole existing stock and double-count it.
   let currentAtLocation = isFirstAtLocation ? 0 : num(level.qty)
-  if (isFirstAtLocation && locationId === DEFAULT_LOCATION_ID) {
+  let productHasAnyLevel = true
+  if (isFirstAtLocation) {
     const [anywhere] = await client
       .select({ locationId: schema.stockLevels.locationId })
       .from(schema.stockLevels)
       .where(eq(schema.stockLevels.productId, row.id))
       .limit(1)
+    productHasAnyLevel = Boolean(anywhere)
     // Product has never moved through the ledger: products.stock predates it,
     // so that balance physically belongs to the default location.
-    if (!anywhere) currentAtLocation = num(row.stock)
+    if (shouldAdoptPreLedgerBalance({ isFirstAtLocation, locationId, productHasAnyLevel })) {
+      currentAtLocation = num(row.stock)
+    }
   }
-  const nextAtLocation = currentAtLocation + qty
+  const nextAtLocation = nextBalanceAtLocation({ currentAtLocation, qty })
 
   if (isFirstAtLocation) {
     await client
@@ -169,13 +284,13 @@ export async function applyStockMovement(input: StockMovementInput): Promise<num
   // Weighted-average cost, maintained on the way in only. Removing stock does
   // not revalue: the remaining units keep the average they were bought at.
   const unitCost = num(input.unitCost)
-  if (qty > 0 && unitCost > 0) {
-    const oldStock = num(row.stock)
-    const oldCost = num(row.costPrice)
-    const newStock = oldStock + qty
-    // Stock on hand but no cost recorded: adopt the buy price rather than
-    // averaging against a meaningless zero.
-    patch.costPrice = round2(oldStock > 0 && oldCost > 0 ? (oldStock * oldCost + qty * unitCost) / newStock : unitCost)
+  if (isInflow(type) && qty > 0 && unitCost > 0) {
+    patch.costPrice = nextCostAfterStockIn({
+      oldStock: num(row.stock),
+      oldCost: num(row.costPrice),
+      addedQty: qty,
+      unitValue: unitCost,
+    })
   }
 
   await client.update(schema.products).set(patch as never).where(eq(schema.products.id, row.id))
@@ -274,17 +389,14 @@ export async function backfillOpeningBalances(client?: Client): Promise<number> 
       .from(schema.stockLevels)
       .where(eq(schema.stockLevels.productId, p.id))
       .limit(1)
-    if (existing) continue
 
     const [moved] = await conn
       .select({ id: schema.stockMovements.id })
       .from(schema.stockMovements)
       .where(eq(schema.stockMovements.productId, p.id))
       .limit(1)
-    if (moved) continue
 
-    const createdAt = p.createdAt ? new Date(String(p.createdAt)) : null
-    const when = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toISOString() : new Date().toISOString()
+    if (!shouldBackfillOpening({ stock: qty, hasLevel: Boolean(existing), hasMovement: Boolean(moved) })) continue
 
     await conn.insert(schema.stockLevels).values({ productId: p.id, locationId, qty: Math.floor(qty) }).onConflictDoNothing()
     await conn.insert(schema.stockMovements).values({
@@ -296,7 +408,7 @@ export async function backfillOpeningBalances(client?: Client): Promise<number> 
       qty: Math.floor(qty),
       stockAfter: Math.floor(qty),
       note: 'opening balance carried over from before the stock ledger',
-      date: when,
+      date: openingEntryDate(p.createdAt),
     })
     created += 1
   }
@@ -306,10 +418,15 @@ export async function backfillOpeningBalances(client?: Client): Promise<number> 
 /** Stock on hand at one location (or across all of them when omitted). */
 export async function stockAt(sku: string, locationId?: string | null): Promise<number> {
   if (!db) return 0
+  // Both conditions are required. Filtering by location alone returns the total
+  // for EVERY product held there rather than this one, which silently
+  // over-reports as soon as a second location exists.
+  const filters = [eq(schema.products.sku, sku)]
+  if (locationId) filters.push(eq(schema.stockLevels.locationId, locationId))
   const [row] = await db
     .select({ qty: sql<number>`coalesce(sum(${schema.stockLevels.qty}), 0)` })
     .from(schema.stockLevels)
     .innerJoin(schema.products, eq(schema.products.id, schema.stockLevels.productId))
-    .where(locationId ? eq(schema.stockLevels.locationId, locationId) : eq(schema.products.sku, sku))
+    .where(and(...filters))
   return Math.floor(num(row?.qty))
 }
