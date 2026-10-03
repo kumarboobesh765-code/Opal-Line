@@ -1,9 +1,9 @@
-# Unreleased — notes for the next version
+# Opal Line Billing — v1.0.10 Release Notes
 
-> These changes are on `master` **after** the `v1.0.9` tag and are not in any
-> released build yet. They are collected here so the work is not lost; this file
-> should be renamed to `release-notes-v1.0.10.md` (and `package.json` bumped)
-> when the next release is cut.
+> Inventory release: stock stops being a single number and becomes stock you
+> can locate, count and explain. Multi-location support across sales,
+> purchases, counts and transfers — plus the silent data-corruption bugs that
+> having locations exposed.
 
 Everything below shipped after `v1.0.9`. It is one theme: **stock stops being a
 single number and starts being stock you can locate, count and explain** — and

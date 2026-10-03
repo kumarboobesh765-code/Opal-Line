@@ -1,11 +1,11 @@
 # Roadmap
 
-Last updated after v1.0.9. Work since the `v1.0.9` tag is collected in
-`docs/release-notes-v1.0.10-draft.md` until the next version is cut. This file previously described "v1.0.2 planned
-scope", including the purchase input-GST work that shipped in v1.0.9 — treat
-anything below as current, and check the release notes for what a version did.
+Last updated at v1.0.10. See `docs/release-notes-v1.0.10.md` for what that
+release changed and `docs/release-notes-v1.0.9.md` for the one before it. This
+file previously described "v1.0.2 planned scope" — treat anything below as
+current, and check the release notes for what a version actually did.
 
-## Shipped through v1.0.9
+## Shipped through v1.0.10
 
 Not outstanding. Listed so the next reader can see what is already done.
 
@@ -24,6 +24,10 @@ Not outstanding. Listed so the next reader can see what is already done.
   rollup. Transfers move stock for real, stock counts record an adjustment
   instead of overwriting silently, and inventory value is reported at cost with
   retail and margin alongside.
+- **Multi-location inventory** — sales, purchases, counts and transfers all
+  post to the location the document happens at, and every reversal resolves
+  back to it. Availability is checked at that location rather than against the
+  chain-wide total. Stock value breaks down per shop.
 - **Transfers UI and stock history** — transfers follow dispatch → receive →
   cancel, the Transfers page shows per-location availability and offers a
   Dispatch action, and the product page carries a Stock History tab that
