@@ -97,6 +97,32 @@ export default function StockTransfersPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
+  const selectedProduct = products.find((p) => p.id === form.product)
+  // Stock is held per location, so the source dropdown must show what that
+  // location actually holds rather than the product's global total.
+  const [levels, setLevels] = useState<Array<{ locationId: string; qty: number }>>([])
+  const selectedSku = selectedProduct?.sku
+
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!selectedSku) {
+        setLevels([])
+        return
+      }
+      dbApi.getStockLevels(selectedSku).then((rows) => {
+        if (!cancelled) setLevels(rows.map((r) => ({ locationId: r.locationId, qty: r.qty })))
+      }).catch(() => { if (!cancelled) setLevels([]) })
+    })
+    return () => { cancelled = true }
+  }, [selectedSku])
+
+  const availableAtSource = useMemo(() => {
+    if (!selectedProduct || !form.from) return null
+    const loc = locations.find((l) => l.name === form.from)
+    return levels.find((x) => x.locationId === loc?.id || x.locationId === form.from)?.qty ?? 0
+  }, [selectedProduct, form.from, levels, locations])
+
   const handleCreate = async () => {
     const product = products.find((p) => p.id === form.product)
     if (!product || !form.from || !form.to || !form.qty || form.from === form.to) return
@@ -108,20 +134,17 @@ export default function StockTransfersPage() {
     setSaving(true)
     setError('')
     try {
-      await dbApi.create('inventory/transfers', {
-        number: `ST-2026-000${String(22 + transfers.length).padStart(3, '0')}`,
+      await dbApi.createStockTransfer({
+        number: `ST-${new Date().getFullYear()}-${String(transfers.length + 1).padStart(4, '0')}`,
         from: form.from,
         to: form.to,
-        product: product.name,
         sku: product.sku,
         qty,
         weight: Number((qty * product.netWeight).toFixed(1)),
-        initiatedBy: 'Arjun Mehta',
-        status: 'pending',
-        date: new Date().toISOString(),
       })
       setDialogOpen(false)
       setForm({ product: '', from: '', to: '', qty: '' })
+      toast.success('Transfer created — dispatch it to move the stock')
       load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create transfer')
@@ -130,16 +153,19 @@ export default function StockTransfersPage() {
     }
   }
 
+  // Status is not a free-text field: each transition moves stock, so it has to
+  // go through the endpoint that performs the matching ledger entries.
   const updateStatus = useCallback(async (id: string, status: TransferStatus) => {
     try {
-      await dbApi.update('inventory/transfers', id, { status })
+      if (status === 'received') await dbApi.receiveStockTransfer(id)
+      else if (status === 'cancelled') await dbApi.cancelStockTransfer(id)
+      else if (status === 'in-transit') await dbApi.dispatchStockTransfer(id)
+      else return
       load()
-    } catch {
-      toast.error('Failed to update transfer status')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update transfer')
     }
   }, [load])
-
-  const selectedProduct = products.find((p) => p.id === form.product)
 
   const columns = useMemo<ColumnDef<StockTransfer>[]>(
     () => [
@@ -210,17 +236,27 @@ export default function StockTransfersPage() {
         cell: ({ row }) => (
           <div className="flex items-center justify-end gap-0.5">
             <TooltipProvider delayDuration={200}>
-              {row.original.status !== 'received' && (
+              {row.original.status === 'pending' && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" onClick={() => updateStatus(row.original.id, 'in-transit')}>
+                      <Truck className="h-3.5 w-3.5 text-info-700" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Dispatch — stock leaves {row.original.from}</TooltipContent>
+                </Tooltip>
+              )}
+              {row.original.status === 'in-transit' && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => updateStatus(row.original.id, 'received')}>
                       <ArrowDownToLine className="h-3.5 w-3.5 text-success-600" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Mark as received</TooltipContent>
+                  <TooltipContent>Receive — stock arrives at {row.original.to}</TooltipContent>
                 </Tooltip>
               )}
-              {row.original.status !== 'cancelled' && row.original.status !== 'received' && (
+              {(row.original.status === 'pending' || row.original.status === 'in-transit') && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button variant="ghost" size="icon-sm" onClick={() => updateStatus(row.original.id, 'cancelled')}>
@@ -232,11 +268,11 @@ export default function StockTransfersPage() {
               )}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" disabled={row.original.status !== 'received'} onClick={() => updateStatus(row.original.id, 'received')}>
+                  <Button variant="ghost" size="icon-sm" disabled>
                     <Eye className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>{row.original.status === 'received' ? 'Received' : 'View after receiving'}</TooltipContent>
+                <TooltipContent>{row.original.status === 'received' ? 'Received' : 'Available once received'}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           </div>
@@ -310,7 +346,13 @@ export default function StockTransfersPage() {
                       <Label htmlFor="transfer-from">From</Label>
                       <Select
                         id="transfer-from"
-                        options={locations.map((l) => ({ value: l.name, label: l.name }))}
+                        options={locations.map((l) => {
+                          const held = levels.find((x) => x.locationId === l.id || x.locationId === l.name)?.qty
+                          return {
+                            value: l.name,
+                            label: selectedProduct ? `${l.name} (${held ?? 0} pcs)` : l.name,
+                          }
+                        })}
                         value={form.from}
                         onValueChange={(v) => setForm((f) => ({ ...f, from: v }))}
                         placeholder="From location"
@@ -333,8 +375,7 @@ export default function StockTransfersPage() {
                       id="transfer-qty"
                       type="number"
                       min={1}
-                      max={selectedProduct?.stock}
-                      placeholder={selectedProduct ? `Available: ${selectedProduct.stock}` : 'Enter quantity'}
+                      placeholder={availableAtSource != null ? `Available here: ${availableAtSource}` : 'Enter quantity'}
                       value={form.qty}
                       onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))}
                     />
@@ -349,7 +390,7 @@ export default function StockTransfersPage() {
                   <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
                   <Button
                     onClick={handleCreate}
-                    disabled={!form.product || !form.from || !form.to || form.from === form.to || !form.qty || Number(form.qty) < 1 || saving}
+                    disabled={!form.product || !form.from || !form.to || form.from === form.to || !form.qty || Number(form.qty) < 1 || saving || (availableAtSource != null && Number(form.qty) > availableAtSource)}
                   >
                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpFromLine className="h-4 w-4" />} Create Transfer
                   </Button>

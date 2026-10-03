@@ -531,13 +531,22 @@ export const dbApi = {
     const res = await request(`/db/inventory/levels${qs}`)
     return res as Array<{ productId: string; sku: string | null; locationId: string; qty: number }>
   },
-  /** Move stock between locations. This is what makes a transfer actually move stock. */
-  createStockTransfer: async (body: { sku: string; qty: number; from: string; to: string; number?: string }) => {
+  /** Create a pending transfer. Stock moves on dispatch, not on creation. */
+  createStockTransfer: async (body: { sku: string; qty: number; from: string; to: string; number?: string; weight?: number }) => {
     return request<{ id: string; number: string; status: string }>('/db/inventory/transfers', {
       method: 'POST',
       body: JSON.stringify(body),
     })
   },
+  /** Dispatch a pending transfer — the goods leave the source location. */
+  dispatchStockTransfer: async (id: string) =>
+    request<{ id: string; status: string }>(`/db/inventory/transfers/${id}/dispatch`, { method: 'POST' }),
+  /** Receive an in-transit transfer — the goods arrive at the destination. */
+  receiveStockTransfer: async (id: string) =>
+    request<{ id: string; status: string }>(`/db/inventory/transfers/${id}/receive`, { method: 'POST' }),
+  /** Cancel a transfer; an in-transit one returns its stock to the source. */
+  cancelStockTransfer: async (id: string) =>
+    request<{ id: string; status: string }>(`/db/inventory/transfers/${id}/cancel`, { method: 'POST' }),
   search: (q: string) =>
     request<SearchResults>(`/db/search?q=${encodeURIComponent(q)}`),
 

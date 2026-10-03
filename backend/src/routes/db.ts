@@ -2253,62 +2253,206 @@ dbRouter.get('/inventory/levels', requirePermission('inventory', 'view'), async 
 // Create a transfer. This is what makes a transfer actually move stock: the
 // record and the paired ledger movements are written together, so the document
 // and the balances can never disagree.
+/** Resolves a location given its id or its display name (the UI sends names). */
+async function resolveLocation(input: string): Promise<string | null> {
+  const value = String(input ?? '').trim()
+  if (!value) return null
+  const [byId] = await db!.select({ id: s.inventoryLocations.id }).from(s.inventoryLocations).where(eq(s.inventoryLocations.id, value)).limit(1)
+  if (byId) return byId.id
+  const [byName] = await db!.select({ id: s.inventoryLocations.id }).from(s.inventoryLocations).where(eq(s.inventoryLocations.name, value)).limit(1)
+  return byName?.id ?? null
+}
+
 dbRouter.post('/inventory/transfers', requirePermission('inventory', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
     const sku = String(req.body?.sku ?? '').trim()
     const qty = Math.floor(Number(req.body?.qty ?? 0))
-    const from = String(req.body?.from ?? '').trim()
-    const to = String(req.body?.to ?? '').trim()
-    if (!sku || qty <= 0 || !from || !to) {
+    const fromRaw = String(req.body?.from ?? '').trim()
+    const toRaw = String(req.body?.to ?? '').trim()
+    if (!sku || qty <= 0 || !fromRaw || !toRaw) {
       return res.status(400).json({ error: 'sku, qty, from and to are required' })
     }
+
+    const from = await resolveLocation(fromRaw)
+    const to = await resolveLocation(toRaw)
+    if (!from) return res.status(400).json({ error: `Unknown source location "${fromRaw}"` })
+    if (!to) return res.status(400).json({ error: `Unknown destination location "${toRaw}"` })
     if (from === to) return res.status(400).json({ error: 'Source and destination must differ' })
 
     const [product] = await db!.select({ id: s.products.id, name: s.products.name }).from(s.products).where(eq(s.products.sku, sku)).limit(1)
     if (!product) return res.status(404).json({ error: `Unknown SKU ${sku}` })
 
+    // Available at the source must cover it now, or dispatch will fail later
+    // and the transfer would be a promise nobody can keep.
+    const [fromLevel] = await db!
+      .select({ qty: s.stockLevels.qty })
+      .from(s.stockLevels)
+      .where(and(eq(s.stockLevels.productId, product.id), eq(s.stockLevels.locationId, from)))
+      .limit(1)
+    const available = Number(fromLevel?.qty ?? 0)
+    if (available < qty) {
+      return res.status(400).json({ error: `Only ${available} in stock at ${fromRaw}, tried to move ${qty}` })
+    }
+
     const number = String(req.body?.number ?? '').trim() || `ST-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
-    const id = randomUUID()
-    const created = await db!.transaction(async (tx) => {
-      const [fromLevel] = await tx.select({ qty: s.stockLevels.qty }).from(s.stockLevels).where(and(eq(s.stockLevels.productId, product.id), eq(s.stockLevels.locationId, from))).limit(1)
-      const available = Number(fromLevel?.qty ?? 0)
-      if (available < qty) {
-        throw Object.assign(new Error(`Only ${available} in stock at ${from}, tried to move ${qty}`), { status: 400 })
-      }
-      await transferStock({
+    const [created] = await db!
+      .insert(s.stockTransfers)
+      .values({
+        id: randomUUID(),
+        number,
+        from: fromRaw,
+        to: toRaw,
+        product: product.name ?? null,
         sku,
         qty,
-        fromLocationId: from,
-        toLocationId: to,
+        weight: req.body?.weight != null ? Number(req.body.weight) : null,
+        initiatedBy: actorFromRequest(req).userId ?? 'system',
+        // Pending means the goods are still sitting at the source. Stock moves
+        // on dispatch, not on creation — otherwise a transfer that is never
+        // dispatched has already emptied the shelf it was meant to refill.
+        status: 'pending',
+        date: new Date().toISOString(),
+      })
+      .returning()
+
+    recordCrud('stockTransfers', 'Created', req, { number, sku, qty, from: fromRaw, to: toRaw })
+    res.status(201).json(created)
+  } catch (err) {
+    logger.error({ err }, 'stock transfer create failed')
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Transfer failed' })
+  }
+})
+
+/** Dispatch: the goods leave the source, so the balance there drops. */
+dbRouter.post('/inventory/transfers/:id/dispatch', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const updated = await db!.transaction(async (tx) => {
+      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, req.params.id)).limit(1)
+      if (!transfer) throw Object.assign(new Error('Transfer not found'), { status: 404 })
+      if (transfer.status !== 'pending') {
+        throw Object.assign(new Error(`Cannot dispatch a transfer that is ${transfer.status}`), { status: 400 })
+      }
+      const from = await resolveLocation(String(transfer.from ?? ''))
+      const to = await resolveLocation(String(transfer.to ?? ''))
+      if (!from || !to) throw Object.assign(new Error('Transfer locations no longer exist'), { status: 400 })
+
+      const sku = String(transfer.sku ?? '')
+      const [product] = await tx.select({ id: s.products.id }).from(s.products).where(eq(s.products.sku, sku)).limit(1)
+      if (!product) throw Object.assign(new Error(`Unknown SKU ${sku}`), { status: 400 })
+      const [level] = await tx
+        .select({ qty: s.stockLevels.qty })
+        .from(s.stockLevels)
+        .where(and(eq(s.stockLevels.productId, product.id), eq(s.stockLevels.locationId, from)))
+        .limit(1)
+      const available = Number(level?.qty ?? 0)
+      if (available < Number(transfer.qty ?? 0)) {
+        throw Object.assign(new Error(`Only ${available} in stock at ${transfer.from}, tried to move ${transfer.qty}`), { status: 400 })
+      }
+
+      // Stock physically leaves the source. It lands at the destination on
+      // receive, so goods in transit are in neither location's balance.
+      await applyStockMovement({
+        sku,
+        qty: -Number(transfer.qty ?? 0),
+        type: 'transfer_out',
+        locationId: from,
         refType: 'stock_transfer',
-        refId: id,
+        refId: transfer.id,
         createdBy: actorFromRequest(req).userId ?? 'system',
       })
       const [row] = await tx
-        .insert(s.stockTransfers)
-        .values({
-          id,
-          number,
-          from,
-          to,
-          product: product.name ?? null,
-          sku,
-          qty,
-          initiatedBy: actorFromRequest(req).userId ?? 'system',
-          status: 'completed',
-          date: new Date().toISOString(),
-        })
+        .update(s.stockTransfers)
+        .set({ status: 'in-transit' })
+        .where(eq(s.stockTransfers.id, transfer.id))
         .returning()
       return row
     })
-
-    recordCrud('stockTransfers', 'Created', req, { number, sku, qty, from, to })
-    res.status(201).json(created)
+    recordCrud('stockTransfers', 'Updated', req, { id: req.params.id, status: 'in-transit' })
+    res.json(updated)
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
-    if (status === 500) logger.error({ err }, 'stock transfer failed')
-    res.status(status).json({ error: err instanceof Error ? err.message : 'Transfer failed' })
+    if (status === 500) logger.error({ err }, 'transfer dispatch failed')
+    res.status(status).json({ error: err instanceof Error ? err.message : 'Dispatch failed' })
+  }
+})
+
+/** Receive: the goods arrive, so the destination balance rises. */
+dbRouter.post('/inventory/transfers/:id/receive', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const updated = await db!.transaction(async (tx) => {
+      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, req.params.id)).limit(1)
+      if (!transfer) throw Object.assign(new Error('Transfer not found'), { status: 404 })
+      if (transfer.status !== 'in-transit') {
+        throw Object.assign(new Error(`Cannot receive a transfer that is ${transfer.status}`), { status: 400 })
+      }
+      const to = await resolveLocation(String(transfer.to ?? ''))
+      if (!to) throw Object.assign(new Error('Destination location no longer exists'), { status: 400 })
+      await applyStockMovement({
+        sku: String(transfer.sku ?? ''),
+        qty: Number(transfer.qty ?? 0),
+        type: 'transfer_in',
+        locationId: to,
+        refType: 'stock_transfer',
+        refId: transfer.id,
+        createdBy: actorFromRequest(req).userId ?? 'system',
+      })
+      const [row] = await tx
+        .update(s.stockTransfers)
+        .set({ status: 'received' })
+        .where(eq(s.stockTransfers.id, transfer.id))
+        .returning()
+      return row
+    })
+    recordCrud('stockTransfers', 'Updated', req, { id: req.params.id, status: 'received' })
+    res.json(updated)
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    if (status === 500) logger.error({ err }, 'transfer receive failed')
+    res.status(status).json({ error: err instanceof Error ? err.message : 'Receive failed' })
+  }
+})
+
+/** Cancel: an in-transit transfer has to put the stock back where it came from. */
+dbRouter.post('/inventory/transfers/:id/cancel', requirePermission('inventory', 'edit'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    const updated = await db!.transaction(async (tx) => {
+      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, req.params.id)).limit(1)
+      if (!transfer) throw Object.assign(new Error('Transfer not found'), { status: 404 })
+      if (transfer.status === 'received') {
+        throw Object.assign(new Error('A received transfer cannot be cancelled'), { status: 400 })
+      }
+      if (transfer.status === 'in-transit') {
+        const from = await resolveLocation(String(transfer.from ?? ''))
+        if (!from) throw Object.assign(new Error('Source location no longer exists'), { status: 400 })
+        // It left the source on dispatch, so cancelling returns it there.
+        await applyStockMovement({
+          sku: String(transfer.sku ?? ''),
+          qty: Number(transfer.qty ?? 0),
+          type: 'transfer_in',
+          locationId: from,
+          refType: 'stock_transfer',
+          refId: transfer.id,
+          note: 'transfer cancelled — returned to source',
+          createdBy: actorFromRequest(req).userId ?? 'system',
+        })
+      }
+      const [row] = await tx
+        .update(s.stockTransfers)
+        .set({ status: 'cancelled' })
+        .where(eq(s.stockTransfers.id, transfer.id))
+        .returning()
+      return row
+    })
+    recordCrud('stockTransfers', 'Updated', req, { id: req.params.id, status: 'cancelled' })
+    res.json(updated)
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    if (status === 500) logger.error({ err }, 'transfer cancel failed')
+    res.status(status).json({ error: err instanceof Error ? err.message : 'Cancel failed' })
   }
 })
 

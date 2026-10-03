@@ -2,6 +2,7 @@ import { toast } from '@/components/ui/confirm'
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  ArrowLeftRight,
   ChevronRight,
   Edit,
   Gem,
@@ -18,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { formatDateTime } from '@/lib/format'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -207,6 +209,7 @@ export default function ProductDetailPage() {
             { v: 'overview', label: 'Overview', icon: Gem },
             { v: 'pricing', label: 'Pricing', icon: Tags },
             { v: 'inventory', label: 'Inventory', icon: Package },
+            { v: 'movements', label: 'Stock History', icon: ArrowLeftRight },
             { v: 'shopify', label: 'Shopify', icon: ShoppingBag },
             { v: 'sales', label: 'Sales History', icon: Receipt },
             { v: 'purchase', label: 'Purchase History', icon: PackageSearch },
@@ -332,6 +335,10 @@ export default function ProductDetailPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="movements">
+          <StockHistory sku={product.sku} />
+        </TabsContent>
+
         <TabsContent value="shopify">
           <Card>
             <CardContent className="p-5">
@@ -400,6 +407,119 @@ function MiniStat({ label, value, sub }: { label: string; value: string; sub?: s
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-0.5 text-sm font-semibold text-foreground">{value}</p>
       {sub ? <p className="mt-0.5 text-[11px] text-muted-foreground">{sub}</p> : null}
+    </div>
+  )
+}
+
+const MOVEMENT_LABEL: Record<string, string> = {
+  purchase_in: 'Purchase received',
+  purchase_return_out: 'Purchase returned',
+  sale_out: 'Sold',
+  sale_return_in: 'Sales return',
+  transfer_in: 'Transfer in',
+  transfer_out: 'Transfer out',
+  count_adjust: 'Stock count',
+  shopify_sync: 'Shopify sync',
+  opening: 'Opening balance',
+  manual: 'Manual adjustment',
+}
+
+/**
+ * The stock ledger for one product: every movement with the balance it left
+ * behind, plus where the stock sits right now. Stock used to be a bare number
+ * with no way to ask why.
+ */
+function StockHistory({ sku }: { sku: string }) {
+  const [movements, setMovements] = useState<Awaited<ReturnType<typeof dbApi.getStockMovements>>>([])
+  const [levels, setLevels] = useState<Awaited<ReturnType<typeof dbApi.getStockLevels>>>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      Promise.all([dbApi.getStockMovements(sku), dbApi.getStockLevels(sku)])
+        .then(([m, l]) => {
+          if (cancelled) return
+          setMovements(m)
+          setLevels(l)
+        })
+        .catch(() => undefined)
+        .finally(() => { if (!cancelled) setLoading(false) })
+    })
+    return () => { cancelled = true }
+  }, [sku])
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Stock by location</CardTitle>
+          <CardDescription>Where this product is physically held right now.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {levels.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No per-location balances yet. Stock is recorded against a location as soon as it first moves.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {levels.map((l) => (
+                <div key={l.locationId} className="rounded-md border bg-card p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{l.locationId}</p>
+                  <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{l.qty} pcs</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Movement history</CardTitle>
+          <CardDescription>
+            Every change to this product&apos;s stock, with the balance it left behind.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading history…</p>
+          ) : movements.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No movements recorded yet. Stock changes appear here from the moment the ledger starts tracking this product.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {movements.map((m) => {
+                const qty = Number(m.qty ?? 0)
+                const incoming = qty > 0
+                return (
+                  <li key={m.id} className="flex items-center justify-between gap-4 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {MOVEMENT_LABEL[m.type] ?? m.type}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {m.date ? formatDateTime(m.date) : '—'}
+                        {m.locationId ? ` · ${m.locationId}` : ''}
+                        {m.note ? ` · ${m.note}` : ''}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className={`text-sm font-semibold tabular-nums ${incoming ? 'text-success-600' : 'text-destructive'}`}>
+                        {incoming ? '+' : ''}{qty}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        → {Number(m.stockAfter ?? 0)} on hand
+                      </p>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }
