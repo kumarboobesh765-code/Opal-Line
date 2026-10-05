@@ -1,11 +1,11 @@
 # Roadmap
 
-Last updated at v1.0.10. See `docs/release-notes-v1.0.10.md` for what that
-release changed and `docs/release-notes-v1.0.9.md` for the one before it. This
+Last updated at v1.0.11. See `docs/release-notes-v1.0.11.md` for what that
+release changed and `docs/release-notes-v1.0.10.md` for the one before it. This
 file previously described "v1.0.2 planned scope" — treat anything below as
 current, and check the release notes for what a version actually did.
 
-## Shipped through v1.0.10
+## Shipped through v1.0.11
 
 Not outstanding. Listed so the next reader can see what is already done.
 
@@ -33,6 +33,19 @@ Not outstanding. Listed so the next reader can see what is already done.
   Dispatch action, and the product page carries a Stock History tab that
   explains any balance on screen. Installations that predate the ledger are
   backfilled with dated opening movements on boot.
+- **Dependency majors, all four (v1.0.11)** — express 4→5, Tailwind 3→4,
+  TypeScript 6→7, dotenv 16→18. No behaviour change; the work was in the
+  migration mechanics, and the reasons are written up in `docs/DEVELOPING.md`
+  so the next upgrade is not rediscovered from scratch. Two of them needed
+  supporting changes rather than a version bump alone: a typed `routeParam`
+  helper for express 5's `req.params` union, and a CSS-first theme file for
+  Tailwind 4.
+- **Release and repository plumbing** — the published installer is signed, and
+  CI proves it *works* rather than merely compiling: it installs the app into a
+  clean Windows environment, launches it, and runs the UI suite against the
+  installed copy. Alongside that: a pre-commit credential guard, a secret scan
+  covering git history (not just the working tree), Dependabot with grouped
+  updates, a nightly production-dependency audit, and a developer guide.
 
 ## Known gaps in what shipped
 
@@ -75,11 +88,21 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   Main Store and cannot be re-attributed without editing the row.
 - **The stock ledger's pure rules are unit-tested; its database behaviour is
   not.** The signed-quantity convention, cost revaluation, backfill eligibility
-  and location rules have 45 tests, but `applyStockMovement`'s locking and
-  rollup behaviour is only covered by throwaway live scripts that get deleted.
-- **Backend oxlint sits at 98 warnings** (frontend is at 0). The number has
-  drifted from the 47 recorded here previously; nothing in CI enforces either
-  side, so it grows unnoticed.
+  and location rules have 45 tests in `backend/src/stock.test.ts`, but
+  `applyStockMovement`'s locking and rollup behaviour is only covered by
+  throwaway live scripts that get deleted.
+- **Backend oxlint sits at 97 warnings** (frontend is at 0). Nothing in CI
+  enforces either side, so it drifts unnoticed — it was 47, then 98, and is now
+  97 after v1.0.11 touched backend files. Either fix the warnings or add a
+  budget check; leaving it unenforced means this line is always out of date.
+- **`better-sqlite3` is a phantom external.** `scripts/build-desktop.js` passes
+  `--external:better-sqlite3`, but the package is not declared in any manifest,
+  not imported anywhere, and absent from the lockfile. Harmless today (esbuild
+  ignores externals it never encounters) and misleading to the next reader.
+- **The dev database cannot be started from a non-interactive shell.** The
+  bundled `pg_ctl` dies with `0xC0000142` (DLL init failed) when launched from a
+  tool shell, so `npm run dev` needs a real terminal. Not a code defect, but it
+  makes "just run it and look" harder than it should be.
 
 ## Next candidates
 
