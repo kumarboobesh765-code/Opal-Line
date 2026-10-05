@@ -1,0 +1,58 @@
+#!/bin/sh
+# Pre-commit secret guard.
+#
+# Runs the same scanner CI uses, so a credential is caught on the developer's
+# machine instead of after a push. Enable once per clone with:
+#
+#   git config core.hooksPath .githooks
+#
+# Set SKIP_SECRET_SCAN=1 to bypass for a legitimate false positive:
+#
+#   SKIP_SECRET_SCAN=1 git commit -m "..."
+#
+# The escape hatch is intentional — a hook that cannot be bypassed gets
+# removed wholesale, which is worse than a documented opt-out.
+#
+# Only staged content matters here: a secret still sitting untracked in the
+# working tree is not in this commit, and scanning it would block unrelated
+# work. The full-history scan is CI's job, not the hook's.
+
+if [ "$SKIP_SECRET_SCAN" = "1" ]; then
+  echo "pre-commit: secret scan skipped (SKIP_SECRET_SCAN=1)"
+  exit 0
+fi
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root" || exit 1
+
+if [ ! -f scripts/scan-secrets.mjs ]; then
+  echo "pre-commit: scripts/scan-secrets.mjs not found; skipping guard"
+  exit 0
+fi
+
+# Fast path: nothing staged, nothing to guard.
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+# Cheap pre-filter on the staged file list. Avoids the full scan (which walks
+# all of history) on every commit when the staged set cannot possibly contain
+# one of the guarded paths.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+suspicious=$(printf '%s\n' "$staged" | grep -Ei '(^|/)\.env($|\.)|\.pfx$|\.p12$|\.pem$|\.key$|\.auth/state\.json$|playwright\.auth/|encryption-key|csrf-secret' || true)
+
+if [ -z "$suspicious" ]; then
+  exit 0
+fi
+
+echo "pre-commit: staged credential-shaped paths detected, running full scan..."
+printf '  %s\n' $suspicious
+
+if ! node scripts/scan-secrets.mjs; then
+  echo
+  echo "pre-commit: commit blocked by the secret scan."
+  echo "If this is a false positive, re-run with SKIP_SECRET_SCAN=1."
+  exit 1
+fi
+
+exit 0

@@ -73,6 +73,11 @@ jobs:
     runs-on: windows-latest
     needs: checks
     timeout-minutes: 90
+    env:
+      # Set by the first step below. A step-level `if` cannot set env, so the
+      # flag is computed once and every later step reads it. Keeps the skip
+      # logic in one place instead of repeating a condition on six steps.
+      SIGNING_AVAILABLE: 'false'
 
     steps:
       - uses: actions/checkout@v7
@@ -87,11 +92,36 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # GitHub withholds repository secrets from Dependabot-triggered runs, so
+      # on a dependency PR this job used to die at the step below with a
+      # misleading failure that had nothing to do with the dependency.
+      #
+      # This cannot be a job-level `if`: the secrets context is not available
+      # there, and referencing it makes GitHub reject the ENTIRE workflow as
+      # invalid ("Unrecognized named-value: 'secrets'", actions/runner#520).
+      # A step-level `if` does support secrets, so the skip is expressed here.
+      # Tag pushes are unaffected - those run from the base repo and get it.
+      - name: Check signing certificate is available
+        id: signing
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WIN_SIGNING_PFX_B64 }}
+        run: |
+          if ($env:PFX_B64) {
+            'available=true' >> $env:GITHUB_OUTPUT
+            'SIGNING_AVAILABLE=true' >> $env:GITHUB_ENV
+          } else {
+            'available=false' >> $env:GITHUB_OUTPUT
+            Write-Host '::notice::WIN_SIGNING_PFX_B64 is not available to this run'
+            Write-Host '::notice::Skipping the signed-installer e2e steps.'
+          }
+
       # Same certificate dance as release.yml: the build hard-fails without a
       # cert whose subject contains "Opal Line Billing". Never import into
       # CurrentUser\Root on a headless runner — the confirmation dialog hangs
       # the job; the machine stores never prompt (runners are elevated).
       - name: Import code-signing certificate
+        if: steps.signing.outputs.available == 'true'
         shell: pwsh
         env:
           PFX_B64: ${{ secrets.WIN_SIGNING_PFX_B64 }}
@@ -118,12 +148,14 @@ jobs:
           Write-Host "Imported $($cert.Subject) thumbprint=$($cert.Thumbprint)"
 
       - name: Build signed Windows installer
+        if: env.SIGNING_AVAILABLE == 'true'
         run: npm run electron:build
 
       # Installs silently, verifies the extracted tree + signature + uninstall
       # entry, boots the app and probes PG 47193 / API 47192. Deliberately run
       # WITHOUT -StopAtEnd so the app keeps serving the Playwright suite below.
       - name: Installer smoke test (install + boot the app)
+        if: env.SIGNING_AVAILABLE == 'true'
         shell: pwsh
         # Runners can be slow on the first Defender scan of the 145 MB
         # installer; allow 15 minutes before treating the install as stuck.
@@ -136,6 +168,7 @@ jobs:
       # against the database on every login - so simply set a known password
       # (the repo's e2e default) in the live database and log in with it.
       - name: Reset admin password for the e2e suite
+        if: env.SIGNING_AVAILABLE == 'true'
         shell: pwsh
         run: |
           $hash = node -e "require('argon2').hash('Opal@2026').then(h => console.log(h))"
@@ -186,9 +219,11 @@ jobs:
           }
 
       - name: Install Playwright chromium
+        if: env.SIGNING_AVAILABLE == 'true'
         run: npx playwright install chromium
 
       - name: Playwright suite against the installed app
+        if: env.SIGNING_AVAILABLE == 'true'
         shell: bash
         env:
           E2E_BASE_URL: http://127.0.0.1:47192
