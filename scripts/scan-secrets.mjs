@@ -6,7 +6,7 @@
 // file never fails the build.
 //
 // Usage: node scripts/scan-secrets.mjs
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
 // Paths that must never be tracked. Matched against the repo-relative path.
@@ -75,16 +75,102 @@ for (const file of files) {
     continue // unreadable (symlink, race); not this check's job to report
   }
 
-  const lines = text.split('\n')
-  lines.forEach((line, i) => {
+  scanText(text, normalized, findings)
+}
+
+// Reports every secret-shaped match in `text`, labelled with `label` and the
+// 1-based line number so a finding points at a real location.
+function scanText(text, label, sink) {
+  text.split('\n').forEach((line, i) => {
     for (const { name, re } of SECRET_PATTERNS) {
       // Fresh regex per line: the global flag makes lastIndex stateful.
       if (new RegExp(re.source, re.flags).test(line)) {
-        findings.push({ file: normalized, line: i + 1, kind: name })
+        sink.push({ file: label, line: i + 1, kind: name })
       }
     }
   })
 }
+
+// Extract the blob content from one `git cat-file --batch` record:
+//   "<sha> blob <size>\n<bytes>\n"
+function parseBatchRecord(buf, offset) {
+  const nl = buf.indexOf(0x0a, offset)
+  if (nl === -1) return null
+  const header = buf.toString('utf8', offset, nl)
+  const parts = header.split(' ')
+  if (parts.length < 3) return null
+  const size = Number(parts[2])
+  if (!Number.isFinite(size)) return null
+  const start = nl + 1
+  const end = start + size
+  return { sha: parts[0], size, start, end, next: end + 1 }
+}
+
+// Scans every blob ever reachable from HEAD. A credential that was committed
+// and later deleted is still fetchable on a public repo, so a clean working
+// tree is not sufficient evidence.
+//
+// Uses `rev-list --objects` to enumerate unique blobs and feeds their SHAs to a
+// single `cat-file --batch` process: ~2 processes total instead of one per
+// blob. The naive per-blob version needed >10 minutes here and timed out.
+function scanHistory(sink) {
+  let listing = ''
+  try {
+    listing = git('rev-list', '--objects', '--all')
+  } catch {
+    console.log('scan-secrets: history scan skipped (rev-list failed)')
+    return
+  }
+
+  // "<sha> <path>" - the path is absent for the root commit's tree/root only.
+  const byBlob = new Map()
+  for (const line of listing.split('\n')) {
+    if (!line) continue
+    const sp = line.indexOf(' ')
+    const sha = sp === -1 ? line : line.slice(0, sp)
+    const name = sp === -1 ? '' : line.slice(sp + 1)
+    if (!/^[0-9a-f]{40}$/.test(sha)) continue
+    if (name && (SKIP.some((re) => re.test(name)) || FORBIDDEN_PATHS.some((re) => re.test(name)))) continue
+    if (!byBlob.has(sha)) byBlob.set(sha, name)
+  }
+  if (byBlob.size === 0) return
+
+  const shas = [...byBlob.keys()]
+  const res = spawnSync('git', ['cat-file', '--batch'], {
+    input: shas.join('\n') + '\n',
+    maxBuffer: 512 * 1024 * 1024,
+  })
+  if (res.status !== 0 || !res.stdout) {
+    console.log('scan-secrets: history scan skipped (cat-file --batch failed)')
+    return
+  }
+
+  const buf = res.stdout
+  let off = 0
+  let scanned = 0
+  while (off < buf.length) {
+    const rec = parseBatchRecord(buf, off)
+    if (!rec) break
+    if (rec.size > 0) {
+      const body = buf.subarray(rec.start, rec.end)
+      if (!body.includes(0)) {
+        scanned++
+        scanText(
+          body.toString('utf8'),
+          `history:${rec.sha.slice(0, 8)}:${byBlob.get(rec.sha) || '?'}`,
+          sink,
+        )
+      }
+    }
+    off = rec.next
+  }
+
+  console.log(
+    `scan-secrets: history scanned (${shas.length} blobs, ${scanned} text)`,
+  )
+}
+
+scanHistory(findings)
 
 if (findings.length === 0) {
   console.log(`scan-secrets: clean (${files.length} tracked files scanned)`)
