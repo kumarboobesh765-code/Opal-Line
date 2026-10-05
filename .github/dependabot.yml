@@ -1,0 +1,57 @@
+# Automated dependency updates.
+#
+# This is an Electron desktop app that talks to Shopify and holds billing and
+# customer data, so dependency CVEs matter more here than in a typical repo.
+# Dependabot opens PRs; nothing merges on its own - CI (including the secret
+# scan) and your review gate every change.
+#
+# Schedule is weekly on Monday, off-peak UTC. Weekly rather than daily because
+# npm publishes a lot of noise and this repo has a real release train.
+version: 2
+
+updates:
+  # Root workspace: npm resolves every workspace through the single root
+  # lockfile, so grouping keeps a transitive bump in one reviewable PR instead
+  # of splitting it across frontend/ and backend/ PRs that conflict with
+  # each other on package-lock.json.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    groups:
+      # Security fixes first and together: a dependency bump can require
+      # coordinated version bumps across workspaces, which is hard to review
+      # as three separate PRs.
+      npm-security-updates:
+        applies-to: version-updates
+        dependency-type: production
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+      # Test/build tooling drifts fast and does not ship to users.
+      npm-dev-dependencies:
+        applies-to: version-updates
+        dependency-type: development
+        patterns:
+          - '*'
+
+  # Keep the release and CI actions patched too. These run with repo
+  # credentials, so an outdated action is a supply-chain risk rather than
+  # just a stale dependency.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Etc/UTC
+    groups:
+      github-actions:
+        patterns:
+          - '*'
