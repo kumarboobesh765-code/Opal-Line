@@ -1,0 +1,168 @@
+/* Tailwind 4 theme, ported from the v3 `tailwind.config.js` `theme` block.
+ *
+ * Tailwind 4 is CSS-first: the JS config file is no longer read, so every
+ * token has to be declared here or it silently disappears from the build.
+ * The colour values stay as bare HSL channel triples because they are consumed
+ * through `hsl(var(--token))` in the utility definitions below, exactly as
+ * they were in v3.
+ */
+@theme {
+  /* ── Colours ──────────────────────────────────────────────────────────────
+   * These reference the runtime CSS variables declared in index.css rather
+   * than baking in static values, which is what makes dark mode work: the
+   * `.dark` block reassigns --background etc. and every utility follows. */
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-50: hsl(var(--primary-50));
+  --color-primary-100: hsl(var(--primary-100));
+  --color-primary-200: hsl(var(--primary-200));
+  --color-primary-300: hsl(var(--primary-300));
+  --color-primary-400: hsl(var(--primary-400));
+  --color-primary-500: hsl(var(--primary-500));
+  --color-primary-600: hsl(var(--primary-600));
+  --color-primary-700: hsl(var(--primary-700));
+  --color-primary-800: hsl(var(--primary-800));
+  --color-primary-900: hsl(var(--primary-900));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-success-50: hsl(var(--success-50));
+  --color-success-100: hsl(var(--success-100));
+  --color-success-700: hsl(var(--success-700));
+
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-warning-50: hsl(var(--warning-50));
+  --color-warning-100: hsl(var(--warning-100));
+  --color-warning-700: hsl(var(--warning-700));
+
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+  --color-info-50: hsl(var(--info-50));
+  --color-info-100: hsl(var(--info-100));
+  --color-info-700: hsl(var(--info-700));
+
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-muted: hsl(var(--sidebar-muted));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-active: hsl(var(--sidebar-active));
+  --color-sidebar-active-foreground: hsl(var(--sidebar-active-foreground));
+  --color-sidebar-hover: hsl(var(--sidebar-hover));
+
+  /* ── Border radius ───────────────────────────────────────────────────── */
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 0.875rem;
+
+  --font-sans:
+    Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ── Shadows ─────────────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 2px 0 rgb(16 24 40 / 0.05);
+  --shadow-card-hover:
+    0 1px 2px 0 rgb(16 24 40 / 0.05), 0 8px 24px -8px rgb(76 29 149 / 0.12);
+  --shadow-popover:
+    0 8px 24px -4px rgb(16 24 40 / 0.12), 0 2px 6px -2px rgb(16 24 40 / 0.08);
+  --shadow-kpi: 0 1px 2px 0 rgb(16 24 40 / 0.04);
+
+  /* ── Animations ──────────────────────────────────────────────────────── */
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-scale-in: scale-in 0.15s ease-out;
+  --animate-dialog-in: dialog-in 0.2s ease-out;
+  --animate-slide-in-right: slide-in-right 0.25s ease-out;
+}
+
+/* Tailwind 4 requires keyframes to be declared inside @theme for the
+ * animation utilities above to reference them. */
+@theme {
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-scale-in: scale-in 0.15s ease-out;
+  --animate-dialog-in: dialog-in 0.2s ease-out;
+  --animate-slide-in-right: slide-in-right 0.25s ease-out;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+  }
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+}
+
+/* v3 had `darkMode: ['class']`. In v4 the equivalent is an explicit variant
+ * that only activates when `.dark` is present on an ancestor — which is what
+ * the app's theme toggle sets. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* v3 `theme.container` (centered, 1.5rem padding, 2xl at 1680px). */
+@utility container {
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+
+  @media (width >= 1680px) {
+    max-width: 1680px;
+  }
+}

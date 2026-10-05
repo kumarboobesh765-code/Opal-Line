@@ -95,13 +95,30 @@ an upgrade is safe. This repo has already been bitten twice:
   `/`, `/products` and `/a/b/c`. On top of that, express 5 types
   `req.params.*` as `string | string[]`; use `routeParam()` from
   `backend/src/lib/routeParams.ts` rather than casting at each site.
-- **Tailwind 4** — removes `tailwind.config.js` and the `@tailwind`/`@apply`
-  directives.
+- **Tailwind 4** — removes `tailwind.config.js` and the `@tailwind` directives.
+  Migrated: the theme now lives in `frontend/src/theme.css` as a CSS-first
+  `@theme` block, PostCSS uses `@tailwindcss/postcss` instead of the
+  `tailwindcss` + `autoprefixer` pair, and `darkMode: ['class']` became
+  `@custom-variant dark (&:where(.dark, .dark *))`. **A v4 build emits ~68
+  `@property` blocks**, so CSS grows from ~60KB to ~92KB — that is expected, not
+  bloat. What matters is that the theme tokens still reach the output: check
+  `--primary`, `--radius` and the `.dark` block after any theme edit, because v4
+  silently drops tokens it cannot find rather than erroring.
+- **TypeScript 7** — removed the `node10` module resolution outright. The
+  backend moved to `module: preserve` + `moduleResolution: bundler`. That is not
+  arbitrary: `scripts/build-desktop.js` bundles the backend with **esbuild**
+  (`--platform=node --format=cjs`), and dev/test run through `tsx` — also
+  esbuild. All three resolve like a bundler, so `node10` was stricter than
+  anything that actually loads the code. `nodenext` would force explicit `.js`
+  extensions on 179 relative imports for no runtime benefit.
+- **dotenv 18** — moves its type declarations behind the package `exports` map,
+  which breaks `node10`-era type resolution. Runtime resolution under CommonJS
+  is unaffected. `backend/src/types/dotenv.d.ts` declares the module for the
+  compiler.
 
-Already migrated: **express 5** (see `backend/src/routes/` for the `routeParam`
-convention). Still pending, deliberately unmerged: Tailwind 4 / TypeScript 7, and
-dotenv 18 — the backend depends on dotenv's `.env` path resolution, which dotenv
-17 changed (see `backend/src/lib/envfile.ts`).
+All four majors are now migrated. Express 5 required `routeParam()` from
+`backend/src/lib/routeParams.ts` (see `backend/src/routes/` for the convention)
+rather than casting `req.params.*` at each of the ~115 call sites.
 
 ## Nightly (`nightly.yml`)
 
