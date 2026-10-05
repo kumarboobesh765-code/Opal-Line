@@ -73,6 +73,13 @@ jobs:
     runs-on: windows-latest
     needs: checks
     timeout-minutes: 90
+    # Needs the signing certificate. GitHub withholds repository secrets from
+    # Dependabot-triggered runs, so without this guard every dependency PR
+    # failed at "Import code-signing certificate" — a misleading red that has
+    # nothing to do with the dependency itself. A skipped job reads neutral
+    # instead. Tag pushes (Release) are unaffected: those run from the base
+    # repo and do get the secret.
+    if: ${{ secrets.WIN_SIGNING_PFX_B64 != '' }}
 
     steps:
       - uses: actions/checkout@v7
