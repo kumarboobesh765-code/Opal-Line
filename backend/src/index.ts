@@ -35,6 +35,7 @@ import { startOrderEmailIngest, stopOrderEmailIngest, pollOrderMailbox, isEmailI
 import { isPiiAccessDenied, missingPiiCustomerCount, normalizeShopifyCustomerId } from './shopifyDataEnhance'
 import { fetchSilverRateNow, getSchedulerStatus, setAutoRateEnabled, SILVER_RATE_HOUR, SILVER_RATE_MINUTE, startSilverRateScheduler } from './silverRateScheduler'
 import { ensureUploadsDir, UPLOADS_DIR, uploadImageHandler } from './uploads'
+import { routeParam } from './lib/routeParams'
 
 const app = express()
 
@@ -924,7 +925,7 @@ app.get('/api/v1/shopify/products/compare', requirePermission('shopify', 'view')
 app.post('/api/v1/shopify/products/:id/pull', requirePermission('shopify', 'edit'), async (req, res) => {
   try {
     if (!isConfigured()) return res.status(503).json({ error: 'Shopify is not configured' })
-    const localId = String(req.params.id ?? '').trim()
+    const localId = String(routeParam(req.params.id) ?? '').trim()
     const [dbMod, shopifyMod] = await Promise.all([import('./db/client'), import('./shopify')])
     const dbh = dbMod.db
     if (!dbh) return res.status(503).json({ error: 'Database is not configured' })
@@ -1126,7 +1127,7 @@ app.post('/api/v1/silver/requests/:id/approve', requirePermission('silver-rate',
   try {
     const userId = req.userId!
     if (!(await isSilverApprover(userId))) return res.status(403).json({ error: 'Only Admin or Super Admin can approve rate changes' })
-    const [request] = await db.select().from(schema.silverRateRequests).where(eq(schema.silverRateRequests.id, req.params.id)).limit(1)
+    const [request] = await db.select().from(schema.silverRateRequests).where(eq(schema.silverRateRequests.id, routeParam(req.params.id))).limit(1)
     if (!request) return res.status(404).json({ error: 'Request not found' })
     if (request.status !== 'pending') return res.status(409).json({ error: `Request already ${request.status}` })
 
@@ -1176,7 +1177,7 @@ app.post('/api/v1/silver/requests/:id/reject', requirePermission('silver-rate', 
   try {
     const userId = req.userId!
     if (!(await isSilverApprover(userId))) return res.status(403).json({ error: 'Only Admin or Super Admin can reject rate changes' })
-    const [request] = await db.select().from(schema.silverRateRequests).where(eq(schema.silverRateRequests.id, req.params.id)).limit(1)
+    const [request] = await db.select().from(schema.silverRateRequests).where(eq(schema.silverRateRequests.id, routeParam(req.params.id))).limit(1)
     if (!request) return res.status(404).json({ error: 'Request not found' })
     if (request.status !== 'pending') return res.status(409).json({ error: `Request already ${request.status}` })
 
@@ -1295,12 +1296,12 @@ app.post('/api/v1/shopify/orders/sync', requirePermission('shopify', 'create'), 
 app.post('/api/v1/shopify/orders/:id/refresh', requirePermission('shopify', 'create'), async (req, res) => {
   try {
     const { refreshShopifyOrder } = await import('./shopify')
-    const result = await refreshShopifyOrder(String(req.params.id ?? '').trim())
+    const result = await refreshShopifyOrder(String(routeParam(req.params.id) ?? '').trim())
     const actor = actorFromRequest(req)
     void recordActivity({
       action: 'Imported Shopify Orders',
       module: 'shopify',
-      entity: `Order ${req.params.id}`,
+      entity: `Order ${routeParam(req.params.id)}`,
       details: result.ok ? 'Order refreshed from Shopify' : `Refresh failed: ${result.message ?? 'unknown error'}`,
       userId: actor.userId,
       ip: actor.ip,
@@ -1784,7 +1785,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
     const [existing] = await db
       .select()
       .from(schema.salesOrders)
-      .where(eq(schema.salesOrders.id, req.params.id))
+      .where(eq(schema.salesOrders.id, routeParam(req.params.id)))
       .limit(1)
     if (!existing) return res.status(404).json({ error: 'Order not found' })
 
@@ -1861,7 +1862,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
         const [u] = await tx
           .update(schema.salesOrders)
           .set(updates)
-          .where(eq(schema.salesOrders.id, req.params.id))
+          .where(eq(schema.salesOrders.id, routeParam(req.params.id)))
           .returning()
         return u
       })
@@ -1869,7 +1870,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
       const [u] = await db
         .update(schema.salesOrders)
         .set(updates)
-        .where(eq(schema.salesOrders.id, req.params.id))
+        .where(eq(schema.salesOrders.id, routeParam(req.params.id)))
         .returning()
       updated = u
     }
@@ -1895,7 +1896,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
     void recordActivity({
       action: 'Updated Sales Order',
       module: 'sales',
-      entity: `Sales Order ${String(updated.shopifyId ?? req.params.id)}`,
+      entity: `Sales Order ${String(updated.shopifyId ?? routeParam(req.params.id))}`,
       details: `Status: ${String(updated.status ?? '')}, payment: ${String(updated.payment ?? '')}, fulfillment: ${String(updated.fulfillment ?? '')}, Rs${Number(updated.value ?? 0).toFixed(2)}`,
       userId: actor.userId,
       ip: actor.ip,
@@ -1949,8 +1950,18 @@ try {
 
 if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist))
-  // SPA fallback: serve index.html for any non-API route
-  app.get('*', (req, res, next) => {
+  // SPA fallback: serve index.html for any non-API route.
+  // Express 5 uses path-to-regexp v8, which removed the bare '*' wildcard - a
+  // wildcard must now be NAMED. The name is arbitrary and unused; only the
+  // shape of the match matters.
+  //
+  // The braces matter, and the exact form was verified against express 5.2.1
+  // rather than assumed: v8 wildcards match ONE OR MORE segments, so a plain
+  // '/*splat' 404s on '/' - the app's own root. Wrapping as '/{*splat}' makes
+  // the leading slash part of the optional group and matches '/', '/products'
+  // and '/a/b/c' alike. ('/{/*splat}' compiles but only matches '/', so it is
+  // NOT equivalent.)
+  app.get('/{*splat}', (req, res, next) => {
     if (req.path.startsWith('/api/')) return next()
     res.sendFile(join(frontendDist, 'index.html'))
   })

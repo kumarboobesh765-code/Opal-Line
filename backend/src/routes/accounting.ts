@@ -6,6 +6,7 @@ import { requireAuth } from '../sessions'
 import { requirePermission } from '../rbac'
 import { randomBytes } from 'node:crypto'
 import { logger } from '../logger'
+import { routeParam } from '../lib/routeParams'
 
 const router = Router()
 
@@ -57,6 +58,7 @@ router.patch('/:id', requireAuth, requirePermission('accounts', 'edit'), async (
   if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
   try {
     const { id } = req.params
+    const accountId = routeParam(id)
     const updates: Record<string, unknown> = {}
     const { name, type, subType, parentId, isGroup, isActive, branchId } = req.body ?? {}
     if (name !== undefined) updates.name = String(name).trim()
@@ -69,7 +71,7 @@ router.patch('/:id', requireAuth, requirePermission('accounts', 'edit'), async (
     if (Object.keys(updates).length === 0) {
       res.status(400).json({ error: 'No fields to update' }); return
     }
-    const [row] = await db.update(accounts).set(updates).where(eq(accounts.id, id)).returning()
+    const [row] = await db.update(accounts).set(updates).where(eq(accounts.id, accountId)).returning()
     if (!row) { res.status(404).json({ error: 'Account not found' }); return }
     res.json(row)
   } catch (err) {
@@ -278,7 +280,7 @@ router.get('/balance-sheet', requireAuth, requirePermission('accounts', 'view'),
 router.post('/journal-entries/post/:id', requireAuth, requirePermission('accounts', 'edit'), async (req: Request, res: Response) => {
   if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
   try {
-    const invoiceId = req.params.id
+    const invoiceId = routeParam(req.params.id)
     const [invoice] = await db.select().from(salesInvoices).where(eq(salesInvoices.id, invoiceId)).limit(1)
     if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return }
 

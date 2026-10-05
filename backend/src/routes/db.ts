@@ -13,6 +13,7 @@ import { logger } from '../logger'
 import { buildStockCountRows, stockCountDelta, stockAtLocation } from '../stockCount'
 import { pushInventoryToShopify } from '../shopify'
 import { escapeHtml } from '../htmlEscape'
+import { routeParam } from '../lib/routeParams'
 
 export const dbRouter = Router()
 
@@ -157,7 +158,7 @@ const oneOf = (table: any, idCol: any) =>
     async (req: Request, res: Response) => {
     if (!requireDb(res)) return
     try {
-      const rows = await db!.select().from(table).where(eq(idCol, req.params.id)).limit(1)
+      const rows = await db!.select().from(table).where(eq(idCol, routeParam(req.params.id))).limit(1)
       if (!rows[0]) return res.status(404).json({ error: 'Not found' })
       res.json(stripHash(rows[0]))
     } catch (err) {
@@ -412,7 +413,7 @@ dbRouter.get('/invoices/:id', oneOf(s.salesInvoices, s.salesInvoices.id))
 dbRouter.get('/invoices/:id/items', async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const rows = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, req.params.id))
+    const rows = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, routeParam(req.params.id)))
   res.json(rows)
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' })
@@ -506,7 +507,7 @@ dbRouter.get('/einvoice/:invoiceId', requirePermission('sales', 'view'), async (
   try {
     const { resolveEInvoiceMode, isRealGatewayConfigured, resolveProvider } = await import('../einvoice')
     const mode = await resolveEInvoiceMode()
-    const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.invoiceId)).limit(1)
+    const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.invoiceId))).limit(1)
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
     res.json({
       mode,
@@ -530,13 +531,13 @@ dbRouter.post('/einvoice/:invoiceId/generate', requirePermission('sales', 'edit'
     const mode = await resolveEInvoiceMode()
     if (mode === 'off') return res.status(400).json({ error: 'E-invoicing is switched off in Settings → Tax & Compliance' })
 
-    const [existing] = await db!.select({ irn: s.salesInvoices.irn }).from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.invoiceId)).limit(1)
+    const [existing] = await db!.select({ irn: s.salesInvoices.irn }).from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.invoiceId))).limit(1)
     if (!existing) return res.status(404).json({ error: 'Invoice not found' })
     if (existing.irn) return res.status(409).json({ error: 'This invoice already has an IRN', irn: existing.irn })
 
-    const result = await generateEInvoiceForInvoice(req.params.invoiceId)
+    const result = await generateEInvoiceForInvoice(routeParam(req.params.invoiceId))
     if (!result.ok) return res.status(502).json({ error: result.error })
-    recordCrud('invoices', 'E-invoice generated', req, { invoiceId: req.params.invoiceId, irn: result.irn, provider: result.provider })
+    recordCrud('invoices', 'E-invoice generated', req, { invoiceId: routeParam(req.params.invoiceId), irn: result.irn, provider: result.provider })
     res.json({ ok: true, irn: result.irn, irnDate: result.irnDate, qrCode: result.qrCode, provider: result.provider })
   } catch (err) {
     logger.error({ err }, 'einvoice generate failed')
@@ -549,9 +550,9 @@ dbRouter.post('/einvoice/:invoiceId/cancel', requirePermission('sales', 'edit'),
     if (!requireDb(res)) return
     const { cancelEInvoiceForInvoice } = await import('../einvoice')
     const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim().slice(0, 100) : 'Cancelled by seller'
-    const result = await cancelEInvoiceForInvoice(req.params.invoiceId, reason)
+    const result = await cancelEInvoiceForInvoice(routeParam(req.params.invoiceId), reason)
     if (!result.ok) return res.status(400).json({ error: result.error })
-    recordCrud('invoices', 'E-invoice cancelled', req, { invoiceId: req.params.invoiceId, reason })
+    recordCrud('invoices', 'E-invoice cancelled', req, { invoiceId: routeParam(req.params.invoiceId), reason })
     res.json({ ok: true, cancelDate: result.cancelDate })
   } catch (err) {
     logger.error({ err }, 'einvoice cancel failed')
@@ -612,7 +613,7 @@ export function normalizeInvoiceItems(raw: unknown): Array<Record<string, unknow
 dbRouter.post('/invoices/:id/duplicate', requirePermission('sales', 'create'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [source] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+    const [source] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.id))).limit(1)
     if (!source) return res.status(404).json({ error: 'Invoice not found' })
     const sourceItems = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, source.id))
     if (sourceItems.length === 0) return res.status(400).json({ error: 'Source invoice has no line items to duplicate' })
@@ -741,20 +742,20 @@ dbRouter.patch('/invoices/:id', requirePermission('sales', 'edit'), async (req, 
     delete clean.items
 
     const row = await db!.transaction(async (tx) => {
-      const [existing] = await tx.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+      const [existing] = await tx.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.id))).limit(1)
       if (!existing) return null
       const items = normalizeInvoiceItems(body.items)
       if (items.length > 0) {
         // First, restore old stock
-        const oldItems = await tx.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, req.params.id))
+        const oldItems = await tx.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, routeParam(req.params.id)))
         for (const oi of oldItems) {
           await applyStockDelta(tx, String(oi.sku ?? ''), num(oi.qty, 0))
         }
         // Delete old items
-        await tx.delete(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, req.params.id))
+        await tx.delete(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, routeParam(req.params.id)))
         // Insert new items and deduct stock
         for (const it of items) {
-          await tx.insert(s.salesInvoiceItems).values({ ...it, id: randomUUID(), invoiceId: req.params.id })
+          await tx.insert(s.salesInvoiceItems).values({ ...it, id: randomUUID(), invoiceId: routeParam(req.params.id) })
           await applyStockDelta(tx, String(it.sku ?? ''), -num(it.qty, 0))
         }
         const gst = num(body.gst, num(existing.gst, 3))
@@ -773,7 +774,7 @@ dbRouter.patch('/invoices/:id', requirePermission('sales', 'edit'), async (req, 
         clean.makingCharge = makingCharge
       }
       if (Object.keys(clean).length === 0) return existing
-      const [updated] = await tx.update(s.salesInvoices).set(clean).where(eq(s.salesInvoices.id, req.params.id)).returning()
+      const [updated] = await tx.update(s.salesInvoices).set(clean).where(eq(s.salesInvoices.id, routeParam(req.params.id))).returning()
       return updated
     })
 
@@ -806,19 +807,19 @@ dbRouter.delete('/invoices/:id', requirePermission('sales', 'delete'), async (re
   if (!requireDb(res)) return
   try {
     const removed = await db!.transaction(async (tx) => {
-      const [existing] = await tx.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+      const [existing] = await tx.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.id))).limit(1)
       if (!existing) return false
-      const items = await tx.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, req.params.id))
+      const items = await tx.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, routeParam(req.params.id)))
       for (const it of items) {
         await applyStockDelta(tx, String(it.sku ?? ''), num(it.qty, 0))
       }
-      await tx.delete(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, req.params.id))
-      await tx.delete(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id))
+      await tx.delete(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, routeParam(req.params.id)))
+      await tx.delete(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.id)))
       recordCrud('invoices', 'Deleted', req, existing)
       return true
     })
     if (!removed) return res.status(404).json({ error: 'Not found' })
-    res.json({ ok: true, id: req.params.id })
+    res.json({ ok: true, id: routeParam(req.params.id) })
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' })
   }
@@ -831,15 +832,15 @@ dbRouter.get('/sales-orders/:id', oneOf(s.salesOrders, s.salesOrders.id))
 dbRouter.post('/sales-orders/:id/create-invoice', requirePermission('sales', 'create'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, routeParam(req.params.id))).limit(1)
     if (!order) return res.status(404).json({ error: 'Order not found' })
     const { createInvoiceForOrderRow } = await import('../orderEmailIngest')
     const existing = order.invoice
     const invoiceNumber = await createInvoiceForOrderRow(order)
     if (invoiceNumber && !existing) {
-      const [fresh] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+      const [fresh] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, routeParam(req.params.id))).limit(1)
       if (fresh) recordCrud('sales-orders', 'Updated', req, fresh)
-      await insertOrderEvent(req.params.id, 'Invoice Created', `Invoice ${invoiceNumber} generated`, actorFromRequest(req).userId ?? 'system')
+      await insertOrderEvent(routeParam(req.params.id), 'Invoice Created', `Invoice ${invoiceNumber} generated`, actorFromRequest(req).userId ?? 'system')
     }
     res.json({ created: Boolean(invoiceNumber) && !existing, invoiceNumber })
   } catch (err) {
@@ -1142,7 +1143,7 @@ dbRouter.patch('/sales-orders/:id/status', requirePermission('sales', 'edit'), a
     const status = String(req.body?.status ?? '').trim()
     const allowed = ['imported', 'confirmed', 'processing', 'fulfilled', 'cancelled']
     if (!allowed.includes(status)) return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` })
-    const [row] = await db!.update(s.salesOrders).set({ status }).where(eq(s.salesOrders.id, req.params.id)).returning()
+    const [row] = await db!.update(s.salesOrders).set({ status }).where(eq(s.salesOrders.id, routeParam(req.params.id))).returning()
     if (!row) return res.status(404).json({ error: 'Order not found' })
     const actor = actorFromRequest(req)
     await insertOrderEvent(row.id, 'Status Change', `Status moved to ${status}`, actor.userId ?? 'system')
@@ -1164,7 +1165,7 @@ dbRouter.patch('/sales-orders/:id/status', requirePermission('sales', 'edit'), a
 dbRouter.post('/invoices/:id/return', requirePermission('sales', 'create'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+    const [invoice] = await db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.id))).limit(1)
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
     const invItems = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, invoice.id))
     if (invItems.length === 0) return res.status(400).json({ error: 'Invoice has no line items to return' })
@@ -1301,7 +1302,7 @@ dbRouter.post('/bookings', requirePermission('sales', 'create'), async (req, res
 dbRouter.post('/bookings/:id/payment-link', requirePermission('sales', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [booking] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    const [booking] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, routeParam(req.params.id))).limit(1)
     if (!booking) return res.status(404).json({ error: 'Booking not found' })
     if (!booking.isBooking) return res.status(400).json({ error: 'Order is not a booking' })
     const value = Number(booking.value ?? 0)
@@ -1327,7 +1328,7 @@ dbRouter.post('/bookings/:id/payment-link', requirePermission('sales', 'edit'), 
 dbRouter.post('/bookings/:id/convert', requirePermission('sales', 'create'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, routeParam(req.params.id))).limit(1)
     if (!order) return res.status(404).json({ error: 'Booking not found' })
     if (order.invoice) return res.status(400).json({ error: `Already converted to invoice ${order.invoice}` })
     const value = Number(order.value ?? 0)
@@ -1385,10 +1386,10 @@ async function ensureOrderTimeline(order: typeof s.salesOrders.$inferSelect): Pr
 dbRouter.get('/orders/:id/events', requirePermission('sales', 'view'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, req.params.id)).limit(1)
+    const [order] = await db!.select().from(s.salesOrders).where(eq(s.salesOrders.id, routeParam(req.params.id))).limit(1)
     if (!order) return res.status(404).json({ error: 'Order not found' })
     await ensureOrderTimeline(order)
-    const events = await db!.select().from(s.orderEvents).where(eq(s.orderEvents.orderId, req.params.id)).orderBy(desc(s.orderEvents.createdAt))
+    const events = await db!.select().from(s.orderEvents).where(eq(s.orderEvents.orderId, routeParam(req.params.id))).orderBy(desc(s.orderEvents.createdAt))
     res.json({ data: events })
   } catch (err) {
     res.status(500).json({ error: 'Failed to load order events' })
@@ -1399,7 +1400,7 @@ dbRouter.get('/orders/:id/events', requirePermission('sales', 'view'), async (re
 dbRouter.get('/customers/:name/summary', requirePermission('sales', 'view'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const customer = req.params.name
+    const customer = routeParam(req.params.name)
     const [orders, invoices, dues, pays] = await Promise.all([
       db!.select().from(s.salesOrders).where(eq(s.salesOrders.customer, customer)).orderBy(desc(s.salesOrders.date)).limit(25),
       db!.select().from(s.salesInvoices).where(eq(s.salesInvoices.customer, customer)).orderBy(desc(s.salesInvoices.date)).limit(25),
@@ -1542,7 +1543,7 @@ dbRouter.post('/shipments/dispatch', requirePermission('sales', 'edit'), async (
 dbRouter.post('/shipments/:id/delivered', requirePermission('sales', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [ship] = await db!.update(s.shipments).set({ status: 'delivered', deliveredAt: new Date().toISOString() }).where(eq(s.shipments.id, req.params.id)).returning()
+    const [ship] = await db!.update(s.shipments).set({ status: 'delivered', deliveredAt: new Date().toISOString() }).where(eq(s.shipments.id, routeParam(req.params.id))).returning()
     if (!ship) return res.status(404).json({ error: 'Shipment not found' })
     await insertOrderEvent(ship.orderId, 'Delivered', `Delivery confirmed${ship.trackingNumber ? ` (tracking ${ship.trackingNumber})` : ''}`, actorFromRequest(req).userId ?? 'system')
     // Customer notification (fire-and-forget)
@@ -1769,7 +1770,7 @@ dbRouter.get('/purchase-invoices', listOf(s.purchaseInvoices, s.purchaseInvoices
 dbRouter.get('/purchase-invoices/:id/with-items', requirePermission('purchase', 'view'), async (req, res) => {
   try {
     const { getPurchaseInvoiceWithItems } = await import('../purchases')
-    const invoice = await getPurchaseInvoiceWithItems(req.params.id)
+    const invoice = await getPurchaseInvoiceWithItems(routeParam(req.params.id))
     if (!invoice) return res.status(404).json({ error: 'Purchase invoice not found' })
     res.json(invoice)
   } catch (err) {
@@ -1868,7 +1869,7 @@ dbRouter.patch('/purchase-invoices/:id', requirePermission('purchase', 'edit'), 
       restorePurchaseStock, balanceOf,
     } = await import('../purchases')
     const body = (req.body ?? {}) as Record<string, unknown>
-    const [existing] = await db!.select().from(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, req.params.id)).limit(1)
+    const [existing] = await db!.select().from(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, routeParam(req.params.id))).limit(1)
     if (!existing) return res.status(404).json({ error: 'Purchase invoice not found' })
 
     const paid = Number(existing.paidAmount ?? 0)
@@ -1963,10 +1964,10 @@ dbRouter.delete('/purchase-invoices/:id', requirePermission('purchase', 'delete'
     const { reversePurchaseStock } = await import('../purchases')
     const wasCancelled = String((await db!.select({ status: s.purchaseInvoices.status })
       .from(s.purchaseInvoices)
-      .where(eq(s.purchaseInvoices.id, req.params.id))
+      .where(eq(s.purchaseInvoices.id, routeParam(req.params.id)))
       .limit(1))[0]?.status ?? '').toLowerCase() === 'cancelled'
     const removed = await db!.transaction(async (tx) => {
-      const [existing] = await tx.select().from(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, req.params.id)).limit(1)
+      const [existing] = await tx.select().from(s.purchaseInvoices).where(eq(s.purchaseInvoices.id, routeParam(req.params.id))).limit(1)
       if (!existing) return null
       // A cancelled invoice already had its stock taken back, so don't take it
       // out a second time.
@@ -1976,7 +1977,7 @@ dbRouter.delete('/purchase-invoices/:id', requirePermission('purchase', 'delete'
     })
     if (!removed) return res.status(404).json({ error: 'Purchase invoice not found' })
     recordCrud('purchase-invoices', 'Deleted', req, removed)
-    res.json({ ok: true, id: req.params.id })
+    res.json({ ok: true, id: routeParam(req.params.id) })
   } catch (err) {
     logger.error({ err }, 'purchase invoice delete failed')
     res.status(500).json({ error: 'Failed to delete purchase invoice' })
@@ -2029,7 +2030,7 @@ dbRouter.get('/purchase-orders/:id/with-items', requirePermission('purchase', 'v
   if (!requireDb(res)) return
   try {
     const { getOrderLines } = await import('../purchases')
-    const [order] = await db!.select().from(s.purchaseOrders).where(eq(s.purchaseOrders.id, req.params.id)).limit(1)
+    const [order] = await db!.select().from(s.purchaseOrders).where(eq(s.purchaseOrders.id, routeParam(req.params.id))).limit(1)
     if (!order) return res.status(404).json({ error: 'Purchase order not found' })
     const lines = await getOrderLines([order.id])
     res.json({
@@ -2056,7 +2057,7 @@ dbRouter.patch('/purchase-orders/:id/lines', requirePermission('purchase', 'edit
   if (!requireDb(res)) return
   try {
     const { normalizeOrderLines, orderLineTotals, saveOrderLines } = await import('../purchases')
-    const [order] = await db!.select().from(s.purchaseOrders).where(eq(s.purchaseOrders.id, req.params.id)).limit(1)
+    const [order] = await db!.select().from(s.purchaseOrders).where(eq(s.purchaseOrders.id, routeParam(req.params.id))).limit(1)
     if (!order) return res.status(404).json({ error: 'Purchase order not found' })
     const lines = normalizeOrderLines(req.body?.items ?? req.body?.lines)
     if (lines.length === 0) return res.status(400).json({ error: 'At least one line item is required' })
@@ -2186,7 +2187,7 @@ dbRouter.patch('/purchase-returns/:id', requirePermission('purchase', 'edit'), a
   try {
     const { restoreReturnStock, reverseReturnStock } = await import('../purchases')
     const body = (req.body ?? {}) as Record<string, unknown>
-    const [existing] = await db!.select().from(s.purchaseReturns).where(eq(s.purchaseReturns.id, req.params.id)).limit(1)
+    const [existing] = await db!.select().from(s.purchaseReturns).where(eq(s.purchaseReturns.id, routeParam(req.params.id))).limit(1)
     if (!existing) return res.status(404).json({ error: 'Purchase return not found' })
 
     const wasReceived = String(existing.status ?? '').toLowerCase() === 'received'
@@ -2225,7 +2226,7 @@ dbRouter.patch('/purchase-returns/:id', requirePermission('purchase', 'edit'), a
 dbRouter.get('/purchase-orders/:id/receipt', requirePermission('purchase', 'view'), async (req, res) => {
   try {
     const { reconcileOrder } = await import('../purchases')
-    const receipt = await reconcileOrder(req.params.id)
+    const receipt = await reconcileOrder(routeParam(req.params.id))
     if (!receipt) return res.status(404).json({ error: 'Purchase order not found' })
     res.json(receipt)
   } catch (err) {
@@ -2491,7 +2492,7 @@ dbRouter.post('/inventory/transfers/:id/dispatch', requirePermission('inventory'
   if (!requireDb(res)) return
   try {
     const updated = await db!.transaction(async (tx) => {
-      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, req.params.id)).limit(1)
+      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, routeParam(req.params.id))).limit(1)
       if (!transfer) throw Object.assign(new Error('Transfer not found'), { status: 404 })
       if (transfer.status !== 'pending') {
         throw Object.assign(new Error(`Cannot dispatch a transfer that is ${transfer.status}`), { status: 400 })
@@ -2531,7 +2532,7 @@ dbRouter.post('/inventory/transfers/:id/dispatch', requirePermission('inventory'
         .returning()
       return row
     })
-    recordCrud('stockTransfers', 'Updated', req, { id: req.params.id, status: 'in-transit' })
+    recordCrud('stockTransfers', 'Updated', req, { id: routeParam(req.params.id), status: 'in-transit' })
     res.json(updated)
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
@@ -2555,7 +2556,7 @@ dbRouter.post('/inventory/transfers/:id/receive', requirePermission('inventory',
   if (!requireDb(res)) return
   try {
     const updated = await db!.transaction(async (tx) => {
-      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, req.params.id)).limit(1)
+      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, routeParam(req.params.id))).limit(1)
       if (!transfer) throw Object.assign(new Error('Transfer not found'), { status: 404 })
       if (transfer.status !== 'in-transit') {
         throw Object.assign(new Error(`Cannot receive a transfer that is ${transfer.status}`), { status: 400 })
@@ -2597,7 +2598,7 @@ dbRouter.post('/inventory/transfers/:id/receive', requirePermission('inventory',
       return row
     })
     recordCrud('stockTransfers', 'Updated', req, {
-      id: req.params.id,
+      id: routeParam(req.params.id),
       status: 'received',
       receivedQty: updated.receivedQty,
       variance: updated.variance,
@@ -2615,7 +2616,7 @@ dbRouter.post('/inventory/transfers/:id/cancel', requirePermission('inventory', 
   if (!requireDb(res)) return
   try {
     const updated = await db!.transaction(async (tx) => {
-      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, req.params.id)).limit(1)
+      const [transfer] = await tx.select().from(s.stockTransfers).where(eq(s.stockTransfers.id, routeParam(req.params.id))).limit(1)
       if (!transfer) throw Object.assign(new Error('Transfer not found'), { status: 404 })
       if (transfer.status === 'received') {
         throw Object.assign(new Error('A received transfer cannot be cancelled'), { status: 400 })
@@ -2642,7 +2643,7 @@ dbRouter.post('/inventory/transfers/:id/cancel', requirePermission('inventory', 
         .returning()
       return row
     })
-    recordCrud('stockTransfers', 'Updated', req, { id: req.params.id, status: 'cancelled' })
+    recordCrud('stockTransfers', 'Updated', req, { id: routeParam(req.params.id), status: 'cancelled' })
     res.json(updated)
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
@@ -2662,7 +2663,7 @@ dbRouter.get('/bank-accounts', async (req, res) => {
 dbRouter.get('/bank-accounts/:id', async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const rows = await db!.select().from(s.bankAccounts).where(eq(s.bankAccounts.id, req.params.id)).limit(1)
+    const rows = await db!.select().from(s.bankAccounts).where(eq(s.bankAccounts.id, routeParam(req.params.id))).limit(1)
     if (!rows[0]) return res.status(404).json({ error: 'Not found' })
     res.json(maskBankAccount(stripHash(rows[0])))
   } catch (err) { logger.error({ err }, 'bank-accounts get failed'); res.status(500).json({ error: 'Internal server error' }) }
@@ -3020,7 +3021,7 @@ dbRouter.patch('/products/:id', requirePermission('inventory', 'edit'), async (r
       })
     }
     if (Object.keys(body).length === 0) return res.status(400).json({ error: 'No valid fields provided' })
-    const [row] = await db!.update(s.products).set(body).where(eq(s.products.id, req.params.id)).returning()
+    const [row] = await db!.update(s.products).set(body).where(eq(s.products.id, routeParam(req.params.id))).returning()
     if (!row) return res.status(404).json({ error: 'Not found' })
     recordCrud('products', 'Updated', req, row)
     res.json(row)
@@ -3204,7 +3205,7 @@ for (const [name, table] of Object.entries(resources)) {
     if (!requireDb(res)) return
     try {
       const isUser = name === 'users'
-      if (isUser && req.params.id === req.userId) {
+      if (isUser && routeParam(req.params.id) === req.userId) {
         return res.status(403).json({ error: 'Cannot modify your own account' })
       }
       const isBankAccount = name === 'bank-accounts'
@@ -3215,7 +3216,7 @@ for (const [name, table] of Object.entries(resources)) {
       }
       delete body.id
       if (Object.keys(body).length === 0) return res.status(400).json({ error: 'No valid fields provided' })
-      const [row] = await db!.update(table).set(body).where(eq(table.id, req.params.id)).returning()
+      const [row] = await db!.update(table).set(body).where(eq(table.id, routeParam(req.params.id))).returning()
       if (!row) return res.status(404).json({ error: 'Not found' })
       recordCrud(name, 'Updated', req, row)
       res.json(stripHash(row))
@@ -3232,14 +3233,14 @@ for (const [name, table] of Object.entries(resources)) {
   dbRouter.delete(`/${name}/:id`, requirePermission(resourceModule[name], 'delete'), async (req, res) => {
     if (!requireDb(res)) return
     try {
-      if (name === 'users' && req.params.id === req.userId) {
+      if (name === 'users' && routeParam(req.params.id) === req.userId) {
         return res.status(400).json({ error: 'You cannot delete your own account' })
       }
-      const [existing] = await db!.select().from(table).where(eq(table.id, req.params.id)).limit(1)
+      const [existing] = await db!.select().from(table).where(eq(table.id, routeParam(req.params.id))).limit(1)
       if (!existing) return res.status(404).json({ error: 'Not found' })
-      await db!.delete(table).where(eq(table.id, req.params.id))
+      await db!.delete(table).where(eq(table.id, routeParam(req.params.id)))
       recordCrud(name, 'Deleted', req, existing)
-      res.json({ ok: true, id: req.params.id })
+      res.json({ ok: true, id: routeParam(req.params.id) })
     } catch (err) {
       res.status(500).json({ error: 'Failed to delete resource' })
     }
@@ -3436,7 +3437,7 @@ dbRouter.post('/dues/email', requirePermission('sales', 'view'), async (req, res
 
 dbRouter.get('/customers/:name/statement', requirePermission('sales', 'view'), async (req, res) => {
   try {
-    const customer = decodeURIComponent(req.params.name)
+    const customer = decodeURIComponent(routeParam(req.params.name))
     const { generateCustomerStatementPDF } = await import('../statements')
     const statement = await generateCustomerStatementPDF(customer)
     if (!statement) return res.status(404).json({ error: 'No invoices found for this customer' })
@@ -3452,7 +3453,7 @@ dbRouter.get('/customers/:name/statement', requirePermission('sales', 'view'), a
 dbRouter.post('/customers/:name/statement/email', requirePermission('sales', 'edit'), async (req, res) => {
   try {
     if (!db) return res.status(503).json({ error: 'Database not configured' })
-    const customer = decodeURIComponent(req.params.name)
+    const customer = decodeURIComponent(routeParam(req.params.name))
     const to = String(req.body?.to ?? '').trim()
     if (!to) return res.status(400).json({ error: 'Recipient "to" required' })
     const { generateCustomerStatementPDF } = await import('../statements')
@@ -3551,7 +3552,7 @@ dbRouter.get('/supplier-dues/:supplier', requirePermission('purchase', 'view'), 
   try {
     if (!db) return res.status(503).json({ error: 'Database not configured' })
     const { getSupplierOpenInvoices, getSupplierPayments, getPaymentAllocations } = await import('../purchases')
-    const supplier = decodeURIComponent(req.params.supplier)
+    const supplier = decodeURIComponent(routeParam(req.params.supplier))
     const invoices = await getSupplierOpenInvoices(supplier)
     const payments = await getSupplierPayments(supplier, 25)
     const allocations = await Promise.all(payments.map((p) => getPaymentAllocations(p.id)))
@@ -3714,7 +3715,7 @@ dbRouter.post('/invoices/:id/email', requirePermission('sales', 'edit'), async (
   if (!requireDb(res)) return
   try {
     const { emailInvoicePDF } = await import('../invoicePdf')
-    const invoiceId = req.params.id
+    const invoiceId = routeParam(req.params.id)
     const [inv] = await db!.select({ customer: s.salesInvoices.customer, customerEmail: s.salesInvoices.customerEmail }).from(s.salesInvoices).where(eq(s.salesInvoices.id, invoiceId)).limit(1)
     if (!inv) return res.status(404).json({ error: 'Invoice not found' })
 
@@ -3752,10 +3753,10 @@ dbRouter.post('/invoices/:id/email', requirePermission('sales', 'edit'), async (
 dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
   try {
     const { generateInvoicePDF } = await import('../invoicePdf')
-    const pdf = await generateInvoicePDF(req.params.id)
+    const pdf = await generateInvoicePDF(routeParam(req.params.id))
     if (!pdf) return res.status(404).json({ error: 'Invoice not found or PDF generation failed' })
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="invoice-${req.params.id}.pdf"`)
+    res.setHeader('Content-Disposition', `attachment; filename="invoice-${routeParam(req.params.id)}.pdf"`)
     res.send(pdf)
   } catch (err) {
     res.status(500).json({ error: 'PDF generation failed' })
@@ -3767,10 +3768,10 @@ dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req
 dbRouter.get('/credit-notes/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
   try {
     const { generateCreditNotePDF } = await import('../creditNotePdf')
-    const pdf = await generateCreditNotePDF(req.params.id)
+    const pdf = await generateCreditNotePDF(routeParam(req.params.id))
     if (!pdf) return res.status(404).json({ error: 'Credit note not found or PDF generation failed' })
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="credit-note-${req.params.id}.pdf"`)
+    res.setHeader('Content-Disposition', `attachment; filename="credit-note-${routeParam(req.params.id)}.pdf"`)
     res.send(pdf)
   } catch (err) {
     res.status(500).json({ error: 'Credit note PDF generation failed' })
@@ -3784,10 +3785,10 @@ dbRouter.get('/credit-notes/:id/pdf', requirePermission('sales', 'view'), async 
 dbRouter.get('/quotations/:id/pdf', requirePermission('sales', 'view'), async (req, res) => {
   try {
     const { generateQuotationPDF } = await import('../quotationPdf')
-    const pdf = await generateQuotationPDF(req.params.id)
+    const pdf = await generateQuotationPDF(routeParam(req.params.id))
     if (!pdf) return res.status(404).json({ error: 'Quotation not found or PDF generation failed' })
     res.setHeader('Content-Type', 'application/pdf')
-    res.setHeader('Content-Disposition', `attachment; filename="quotation-${req.params.id}.pdf"`)
+    res.setHeader('Content-Disposition', `attachment; filename="quotation-${routeParam(req.params.id)}.pdf"`)
     res.send(pdf)
   } catch (err) {
     res.status(500).json({ error: 'Quotation PDF generation failed' })

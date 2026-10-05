@@ -7,6 +7,7 @@ import { requirePermission } from '../rbac'
 import { actorFromRequest, recordActivity } from '../activity'
 import { recountCustomerStatsBoth } from '../customerStats'
 import type { Permissions } from '../types'
+import { routeParam } from '../lib/routeParams'
 
 export const rbacRouter = Router()
 
@@ -94,7 +95,7 @@ rbacRouter.post('/roles', requirePermission('system', 'edit'), async (req, res) 
 rbacRouter.patch('/roles/:id', requirePermission('system', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const [existing] = await db!.select().from(schema.roles).where(eq(schema.roles.id, req.params.id)).limit(1)
+    const [existing] = await db!.select().from(schema.roles).where(eq(schema.roles.id, routeParam(req.params.id))).limit(1)
     if (!existing) return res.status(404).json({ error: 'Role not found' })
 
     const body: Record<string, unknown> = {}
@@ -110,7 +111,7 @@ rbacRouter.patch('/roles/:id', requirePermission('system', 'edit'), async (req, 
       body.permissions = sanitizePermissions(req.body.permissions)
     }
 
-    const [row] = await db!.update(schema.roles).set(body).where(eq(schema.roles.id, req.params.id)).returning()
+    const [row] = await db!.update(schema.roles).set(body).where(eq(schema.roles.id, routeParam(req.params.id))).returning()
     const actor = actorFromRequest(req)
     void recordActivity({
       action: 'Updated Role',
@@ -130,14 +131,14 @@ rbacRouter.delete('/roles/:id', requirePermission('system', 'delete'), async (re
   if (!requireDb(res)) return
   try {
     const result = await db!.transaction(async (tx) => {
-      const [existing] = await tx.select().from(schema.roles).where(eq(schema.roles.id, req.params.id)).limit(1).for('update')
+      const [existing] = await tx.select().from(schema.roles).where(eq(schema.roles.id, routeParam(req.params.id))).limit(1).for('update')
       if (!existing) return { status: 404, error: 'Role not found' }
       if (existing.isSystem) return { status: 400, error: 'System roles cannot be deleted' }
 
       const inUse = await tx.select({ n: schema.users.id }).from(schema.users).where(eq(schema.users.role, existing.name)).limit(1)
       if (inUse.length > 0) return { status: 400, error: `Role "${existing.name}" is assigned to users and cannot be deleted` }
 
-      await tx.delete(schema.roles).where(eq(schema.roles.id, req.params.id))
+      await tx.delete(schema.roles).where(eq(schema.roles.id, routeParam(req.params.id)))
       return { status: 0, name: existing.name }
     })
     if (result.status) return res.status(result.status).json({ error: result.error })
@@ -149,7 +150,7 @@ rbacRouter.delete('/roles/:id', requirePermission('system', 'delete'), async (re
       userId: actor.userId,
       ip: actor.ip,
     })
-    res.json({ ok: true, id: req.params.id })
+    res.json({ ok: true, id: routeParam(req.params.id) })
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' })
   }
@@ -158,14 +159,14 @@ rbacRouter.delete('/roles/:id', requirePermission('system', 'delete'), async (re
 rbacRouter.get('/users/:id/permissions', async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const isSelf = req.userId === req.params.id
+    const isSelf = req.userId === routeParam(req.params.id)
     if (!isSelf) {
       const systemView = await computeUserPermissions(req.userId ?? '')
       if (!systemView?.effective?.system?.view) {
         return res.status(403).json({ error: 'Permission denied' })
       }
     }
-    const perms = await computeUserPermissions(req.params.id)
+    const perms = await computeUserPermissions(routeParam(req.params.id))
     if (!perms) return res.status(404).json({ error: 'User not found' })
     res.json(perms)
   } catch (err) {
@@ -176,15 +177,15 @@ rbacRouter.get('/users/:id/permissions', async (req, res) => {
 rbacRouter.put('/users/:id/permissions', requirePermission('system', 'edit'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    if (req.userId === req.params.id) {
+    if (req.userId === routeParam(req.params.id)) {
       return res.status(403).json({ error: 'Cannot modify your own permissions' })
     }
-    const [user] = await db!.select().from(schema.users).where(eq(schema.users.id, req.params.id)).limit(1)
+    const [user] = await db!.select().from(schema.users).where(eq(schema.users.id, routeParam(req.params.id))).limit(1)
     if (!user) return res.status(404).json({ error: 'User not found' })
 
     const raw = req.body?.permissions
     const permissions: Permissions | null = raw === null || raw === undefined ? null : sanitizePermissions(raw)
-    await db!.update(schema.users).set({ permissions }).where(eq(schema.users.id, req.params.id))
+    await db!.update(schema.users).set({ permissions }).where(eq(schema.users.id, routeParam(req.params.id)))
 
     const actor = actorFromRequest(req)
     void recordActivity({
@@ -196,7 +197,7 @@ rbacRouter.put('/users/:id/permissions', requirePermission('system', 'edit'), as
       ip: actor.ip,
     })
 
-    const perms = await computeUserPermissions(req.params.id)
+    const perms = await computeUserPermissions(routeParam(req.params.id))
     res.json(perms)
   } catch (err) {
     res.status(400).json({ error: 'Failed to update permissions' })
@@ -217,7 +218,7 @@ rbacRouter.get('/roles/defaults', (_req, res) => {
 rbacRouter.get('/roles/:name', requirePermission('system', 'view'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const rows = await db!.select().from(schema.roles).where(eq(schema.roles.name, req.params.name)).limit(1)
+    const rows = await db!.select().from(schema.roles).where(eq(schema.roles.name, routeParam(req.params.name))).limit(1)
     if (!rows[0]) return res.status(404).json({ error: 'Role not found' })
     res.json(rows[0])
   } catch (err) {
@@ -228,7 +229,7 @@ rbacRouter.get('/roles/:name', requirePermission('system', 'view'), async (req, 
 rbacRouter.get('/permissions/:userId', requirePermission('system', 'view'), async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const perms = await computeUserPermissions(req.params.userId)
+    const perms = await computeUserPermissions(routeParam(req.params.userId))
     if (!perms) return res.status(404).json({ error: 'User not found' })
     res.json(perms.effective)
   } catch (err) {

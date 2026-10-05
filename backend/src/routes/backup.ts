@@ -12,6 +12,7 @@ import { getMasterKey } from '../lib/crypto'
 import { notifyBackupComplete, notifyLowStock, notifyDailySummary, notifyBackupFiles } from '../notifications'
 import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateWhatsApp, sendLowStockWhatsApp, sendPaymentReminderWhatsApp, isWhatsAppConfigured } from '../whatsapp'
 import { filterAttachableFiles, MAX_TOTAL_ATTACHMENT_MB } from '../mailAttachments'
+import { routeParam } from '../lib/routeParams'
 
 export const backupRouter = Router()
 
@@ -1198,7 +1199,7 @@ backupRouter.post('/restore', requirePermission('system', 'edit'), async (req, r
 // ─────────────────────────────────────────────────────────────────────────────
 
 backupRouter.delete('/files/:fileName', requirePermission('system', 'delete'), async (req, res) => {
-  const fileName = req.params.fileName
+  const fileName = routeParam(req.params.fileName)
   if (!fileName || !fileName.endsWith('.json')) {
     return res.status(400).json({ error: 'Invalid file name' })
   }
@@ -1389,7 +1390,7 @@ backupRouter.post('/files/:name/email', requirePermission('system', 'edit'), asy
   const email = typeof req.body?.email === 'string' && req.body.email.trim() ? req.body.email.trim() : process.env.NOTIFICATION_EMAIL?.trim()
   if (!email) return res.status(400).json({ error: 'No email configured. Set NOTIFICATION_EMAIL in .env or provide an email in the request.' })
   try {
-    const name = path.basename(String(req.params.name ?? ''))
+    const name = path.basename(String(routeParam(req.params.name) ?? ''))
     const filePath = path.join(backupDirectory(), name)
     if (!name.endsWith('.json') || !existsSync(filePath)) return res.status(404).json({ error: 'Backup file not found' })
     const content = await readFile(filePath)
@@ -1583,7 +1584,7 @@ backupRouter.post('/shopify/parse-csv', requirePermission('system', 'edit'), asy
 })
 
 backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'), (req, res) => {
-  const fileName = req.params.fileName
+  const fileName = routeParam(req.params.fileName)
   if (!fileName || !fileName.endsWith('.json')) {
     return res.status(400).json({ error: 'Invalid file name' })
   }
