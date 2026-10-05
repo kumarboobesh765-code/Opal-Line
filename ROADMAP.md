@@ -63,7 +63,10 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   re-arms and runs the job, spins forever. The monthly statements scheduler hit
   exactly this and pinned a core until it was fixed. Only schedulers further out
   than ~24 days are affected, so a new long-interval job will reintroduce it.
-  There is no shared scheduler helper that clamps and re-checks for everyone.
+  There is no shared scheduler helper that clamps and re-checks for everyone —
+  nine modules each carry their own `schedule()` (`autoBackup`, `dueReminders`,
+  `monthlyStatements`, `orderEmailIngest`, `ownerWeekly`, `productAutoSync`,
+  `salesFollowups`, `silverRateScheduler`, `supplierPayables`).
 - **Seeded demo data is only as good as the fields it fills.** Orders shipped an
   `items` count with no `line_items`, so packing slips printed nothing. The
   e2e suite caught it, but only because CI's fresh-install path skips on empty
