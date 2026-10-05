@@ -6,6 +6,7 @@ import { actorFromRequest, recordActivity } from '../activity'
 import { logger } from '../logger'
 import { buildUpiQrDataUrl } from '../upiQr'
 import { requirePermission } from '../rbac'
+import { routeParam } from '../lib/routeParams'
 
 /**
  * Saved designs for printable documents. One design can be marked default per
@@ -239,7 +240,7 @@ printTemplatesRouter.get('/', async (req: Request, res: Response) => {
 
 printTemplatesRouter.get('/default/:docType', async (req: Request, res: Response) => {
   if (!db) return jsonError(res, 503, 'Database unavailable')
-  const docType = req.params.docType
+  const docType = routeParam(req.params.docType)
   if (!isDocType(docType)) return jsonError(res, 400, `docType must be one of: ${PRINT_DOC_TYPES.join(', ')}`)
   try {
     const [row] = await db
@@ -263,7 +264,7 @@ printTemplatesRouter.post('/sanitize', requirePermission('system', 'edit'), (req
 })
 
 printTemplatesRouter.get('/sample/:docType', (req: Request, res: Response) => {
-  const docType = req.params.docType
+  const docType = routeParam(req.params.docType)
   if (!isDocType(docType)) return jsonError(res, 400, `docType must be one of: ${PRINT_DOC_TYPES.join(', ')}`)
   res.json({ doc: sampleDocument(docType) })
 })
@@ -332,7 +333,7 @@ printTemplatesRouter.post('/', async (req: Request, res: Response) => {
 printTemplatesRouter.patch('/:id', async (req: Request, res: Response) => {
   if (!db) return jsonError(res, 503, 'Database unavailable')
   try {
-    const id = req.params.id
+    const id = routeParam(req.params.id)
     const [row] = await db.select().from(schema.printTemplates).where(eq(schema.printTemplates.id, id)).limit(1)
     if (!row) return jsonError(res, 404, 'Template not found')
 
@@ -358,7 +359,7 @@ printTemplatesRouter.patch('/:id', async (req: Request, res: Response) => {
 printTemplatesRouter.post('/:id/default', async (req: Request, res: Response) => {
   if (!db) return jsonError(res, 503, 'Database unavailable')
   try {
-    const [row] = await db.select().from(schema.printTemplates).where(eq(schema.printTemplates.id, req.params.id)).limit(1)
+    const [row] = await db.select().from(schema.printTemplates).where(eq(schema.printTemplates.id, routeParam(req.params.id))).limit(1)
     if (!row) return jsonError(res, 404, 'Template not found')
     await unsetDefaultFor(row.docType as PrintDocType)
     await db.update(schema.printTemplates).set({ isDefault: true }).where(eq(schema.printTemplates.id, row.id))
@@ -372,7 +373,7 @@ printTemplatesRouter.post('/:id/default', async (req: Request, res: Response) =>
 printTemplatesRouter.delete('/:id', async (req: Request, res: Response) => {
   if (!db) return jsonError(res, 503, 'Database unavailable')
   try {
-    await db.delete(schema.printTemplates).where(eq(schema.printTemplates.id, req.params.id))
+    await db.delete(schema.printTemplates).where(eq(schema.printTemplates.id, routeParam(req.params.id)))
     res.json({ ok: true })
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : 'Unknown' }, 'print template delete failed')

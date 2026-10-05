@@ -7,6 +7,7 @@ import { requirePermission } from '../rbac'
 import { recordActivity } from '../activity'
 import { actorFromRequest } from '../activity'
 import { num, round2 } from './db'
+import { routeParam } from '../lib/routeParams'
 
 type Handler = (req: Request, res: Response, next: NextFunction) => unknown
 
@@ -190,7 +191,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
   router.get('/quotations/:id', requirePermission('sales', 'view'), async (req, res) => {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
-      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
       await expireStaleQuotations()
       const items = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, quote.id))
@@ -241,7 +242,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
       const body = (req.body ?? {}) as Record<string, unknown>
-      const [existing] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [existing] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!existing) { res.status(404).json({ error: 'Not found' }); return }
       if (existing.convertedInvoice) { res.status(400).json({ error: 'Quotation already converted to an invoice' }); return }
 
@@ -270,15 +271,15 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
         ...totals,
         ...(revivedStatus ? { status: revivedStatus } : {}),
         updatedAt: new Date().toISOString(),
-      }).where(eq(s.quotations.id, req.params.id)).returning()
+      }).where(eq(s.quotations.id, routeParam(req.params.id))).returning()
 
       if (items.length > 0) {
-        await db.delete(s.quotationItems).where(eq(s.quotationItems.quotationId, req.params.id))
+        await db.delete(s.quotationItems).where(eq(s.quotationItems.quotationId, routeParam(req.params.id)))
         for (const it of items) {
-          await db.insert(s.quotationItems).values({ ...it, id: randomUUID(), quotationId: req.params.id })
+          await db.insert(s.quotationItems).values({ ...it, id: randomUUID(), quotationId: routeParam(req.params.id) })
         }
       }
-      const freshItems = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, req.params.id))
+      const freshItems = await db.select().from(s.quotationItems).where(eq(s.quotationItems.quotationId, routeParam(req.params.id)))
       res.json({ ...row, items: freshItems })
     } catch {
       res.status(400).json({ error: 'Failed to update quotation' })
@@ -288,11 +289,11 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
   router.delete('/quotations/:id', requirePermission('sales', 'delete'), async (req, res) => {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
-      const [existing] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [existing] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!existing) { res.status(404).json({ error: 'Not found' }); return }
-      await db.delete(s.quotationItems).where(eq(s.quotationItems.quotationId, req.params.id))
-      await db.delete(s.quotations).where(eq(s.quotations.id, req.params.id))
-      res.json({ ok: true, id: req.params.id })
+      await db.delete(s.quotationItems).where(eq(s.quotationItems.quotationId, routeParam(req.params.id)))
+      await db.delete(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id)))
+      res.json({ ok: true, id: routeParam(req.params.id) })
     } catch {
       res.status(500).json({ error: 'Failed to delete quotation' })
     }
@@ -307,7 +308,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
         res.status(400).json({ error: `status must be one of: ${QUOTATION_STATUSES.join(', ')}` })
         return
       }
-      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
       if (quote.convertedInvoice) {
         res.status(400).json({ error: `Quotation already converted to ${quote.convertedInvoice}` })
@@ -316,7 +317,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
 
       // Refresh expiry first so a stale quotation can't be revived by mistake.
       if (quotationIsExpired(quote) && quote.status !== 'expired') await expireStaleQuotations()
-      const [fresh] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [fresh] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       const current = (fresh?.status ?? quote.status ?? 'draft') as QuotationStatus
 
       if (current === next) {
@@ -339,7 +340,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
       const [updated] = await db
         .update(s.quotations)
         .set({ status: next, updatedAt: now })
-        .where(eq(s.quotations.id, req.params.id))
+        .where(eq(s.quotations.id, routeParam(req.params.id)))
         .returning()
       const actor = actorFromRequest(req)
       void recordActivity({
@@ -368,7 +369,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
       const { emailQuotationPDF } = await import('../quotationPdf')
-      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!quote) { res.status(404).json({ error: 'Quotation not found' }); return }
       if (quote.status === 'cancelled') { res.status(400).json({ error: 'Quotation was cancelled' }); return }
 
@@ -405,7 +406,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
   router.post('/quotations/:id/convert', requirePermission('sales', 'create'), async (req, res) => {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
-      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
       if (quote.convertedInvoice) {
         res.status(400).json({ error: `Already converted to ${quote.convertedInvoice}` })
@@ -512,7 +513,7 @@ export function registerQuotationRoutes(router: RouteRegistrar) {
   router.post('/quotations/:id/convert-order', requirePermission('sales', 'create'), async (req: Request, res: Response) => {
     if (!db) { res.status(503).json({ error: 'Database unavailable' }); return }
     try {
-      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!quote) { res.status(404).json({ error: 'Not found' }); return }
       if (quote.convertedInvoice) {
         res.status(400).json({ error: `Already converted to ${quote.convertedInvoice}` })

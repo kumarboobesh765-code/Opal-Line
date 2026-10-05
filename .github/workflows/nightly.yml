@@ -1,0 +1,95 @@
+name: Nightly
+
+# Catches what a push-triggered run cannot:
+#   - a newly published advisory against a version already in the lockfile
+#   - an upstream package release that Dependabot has not opened a PR for yet
+#   - drift between the lockfile and the manifest
+#
+# Deliberately does NOT rebuild the Windows installer or re-run the 90-minute
+# desktop e2e. That already runs on every push to master; repeating it nightly
+# would burn runner minutes to re-prove the same commit. This job is the cheap
+# always-on signal, not a duplicate of CI.
+
+on:
+  schedule:
+    # 03:17 UTC nightly. Off the hour on purpose: scheduled workflows queue
+    # behind the busiest minutes, so :17 starts materially sooner than :00.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # THE GATE. The production dependency tree — what actually ships inside
+      # the installer and runs on a customer's machine. Currently 0 advisories,
+      # so this step is a real tripwire: a new CVE against a version already
+      # merged surfaces within a day instead of whenever someone next pushes.
+      - name: Audit production dependencies (blocking)
+        run: npm audit --omit=dev --audit-level=moderate
+
+      # INFORMATIONAL, deliberately non-blocking. The dev tree currently has 10
+      # advisories (esbuild, tailwindcss, drizzle-kit and their transitive
+      # deps) that cannot be cleared without semver-major rewrites we have
+      # already rejected as breaking — Tailwind 4 removes tailwind.config.js
+      # and the @apply directives this app relies on. Failing the nightly on
+      # these every single night would train everyone to ignore a red build,
+      # which defeats the point of having it. Surfaced for awareness; the real
+      # remediation is a deliberate migration PR, not an unattended audit fix.
+      - name: Report dev dependency advisories (informational)
+        continue-on-error: true
+        run: npm audit --audit-level=moderate
+
+      # Dependabot opens PRs on its own schedule; this catches the window
+      # between an upstream release and Dependabot noticing it. `npm outdated`
+      # exits non-zero whenever anything is outdated, which is the normal
+      # steady state, so it is reported rather than gated.
+      - name: Report outdated dependencies (informational)
+        continue-on-error: true
+        run: npm outdated
+        shell: bash
+
+      # A leaked credential that predates the scanner, or arrived via a merge
+      # from a branch that predates it, is still reachable in history.
+      - name: Secret scan (tree and history)
+        run: npm run scan:secrets
+
+  frontend-regression:
+    name: Frontend build + lint (scheduled)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build

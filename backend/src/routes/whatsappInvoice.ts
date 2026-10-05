@@ -7,6 +7,7 @@ import * as s from '../db/schema'
 import { requirePermission } from '../rbac'
 import { sendWhatsAppMessage, isWhatsAppConfigured } from '../whatsapp'
 import { logger } from '../logger'
+import { routeParam } from '../lib/routeParams'
 
 /**
  * POST /api/v1/whatsapp/invoice/:id
@@ -20,7 +21,7 @@ export function registerWhatsappInvoiceRoutes(app: Express) {
   router.post('/invoice/:id', requireAuth, requirePermission('sales', 'edit'), async (req: Request, res: Response) => {
     if (!db) { res.status(503).json({ ok: false, error: 'Database unavailable' }); return }
     try {
-      const [invoice] = await db.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, req.params.id)).limit(1)
+      const [invoice] = await db.select().from(s.salesInvoices).where(eq(s.salesInvoices.id, routeParam(req.params.id))).limit(1)
       if (!invoice) { res.status(404).json({ ok: false, error: 'Invoice not found' }); return }
       if (!isWhatsAppConfigured()) {
         res.json({ ok: false, error: 'WhatsApp not configured — add WHATSAPP_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID in Connections → Configuration' })
@@ -65,7 +66,7 @@ export function registerWhatsappInvoiceRoutes(app: Express) {
     if (!db) { res.status(503).json({ ok: false, error: 'Database unavailable' }); return }
     try {
       const { markQuotationSent } = await import('./quotations')
-      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, req.params.id)).limit(1)
+      const [quote] = await db.select().from(s.quotations).where(eq(s.quotations.id, routeParam(req.params.id))).limit(1)
       if (!quote) { res.status(404).json({ ok: false, error: 'Quotation not found' }); return }
       if (quote.status === 'cancelled') { res.status(400).json({ ok: false, error: 'Quotation was cancelled' }); return }
       if (!isWhatsAppConfigured()) {
