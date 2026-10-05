@@ -1,9 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
-    "moduleResolution": "node10",
-    "ignoreDeprecations": "6.0",
+    /* TypeScript 7 removed `node10` resolution. The backend is never emitted by
+     * tsc — `scripts/build-desktop.js` bundles it with esbuild
+     * (`--platform=node --format=cjs`), and dev/test run through tsx, which is
+     * also esbuild. All three resolve like a bundler, so `bundler` describes
+     * the real toolchain; the old `node10` was stricter than anything that
+     * actually loads this code. `preserve` keeps emit behaviour closest to the
+     * previous CommonJS setting for any tooling that does invoke tsc for emit.
+     */
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM"],
     "strict": true,
     "esModuleInterop": true,
