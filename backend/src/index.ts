@@ -245,7 +245,7 @@ app.use('/api/v1/backup/notifications', emailSendLimiter)
 app.use('/api/v1/db/dues/email', emailSendLimiter)
 app.use('/api/v1/db/notifications/resend', emailSendLimiter)
 
-const resources: SyncResource[] = ['orders', 'products', 'customers', 'inventory', 'price']
+
 
 app.get('/api/v1/health', async (_req, res) => {
   const dbHealth = await checkDbHealth()
@@ -1789,7 +1789,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
       .limit(1)
     if (!existing) return res.status(404).json({ error: 'Order not found' })
 
-    const { customer, email, phone, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, billingAddress, shippingAddress, syncToShopify } = req.body
+    const { customer, email, payment: rawPayment, fulfillment: rawFulfillment, status, date, note, items, shippingAddress, syncToShopify } = req.body
 
     // Normalize payment and fulfillment values
     const payment = rawPayment === 'Online' || rawPayment === 'online' ? 'paid' : rawPayment
@@ -1903,7 +1903,7 @@ app.patch('/api/v1/shopify/orders/:id', requirePermission('shopify', 'edit'), va
     })
 
     res.json({ order: updated, shopifySync })
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to update order' })
   }
 })
@@ -1971,7 +1971,7 @@ app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' })
 })
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason, _promise) => {
   logger.error({ reason }, 'Unhandled rejection')
 })
 

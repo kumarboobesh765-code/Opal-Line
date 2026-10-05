@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { filterAttachableFiles, MAX_TOTAL_ATTACHMENT_MB, MAX_SINGLE_ATTACHMENT_MB } from './mailAttachments'
+import { filterAttachableFiles,  MAX_SINGLE_ATTACHMENT_MB } from './mailAttachments'
 
 const mb = (n: number): Buffer => Buffer.alloc(n * 1024 * 1024)
 

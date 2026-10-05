@@ -68,7 +68,7 @@ rbacRouter.get('/roles', requirePermission('system', 'view'), async (_req, res) 
   try {
     const rows = await db!.select().from(schema.roles).orderBy(schema.roles.name)
     res.json(rows)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -87,7 +87,7 @@ rbacRouter.post('/roles', requirePermission('system', 'edit'), async (req, res) 
     const actor = actorFromRequest(req)
     void recordActivity({ action: 'Created Role', module: 'system', entity: `Role ${name}`, userId: actor.userId, ip: actor.ip })
     res.status(201).json(row)
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to create role' })
   }
 })
@@ -122,7 +122,7 @@ rbacRouter.patch('/roles/:id', requirePermission('system', 'edit'), async (req, 
       ip: actor.ip,
     })
     res.json(row)
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to update role' })
   }
 })
@@ -151,7 +151,7 @@ rbacRouter.delete('/roles/:id', requirePermission('system', 'delete'), async (re
       ip: actor.ip,
     })
     res.json({ ok: true, id: routeParam(req.params.id) })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -169,7 +169,7 @@ rbacRouter.get('/users/:id/permissions', async (req, res) => {
     const perms = await computeUserPermissions(routeParam(req.params.id))
     if (!perms) return res.status(404).json({ error: 'User not found' })
     res.json(perms)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -199,7 +199,7 @@ rbacRouter.put('/users/:id/permissions', requirePermission('system', 'edit'), as
 
     const perms = await computeUserPermissions(routeParam(req.params.id))
     res.json(perms)
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to update permissions' })
   }
 })
@@ -221,7 +221,7 @@ rbacRouter.get('/roles/:name', requirePermission('system', 'view'), async (req, 
     const rows = await db!.select().from(schema.roles).where(eq(schema.roles.name, routeParam(req.params.name))).limit(1)
     if (!rows[0]) return res.status(404).json({ error: 'Role not found' })
     res.json(rows[0])
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -232,7 +232,7 @@ rbacRouter.get('/permissions/:userId', requirePermission('system', 'view'), asyn
     const perms = await computeUserPermissions(routeParam(req.params.userId))
     if (!perms) return res.status(404).json({ error: 'User not found' })
     res.json(perms.effective)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })

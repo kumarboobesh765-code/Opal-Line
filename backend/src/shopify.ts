@@ -62,7 +62,7 @@ export const store: SyncStore = {
 let syncPromise: Promise<unknown> | null = null
 let syncLockAcquired = false
 
-async function acquireSyncLock(label: string): Promise<boolean> {
+async function acquireSyncLock(_label: string): Promise<boolean> {
   if (syncLockAcquired || syncPromise) return false
   syncLockAcquired = true
   syncPromise = Promise.resolve()
@@ -149,7 +149,7 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function shopifyRequest<T>(resource: string, query = '', attempt = 0): Promise<ShopifyResponse<T>> {
+async function shopifyRequest<T>(resource: string, query = '', _attempt = 0): Promise<ShopifyResponse<T>> {
   if (!isConfigured()) {
     throw new ShopifyError('Shopify is not configured. Set SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN in server/.env', 503)
   }
@@ -216,6 +216,8 @@ export async function testShopifyConnection(overrides?: {
   if (!shop || !accessToken) {
     return { ok: false, error: 'Shopify is not configured. Enter the store URL and access token, then click Save.' }
   }
+  // eslint-disable-next-line no-control-regex -- deliberately matches the Latin-1 range to catch masked/corrupted credentials
+  // eslint-disable-next-line no-control-regex -- deliberately matches the Latin-1 range to catch masked/corrupted credentials
   if (/[^\x00-\xFF]/.test(accessToken) || /[^\x00-\xFF]/.test(shop)) {
     return { ok: false, error: 'The saved Shopify credentials contain invalid characters — a masked or corrupted value was saved. Re-enter the store URL and access token, then click Save.' }
   }
@@ -1817,7 +1819,6 @@ export async function applySilverRate(
     return { ok: false, rate, previousRate, affected: 0, matched: 0, updated: 0, skipped: 0, errors: [], message: 'Database is not configured' }
   }
 
-  const affected = await db.$count(schema.products)
   const change = round2(rate - previousRate)
   const changePercent = previousRate > 0 ? round2((change / previousRate) * 100) : 0
   const now = new Date().toISOString()

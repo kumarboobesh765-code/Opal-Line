@@ -94,10 +94,14 @@ Real weaknesses in the above, worth picking up before it becomes a surprise.
   and location rules have 45 tests in `backend/src/stock.test.ts`, but
   `applyStockMovement`'s locking and rollup behaviour is only covered by
   throwaway live scripts that get deleted.
-- **Backend oxlint sits at 97 warnings** (frontend is at 0). Nothing in CI
-  enforces either side, so it drifts unnoticed — it was 47, then 98, and is now
-  97 after v1.0.11 touched backend files. Either fix the warnings or add a
-  budget check; leaving it unenforced means this line is always out of date.
+- **Backend lint was never run in CI.** The backend had no `lint` script at all,
+  so its warnings accumulated unobserved — 47, then 98, then 97 by v1.0.11 —
+  while only the frontend was ever checked. Both are now clean and gated:
+  `npm run lint -w backend` runs `oxlint --max-warnings 0` as a required CI
+  step, so a new warning fails the build rather than being absorbed into a
+  number nobody reads. Two warnings remain suppressed on purpose, both the
+  deliberate Latin-1 credential guards in `config.ts` and `shopify.ts` that
+  reject masked or corrupted secrets before they reach an HTTP header.
 - **`better-sqlite3` is a phantom external.** `scripts/build-desktop.js` passes
   `--external:better-sqlite3`, but the package is not declared in any manifest,
   not imported anywhere, and absent from the lockfile. Harmless today (esbuild

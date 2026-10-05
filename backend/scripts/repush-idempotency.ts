@@ -1,7 +1,7 @@
 // Idempotency proof: push every listed product once more, then re-audit the
 // store. Before the fix this re-added placeholder cards (poisoned local rows +
 // fire-and-forget deletes). Now it must be a strict no-op: still 65x1 images.
-import { eq, isNotNull } from 'drizzle-orm'
+import {  isNotNull } from 'drizzle-orm'
 import { db, schema } from '../src/db/client'
 import { pushProductsToShopify } from '../src/shopify'
 import { config } from '../src/config'
