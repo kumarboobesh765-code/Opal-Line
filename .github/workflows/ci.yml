@@ -36,6 +36,12 @@ jobs:
           # CI never builds the desktop app here; skip the ~100 MB Electron download.
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+      # Runs before the other checks because it needs no dependencies and
+      # should fail the build on a committed credential before anything is
+      # built, logged, or cached.
+      - name: Secret scan (no committed credentials)
+        run: npm run scan:secrets
+
       - name: Lint (frontend, oxlint)
         run: npm run lint
 

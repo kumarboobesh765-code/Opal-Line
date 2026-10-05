@@ -19,6 +19,7 @@
     "build": "npm run build -w frontend",
     "build:all": "npm run build -w frontend",
     "lint": "npm run lint -w frontend",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
     "typecheck": "npm run typecheck -w backend",
     "test": "npm run test -w backend",
     "test:e2e": "playwright test",
