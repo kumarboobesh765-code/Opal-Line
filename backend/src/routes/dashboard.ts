@@ -4,6 +4,7 @@ import { db, schema } from '../db/client'
 import { CONSTANTS } from '../constants'
 import { logger } from '../logger'
 import { computeInputGst, computeTcs, netPayable } from '../gst'
+import { routeParam } from '../lib/routeParams'
 
 export const dashboardRouter = Router()
 
@@ -1302,7 +1303,7 @@ dashboardRouter.get('/reports/day-book', async (req, res) => {
 dashboardRouter.get('/orders/:id/full', async (req, res) => {
   if (!requireDb(res)) return
   try {
-    const id = String(req.params.id)
+    const id = routeParam(req.params.id)
     const [order] = await db!.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, id)).limit(1)
     if (!order) return res.status(404).json({ error: 'Order not found' })
 
