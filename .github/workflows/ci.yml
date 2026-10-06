@@ -65,13 +65,6 @@ jobs:
       - name: Unit tests (backend, node --test)
         run: npm test
 
-      # Quit/shutdown behaviour. Only runs on Windows, where the app's
-      # `shell: true` spawn and taskkill /T semantics actually exist — this is
-      # the regression that left ports held after the app closed.
-      - name: Desktop shutdown test (Windows, port release)
-        if: runner.os == 'Windows'
-        run: npm run test:desktop
-
       # Upgrade-path regression test. Needs a real PostgreSQL, so it skips on
       # the plain unit-test step above and runs here for real. This is the test
       # that catches purchase DDL living only in the fresh-install path: without
@@ -112,6 +105,14 @@ jobs:
       # Electron runtime into the installer.
       - name: Install dependencies
         run: npm ci
+
+      # Quit/shutdown behaviour. Lives here rather than in `checks` because it
+      # is Windows-only: taskkill /T, netstat -ano and findstr do not exist on
+      # the Ubuntu runner, so a step gated on runner.os in the ubuntu job can
+      # only ever be skipped and would never catch the regression. Placed before
+      # the installer build so a failure costs a minute, not half an hour.
+      - name: Desktop shutdown test (port release on quit)
+        run: npm run test:desktop
 
       # GitHub withholds repository secrets from Dependabot-triggered runs, so
       # on a dependency PR this job used to die at the step below with a
