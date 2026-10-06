@@ -44,10 +44,17 @@ warning. It is still worth keeping.
 ## The fix
 
 Buy a code-signing certificate from a public CA — DigiCert, Sectigo, or
-GlobalSign — and replace the self-signed one:
+GlobalSign — and replace the self-signed one. The full runbook — what to buy,
+organization validation, hardware-token installation and the CI signing
+options (since 2023 CAs ship tokens or cloud-HSM access, not .pfx files) — is
+in [Buying and installing a CA code-signing certificate](./buy-a-code-signing-cert.md).
+
+With a token-held certificate the local build needs no PFX at all
+(`certificateSubjectName` finds it in the store); the commands below apply
+when the key *is* exportable:
 
 ```powershell
-# 1. Order the cert, then import the .pfx Microsoft sends you.
+# 1. Import the .pfx (only exists when the key is exportable — a hardware token has no .pfx).
 Import-PfxCertificate -FilePath your-cert.pfx -Password $pw -CertStoreLocation Cert:\CurrentUser\My
 
 # 2. Confirm it is CA-issued (Subject != Issuer).
