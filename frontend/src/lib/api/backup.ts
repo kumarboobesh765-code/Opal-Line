@@ -3,6 +3,7 @@ import type {
   EnvConfigData,
   SystemLogFileInfo,
   SystemLogTail,
+  SystemPortsInfo,
   SystemStatusInfo,
 } from '@/types'
 import { API_BASE, request } from './core'
@@ -111,6 +112,7 @@ export const envConfigApi = {
 
 export const systemApi = {
   status: () => request<SystemStatusInfo>('/system/status'),
+  ports: () => request<SystemPortsInfo>('/system/ports'),
   logFiles: () => request<{ directory: string; files: SystemLogFileInfo[] }>('/system/log-files'),
   logs: (file: string, lines = 200) => request<SystemLogTail>(`/system/logs?file=${encodeURIComponent(file)}&lines=${lines}`),
 }

@@ -13,6 +13,7 @@ const PROTECTED_GET = [
   '/api/v1/system/status',
   '/api/v1/system/logs?file=app',
   '/api/v1/system/log-files',
+  '/api/v1/system/ports',
   '/api/v1/env-config',
   '/api/v1/rbac/roles',
   '/api/v1/backup/scopes',

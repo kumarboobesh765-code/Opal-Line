@@ -6,6 +6,7 @@ import {
   Download,
   Info,
   Loader2,
+  Network,
   RefreshCw,
   Rocket,
   ScrollText,
@@ -17,7 +18,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { systemApi } from '@/lib/api'
-import type { SystemLogFileInfo, SystemStatusInfo, UpdateStatusInfo } from '@/types'
+import type { SystemLogFileInfo, SystemPortInfo, SystemStatusInfo, UpdateStatusInfo } from '@/types'
 
 interface DesktopBridge {
   isElectron?: boolean
@@ -73,6 +74,7 @@ export default function SystemStatusPage() {
   const [lines, setLines] = useState<string[]>([])
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [update, setUpdate] = useState<UpdateStatusInfo | null>(null)
+  const [ports, setPorts] = useState<SystemPortInfo[] | null>(null)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [updateMsg, setUpdateMsg] = useState<string | null>(null)
   const logEndRef = useRef<HTMLDivElement | null>(null)
@@ -85,6 +87,13 @@ export default function SystemStatusPage() {
         setStatusErr(null)
       })
       .catch((e: unknown) => setStatusErr(e instanceof Error ? e.message : 'Failed to load system status'))
+  }, [])
+
+  const loadPorts = useCallback(() => {
+    systemApi
+      .ports()
+      .then((p) => setPorts(p.ports))
+      .catch(() => setPorts(null))
   }, [])
 
   const loadLogs = useCallback(
@@ -107,7 +116,8 @@ export default function SystemStatusPage() {
 
   useEffect(() => {
     loadStatus()
-  }, [loadStatus])
+    loadPorts()
+  }, [loadPorts, loadStatus])
 
   useEffect(() => {
     loadLogs(activeLog)
@@ -118,9 +128,10 @@ export default function SystemStatusPage() {
     const t = setInterval(() => {
       loadLogs(activeLog)
       loadStatus()
+      loadPorts()
     }, 5000)
     return () => clearInterval(t)
-  }, [autoRefresh, activeLog, loadLogs, loadStatus])
+  }, [autoRefresh, activeLog, loadLogs, loadPorts, loadStatus])
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: 'end' })
@@ -173,7 +184,7 @@ export default function SystemStatusPage() {
         title="System Status"
         subtitle="Live server health, software updates and server logs."
         actions={
-          <Button variant="outline" onClick={() => { loadStatus(); loadLogs(activeLog) }}>
+          <Button variant="outline" onClick={() => { loadStatus(); loadPorts(); loadLogs(activeLog) }}>
             <RefreshCw className="h-4 w-4" />
             Refresh
           </Button>
@@ -256,6 +267,50 @@ export default function SystemStatusPage() {
           sub={logDir || undefined}
         />
       </div>
+
+      {/* ── Opal Line port block — who holds 47191–47198 ── */}
+      <Card>
+        <CardContent className="space-y-3 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Network className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Port block 47191–47198</h2>
+            </div>
+            <Button variant="ghost" size="sm" onClick={loadPorts}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          </div>
+          {ports ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ports.map((p) => (
+                <div key={p.port} className="flex items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold tabular-nums text-foreground">
+                      {p.port}
+                      <span className="ml-1.5 font-normal text-muted-foreground">{p.label}</span>
+                    </p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {p.inUse
+                        ? `${p.process ?? 'process unknown'} · PID ${p.pid ?? '?'}${p.isSelf ? ' · this server' : ''}`
+                        : 'Free'}
+                    </p>
+                  </div>
+                  <span
+                    className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      p.inUse ? 'bg-warning-50 text-warning-700' : 'bg-success-50 text-success-700'
+                    }`}
+                  >
+                    {p.inUse ? 'In use' : 'Free'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">Port list unavailable.</p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ── Software updates (desktop app only) ── */}
       <Card>
