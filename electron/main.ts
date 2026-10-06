@@ -239,6 +239,108 @@ function pidListeningOn(port: number): string | null {
 }
 
 /**
+ * Kill a PID and its whole process tree.
+ *
+ * `child.kill()` only terminates the direct child. In dev the backend is
+ * spawned with `shell: true`, so the direct child is a shell and the node
+ * process holding the port is its grandchild — killing the shell orphaned
+ * it, which is exactly why the port stayed taken after the app closed.
+ * On Windows `taskkill /T` walks the tree.
+ */
+function killTree(pid: number): boolean {
+  try {
+    execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 8000, windowsHide: true, shell: 'cmd.exe' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The backend's own pid, persisted while it runs.
+ *
+ * Lets the next launch tell "an orphan from a previous run that never shut
+ * down" apart from "some unrelated program that happens to use this port".
+ * Only a PID we recorded ourselves is ever reclaimed automatically.
+ */
+function backendPidFile(): string {
+  return join(DATA_DIR, 'backend.pid')
+}
+
+function recordBackendPid(pid: number): void {
+  try { writeFileSync(backendPidFile(), String(pid)) } catch { /* best effort */ }
+}
+
+function clearBackendPid(): void {
+  try { rmSync(backendPidFile(), { force: true }) } catch { /* best effort */ }
+}
+
+function recordedBackendPid(): number | null {
+  try {
+    const raw = readFileSync(backendPidFile(), 'utf8').trim()
+    return /^\d+$/.test(raw) ? Number(raw) : null
+  } catch { return null }
+}
+
+/**
+ * Whether a PID is a live process.
+ *
+ * `tasklist` does NOT fail for a missing pid — it exits 0 and prints an INFO
+ * line — so this must parse the output rather than rely on the throw path.
+ * Returning true unconditionally would make the reclamation guard worthless.
+ */
+function isAlive(pid: number): boolean {
+  try {
+    const out = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: 'utf8', timeout: 5000, stdio: 'pipe', windowsHide: true, shell: 'cmd.exe' })
+    // A match renders as a quoted CSV row ("node.exe","21620",…); the
+    // no-match INFO line is not quoted. The pid field carries its own quotes,
+    // so they must be stripped before comparing.
+    return out
+      .split(/\r?\n/)
+      .some((l) => {
+        const row = l.trim()
+        if (!row.startsWith('"')) return false
+        return row.split(',')[1]?.replace(/"/g, '') === String(pid)
+      })
+  } catch { return false }
+}
+
+/**
+ * The command line of a PID, or null if it cannot be read.
+ *
+ * Used to guard automatic reclamation: Windows recycles PIDs, so a recorded
+ * pid can, after a crash, belong to a completely unrelated program. Killing
+ * on pid equality alone would terminate whatever now owns that number.
+ * The port, the recorded pid AND an Opal Line command line must all agree.
+ */
+function processCommandLine(pid: number): string | null {
+  try {
+    const ps =
+      "powershell.exe -NoProfile -NonInteractive -Command " +
+      `"(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`
+    const out = execSync(ps, { encoding: 'utf8', timeout: 8000, stdio: 'pipe', windowsHide: true, shell: 'cmd.exe' }).trim()
+    return out && out !== 'null' ? out : null
+  } catch { return null }
+}
+
+/** True when this PID is provably one of our own backend processes. */
+function looksLikeOurBackend(pid: number): boolean {
+  const cmd = processCommandLine(pid)
+  if (!cmd) return false
+  // Packaged: an Electron child whose entry lives under resources\\backend.
+  if (/backend[/\\]dist[/\\]index\.cjs/i.test(cmd)) return true
+  if (/opal line billing/i.test(cmd)) return true
+  // Dev: spawned by `npx tsx backend/src/index.ts` from this checkout, whose
+  // command line is just a bare node + tsx loader. Anchor on the checkout
+  // path instead, so an unrelated node process is never matched.
+  if (isDev) {
+    const root = resolve(__dirname, '..').replace(/\\/g, '\\\\')
+    return new RegExp(root, 'i').test(cmd)
+  }
+  return false
+}
+
+/**
  * Fail fast — with a human-readable reason — when the dedicated ports are
  * taken before we try to bind them. Otherwise the user only sees a long
  * startup stall or a generic EADDRINUSE crash from the backend child.
@@ -247,6 +349,23 @@ function preflightPorts(): boolean {
   for (const [port, label] of [[BACKEND_PORT, 'application server'] as const, [PG_PORT, 'bundled database'] as const]) {
     const pid = pidListeningOn(port)
     if (!pid) continue
+
+    // Reclaim an orphan from a previous run: we recorded this PID ourselves,
+    // it is the process listening on the port, and its command line still
+    // proves it is ours. All three must agree — a recycled PID would
+    // otherwise make us kill an innocent program.
+    const stale = recordedBackendPid()
+    if (stale !== null && Number(pid) === stale && isAlive(stale) && looksLikeOurBackend(stale)) {
+      logLine('startup', `port ${port} held by orphaned backend (pid ${pid}) from a previous run — reclaiming`)
+      killTree(stale)
+      clearBackendPid()
+      for (let i = 0; i < 20 && pidListeningOn(port); i++) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
+      }
+      if (!pidListeningOn(port)) continue
+      // Still held after a force-kill — fall through to the normal report.
+    }
+
     const name = processNameForPid(pid)
     if (/opal line billing/i.test(name)) {
       logLine('startup', `port ${port} held by another Opal Line instance (pid ${pid})`)
@@ -363,6 +482,13 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
       backendProcess = spawn(cmd, args, { cwd, env: backendEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     }
 
+    // Persist the real backend PID so a later launch can tell "our orphan"
+    // apart from "someone else's program on this port". Under `shell: true`
+    // (dev) this is the shell's pid, which does NOT hold the port — record
+    // the listening pid once the server is up, so it matches what
+    // preflightPorts() will later see.
+    if (backendProcess?.pid) recordBackendPid(backendProcess.pid)
+
     let started = false
     const timeout = setTimeout(() => {
       if (!started) reject(new Error('Backend failed to start within 25 seconds'))
@@ -375,6 +501,10 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
       if ((text.includes('Server started') || text.includes('listening')) && !started) {
         started = true
         clearTimeout(timeout)
+        // Prefer the pid actually holding the port — that is the value the
+        // next launch will read back in preflightPorts().
+        const listener = pidListeningOn(BACKEND_PORT)
+        if (listener) recordBackendPid(Number(listener))
         resolvePromise()
       }
     })
@@ -403,6 +533,7 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
       console.log(`[electron] Backend exited with code ${code}`)
       logLine('backend', `exited code ${code}`)
       backendProcess = null
+      clearBackendPid()
       if (!started) {
         clearTimeout(timeout)
         reject(new Error(`The backend process exited with code ${code} before the server was ready.\n\nCheck the logs in the app data folder for details.`))
@@ -876,9 +1007,44 @@ ipcMain.handle('updates:install', () => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
-app.on('before-quit', () => {
-  if (backendProcess) { backendProcess.kill(); backendProcess = null }
+
+/**
+ * Release the ports this instance holds.
+ *
+ * `backendProcess.kill()` alone was the bug: in dev the backend runs under
+ * `shell: true`, so it only killed the shell and left the node child holding
+ * the port. `killTree` takes the process group down with it, and the
+ * listener pid is used first when it is available because that is the
+ * process that actually owns the socket.
+ */
+function shutdownResources(): void {
+  const recorded = recordedBackendPid()
+  if (recorded !== null) {
+    killTree(recorded)
+    clearBackendPid()
+  }
+  if (backendProcess) {
+    const pid = backendProcess.pid
+    backendProcess.kill()
+    if (pid) killTree(pid)
+    backendProcess = null
+  }
   stopPostgres()
+}
+
+app.on('before-quit', shutdownResources)
+
+// Safety net: `before-quit` does not run when the process is terminated
+// directly (SIGINT/SIGTERM, an uncaught exception, or the parent dying).
+// Without this the backend and postgres outlive the app, which is why the
+// ports stayed taken after closing it.
+process.on('SIGINT', () => { shutdownResources(); process.exit(130) })
+process.on('SIGTERM', () => { shutdownResources(); process.exit(143) })
+process.on('uncaughtException', (err) => {
+  console.error('[electron] uncaughtException:', err)
+  logLine('electron', 'uncaughtException: ' + String(err?.stack ?? err))
+  shutdownResources()
+  process.exit(1)
 })
 
 async function main() {
@@ -964,4 +1130,24 @@ async function main() {
   }
 }
 
-main()
+// One instance at a time. Without this a second launch raced the first for
+// the same fixed ports and produced the "port already in use" dialog, then
+// left the user unsure which window (if any) was live. The lock dies with the
+// process, so it only covers a *live* instance — an orphaned backend with no
+// Electron process is a different case, handled in preflightPorts().
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // A second launch happened — surface the running window instead of
+    // fighting it for the port.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+  main()
+}

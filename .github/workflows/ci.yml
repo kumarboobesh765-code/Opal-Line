@@ -65,6 +65,13 @@ jobs:
       - name: Unit tests (backend, node --test)
         run: npm test
 
+      # Quit/shutdown behaviour. Only runs on Windows, where the app's
+      # `shell: true` spawn and taskkill /T semantics actually exist — this is
+      # the regression that left ports held after the app closed.
+      - name: Desktop shutdown test (Windows, port release)
+        if: runner.os == 'Windows'
+        run: npm run test:desktop
+
       # Upgrade-path regression test. Needs a real PostgreSQL, so it skips on
       # the plain unit-test step above and runs here for real. This is the test
       # that catches purchase DDL living only in the fresh-install path: without

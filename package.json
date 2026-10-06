@@ -22,6 +22,7 @@
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "typecheck": "npm run typecheck -w backend",
     "test": "npm run test -w backend",
+    "test:desktop": "node --test scripts/quit-behavior.test.mjs",
     "test:e2e": "playwright test",
     "db:push": "npm run db:push -w backend",
     "db:generate": "npm run db:generate -w backend",
