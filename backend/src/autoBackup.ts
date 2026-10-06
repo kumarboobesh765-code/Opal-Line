@@ -8,6 +8,7 @@ import { notifyBackupComplete, notifyLowStock, notifyDailySummary } from './noti
 import { db, getRawClient } from './db/client'
 import * as schema from './db/schema'
 import { escapeHtml } from './htmlEscape'
+import { createScheduler } from './lib/scheduler'
 
 export const AUTO_BACKUP_HOUR = 19
 export const AUTO_BACKUP_MINUTE = 0
@@ -169,15 +170,11 @@ async function runAutoBackup(): Promise<void> {
   }
 }
 
-let timer: NodeJS.Timeout | null = null
-
-function schedule(): void {
-  timer = setTimeout(() => {
-    schedule()
-    void runAutoBackup()
-  }, msUntilNextRun())
-  timer.unref()
-}
+const scheduler = createScheduler({
+  label: 'Auto backup',
+  msUntilNextRun,
+  run: () => runAutoBackup(),
+})
 
 // ─── Daily summary email ────────────────────────────────────────────
 
@@ -407,8 +404,8 @@ async function pruneOldBackups(): Promise<void> {
 }
 
 export function startAutoBackup(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info({ next: istFileStamp(new Date(Date.now() + msUntilNextRun())), timezone: IST_TIMEZONE, keepLast: KEEP_BACKUPS }, 'Auto backup scheduled (daily 7:00 PM)')
 }
 
@@ -450,7 +447,7 @@ export async function getAutoBackupStatus(): Promise<{
   } catch { /* directory missing → no backups yet */ }
 
   return {
-    enabled: timer !== null,
+    enabled: scheduler.armed,
     scheduleLabel: `Daily at ${String(AUTO_BACKUP_HOUR).padStart(2, '0')}:${String(AUTO_BACKUP_MINUTE).padStart(2, '0')} IST`,
     nextRunAt: nextRun.toISOString(),
     lastBackup,
@@ -459,10 +456,7 @@ export async function getAutoBackupStatus(): Promise<{
 }
 
 export function stopAutoBackup(): void {
-  if (timer) {
-    clearTimeout(timer)
-    timer = null
-  }
+  scheduler.stop()
 }
 
 // ─── Backup integrity verification (weekly) ──────────────────────────────────

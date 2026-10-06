@@ -4,6 +4,7 @@ import * as schema from './db/schema'
 import { logger } from './logger'
 import { sendEmail } from './notifications'
 import { escapeHtml } from './htmlEscape'
+import { createScheduler } from './lib/scheduler'
 
 /**
  * Due-date reminders: daily at 09:15, email customers whose unpaid invoices
@@ -13,8 +14,6 @@ import { escapeHtml } from './htmlEscape'
 const HOUR = 9
 const MINUTE = 15
 const WINDOW_DAYS = 3
-
-let timer: NodeJS.Timeout | null = null
 
 function msUntilNextRun(now = new Date()): number {
   const next = new Date(now)
@@ -87,21 +86,18 @@ export async function runDueReminders(): Promise<{ sent: number; invoices: numbe
   return { sent, invoices: rows.length }
 }
 
-function schedule(): void {
-  timer = setTimeout(() => {
-    schedule()
-    void runDueReminders().catch(() => undefined)
-  }, msUntilNextRun())
-  timer.unref()
-}
+const scheduler = createScheduler({
+  label: 'Due-date reminders',
+  msUntilNextRun,
+  run: () => runDueReminders(),
+})
 
 export function startDueReminders(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info({ next: new Date(Date.now() + msUntilNextRun()).toISOString() }, 'Due reminders scheduler started (daily 09:15)')
 }
 
 export function stopDueReminders(): void {
-  if (timer) clearTimeout(timer)
-  timer = null
+  scheduler.stop()
 }
