@@ -1,4 +1,4 @@
-import type { Store, Options, ClientRateLimitInfo, IncrementResponse } from 'express-rate-limit'
+import type { Store, Options,  IncrementResponse } from 'express-rate-limit'
 import { getRawClient } from './db/client'
 
 /**

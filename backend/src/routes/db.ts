@@ -3,10 +3,10 @@ import { Router, type Request, type Response, json as expressJson } from 'expres
 import argon2 from 'argon2'
 import { desc, eq, ilike, inArray, or, sql, and, gte, lte } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
-import { applyStockMovement, transferStock, ensureDefaultLocation, resolveMovementLocation } from '../stock'
+import { applyStockMovement,  ensureDefaultLocation, resolveMovementLocation } from '../stock'
 import { requirePermission } from '../rbac'
-import { actorFromRequest, moduleLabel, recordActivity } from '../activity'
-import { encrypt, decrypt, mask, encryptSecret } from '../lib/crypto'
+import { actorFromRequest,  recordActivity } from '../activity'
+import { encrypt, decrypt,  encryptSecret } from '../lib/crypto'
 import { isConfigured as isShopifyConfigured, config as shopifyConfig, normalizeShopDomain } from '../config'
 import { upsertEnvVar } from '../lib/envfile'
 import { logger } from '../logger'
@@ -194,7 +194,7 @@ dbRouter.get('/products/labels', requirePermission('inventory', 'view'), async (
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="product-labels-${Date.now()}.pdf"`)
     res.send(pdf)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Label generation failed' })
   }
 })
@@ -216,7 +216,7 @@ dbRouter.post('/products/labels', requirePermission('inventory', 'view'), async 
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="product-labels-${Date.now()}.pdf"`)
     res.send(pdf)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Label generation failed' })
   }
 })
@@ -404,7 +404,7 @@ dbRouter.get('/invoices/with-items', async (req, res) => {
       byInvoice.set(key, arr)
     }
   res.json({ page: 1, pageSize: limit, total: invoices.length, data: invoices.map((i) => ({ ...i, items: byInvoice.get(i.id) ?? [] })) })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -415,7 +415,7 @@ dbRouter.get('/invoices/:id/items', async (req, res) => {
   try {
     const rows = await db!.select().from(s.salesInvoiceItems).where(eq(s.salesInvoiceItems.invoiceId, routeParam(req.params.id)))
   res.json(rows)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -728,7 +728,7 @@ dbRouter.post('/invoices', requirePermission('sales', 'create'), async (req, res
       })
       .catch(() => undefined)
     res.status(201).json(stripHash(row))
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to create invoice' })
   }
 })
@@ -798,7 +798,7 @@ dbRouter.patch('/invoices/:id', requirePermission('sales', 'edit'), async (req, 
     }
 
     res.json(stripHash(row))
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to update invoice' })
   }
 })
@@ -820,7 +820,7 @@ dbRouter.delete('/invoices/:id', requirePermission('sales', 'delete'), async (re
     })
     if (!removed) return res.status(404).json({ error: 'Not found' })
     res.json({ ok: true, id: routeParam(req.params.id) })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -886,7 +886,7 @@ function normalizeHeader(h: string): string {
 
 function toNum(v: unknown): number | null {
   if (v == null || v === '') return null
-  const n = Number(String(v).replace(/[^0-9.\-]/g, ''))
+  const n = Number(String(v).replace(/[^0-9.-]/g, ''))
   return Number.isFinite(n) ? n : null
 }
 
@@ -1156,7 +1156,7 @@ dbRouter.patch('/sales-orders/:id/status', requirePermission('sales', 'edit'), a
       ip: actor.ip,
     })
     res.json(row)
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to update order status' })
   }
 })
@@ -1391,7 +1391,7 @@ dbRouter.get('/orders/:id/events', requirePermission('sales', 'view'), async (re
     await ensureOrderTimeline(order)
     const events = await db!.select().from(s.orderEvents).where(eq(s.orderEvents.orderId, routeParam(req.params.id))).orderBy(desc(s.orderEvents.createdAt))
     res.json({ data: events })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load order events' })
   }
 })
@@ -1786,7 +1786,7 @@ dbRouter.post('/purchase-invoices', requirePermission('purchase', 'create'), asy
   try {
     const {
       normalizePurchaseItems, purchaseTotals, saveInvoiceItems,
-      splitInputGst, getBusinessState, computeTcs, reversePurchaseStock,
+      splitInputGst, getBusinessState, computeTcs,
     } = await import('../purchases')
     const body = (req.body ?? {}) as Record<string, unknown>
     const number = String(body.number ?? '').trim()
@@ -2752,7 +2752,7 @@ dbRouter.get('/settings', requirePermission('system', 'view'), async (_req, res)
       for (const k of SETTINGS_SECRET_COLUMNS) delete row[k as keyof typeof row]
     }
     res.json(row ?? null)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2781,7 +2781,7 @@ dbRouter.put('/settings', requirePermission('system', 'edit'), async (req, res) 
       ip: actor.ip,
     })
     res.json(row)
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to update settings' })
   }
 })
@@ -2839,7 +2839,7 @@ dbRouter.get('/settings/connections', requirePermission('system', 'view'), async
       dbPassword: maskSecret(dbPassword),
       dbConfigured: Boolean(dbHost && dbUser && dbPassword),
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load connection settings' })
   }
 })
@@ -2893,7 +2893,7 @@ dbRouter.put('/settings/connections', requirePermission('system', 'edit'), async
       body.dbPasswordEncrypted = encrypt(dbPassword)
     }
 
-    const [row] = await db!
+    await db!
       .insert(s.settings)
       .values({ id: SETTINGS_ID, ...body })
       .onConflictDoUpdate({ target: s.settings.id, set: body })
@@ -2968,7 +2968,7 @@ dbRouter.put('/settings/connections', requirePermission('system', 'edit'), async
     }
 
     res.json({ ok: true, shopify })
-  } catch (err) {
+  } catch {
     res.status(400).json({ error: 'Failed to save connection settings' })
   }
 })
@@ -3241,7 +3241,7 @@ for (const [name, table] of Object.entries(resources)) {
       await db!.delete(table).where(eq(table.id, routeParam(req.params.id)))
       recordCrud(name, 'Deleted', req, existing)
       res.json({ ok: true, id: routeParam(req.params.id) })
-    } catch (err) {
+    } catch {
       res.status(500).json({ error: 'Failed to delete resource' })
     }
   })
@@ -3263,7 +3263,7 @@ dbRouter.get('/stats', async (_req, res) => {
       totalInvoices: Number(invoiceCount.count),
       totalStockQty: Number(stock[0].qty),
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -3285,7 +3285,7 @@ dbRouter.get('/search', async (req, res) => {
       db!.select().from(s.payments).where(ilike(s.payments.ref, like)).limit(8),
     ])
     res.json({ products, customers, invoices, suppliers, salesOrders, purchaseInvoices, payments })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -3420,7 +3420,7 @@ dbRouter.post('/dues/email', requirePermission('sales', 'view'), async (req, res
     const [settingsRow] = await db!.select().from(schema.settings).where(eq(schema.settings.id, 'app')).limit(1)
     const recipient = String(req.body?.to || '').trim() || process.env.NOTIFICATION_EMAIL?.trim() || settingsRow?.email?.trim()
     if (!recipient) return res.status(400).json({ error: 'No recipient (no "to", NOTIFICATION_EMAIL, or settings.email)' })
-    const { collectDues, generateDuesStatementPDF } = await import('../statements')
+    const { generateDuesStatementPDF } = await import('../statements')
     const statement = await generateDuesStatementPDF()
     if (!statement) return res.status(200).json({ sent: false, reason: 'No outstanding dues — nothing to send' })
     const { notifyDuesStatement } = await import('../notifications')
@@ -3758,7 +3758,7 @@ dbRouter.get('/invoices/:id/pdf', requirePermission('sales', 'view'), async (req
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="invoice-${routeParam(req.params.id)}.pdf"`)
     res.send(pdf)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'PDF generation failed' })
   }
 })
@@ -3773,7 +3773,7 @@ dbRouter.get('/credit-notes/:id/pdf', requirePermission('sales', 'view'), async 
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="credit-note-${routeParam(req.params.id)}.pdf"`)
     res.send(pdf)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Credit note PDF generation failed' })
   }
 })
@@ -3790,7 +3790,7 @@ dbRouter.get('/quotations/:id/pdf', requirePermission('sales', 'view'), async (r
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition', `attachment; filename="quotation-${routeParam(req.params.id)}.pdf"`)
     res.send(pdf)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Quotation PDF generation failed' })
   }
 })

@@ -1,7 +1,7 @@
 // Prints alt + src of listing images whose alt does not resolve to a local
 // uploads file (the "unknown" class in repair-listing-images) so we can eyeball
 // what would be deleted before the irreversible repair run.
-import { eq, inArray } from 'drizzle-orm'
+import {  inArray } from 'drizzle-orm'
 import { config } from '../src/config'
 import { db, schema } from '../src/db/client'
 

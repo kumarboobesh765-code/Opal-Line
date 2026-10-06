@@ -3,8 +3,8 @@ import type { Express } from 'express'
 import { requireAuth } from '../sessions'
 import { requirePermission } from '../rbac'
 import { db } from '../db/client'
-import * as s from '../db/schema'
-import { eq } from 'drizzle-orm'
+
+import {  } from 'drizzle-orm'
 import * as loyalty from '../loyalty'
 import { logger } from '../logger'
 

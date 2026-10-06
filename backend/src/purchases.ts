@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, ne } from 'drizzle-orm'
 import { db } from './db/client'
 import * as schema from './db/schema'
 import { applyStockMovement, resolveMovementLocation } from './stock'

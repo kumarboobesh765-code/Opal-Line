@@ -15,10 +15,6 @@ import { UPLOADS_DIR, saveUploadedImage } from '../src/uploads'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function firstImgSrc(imgs: unknown): string {
-  const arr = Array.isArray(imgs) ? imgs : []
-  return typeof arr[0] === 'string' ? arr[0] : ''
-}
 function pathnameOf(src: string | null | undefined): string {
   if (!src) return ''
   try { return new URL(src).pathname } catch { return src.split('?')[0] }

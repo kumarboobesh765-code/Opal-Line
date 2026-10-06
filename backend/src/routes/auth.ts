@@ -110,7 +110,7 @@ authRouter.get('/me', requireAuth, async (req, res) => {
     const [user] = await db!.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1)
     if (!user) return res.status(404).json({ error: 'User not found' })
     res.json(publicUser(user))
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -149,7 +149,7 @@ authRouter.post('/sessions/logout-others', requireAuth, async (req, res) => {
       details: `Logged out ${removed.length} other session(s)`,
     })
     res.json({ ok: true, revoked: removed.length })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -224,7 +224,7 @@ authRouter.post('/login', async (req, res) => {
       user: publicUser(user),
       permissions: permissions?.effective ?? {},
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -254,7 +254,7 @@ authRouter.post('/forgot-password', validate(forgotPasswordSchema), async (req, 
     })
 
     res.json({ ok: true, message: 'If the email exists, a reset link has been sent' })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -309,7 +309,7 @@ authRouter.post('/change-password', requireAuth, validate(changePasswordSchema),
     }
 
     res.json({ ok: true, message: 'Password updated' })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -343,7 +343,7 @@ authRouter.post('/reset-password', validate(resetPasswordSchema), async (req, re
     })
 
     res.json({ ok: true, message: 'Password has been reset' })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -370,7 +370,7 @@ authRouter.post('/verify-email', validate(verifyEmailSchema), async (req, res) =
     })
 
     res.json({ ok: true, message: 'Email has been verified' })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -396,7 +396,7 @@ authRouter.post('/resend-verification', validate(forgotPasswordSchema), async (r
       .where(eq(schema.users.id, user.id))
 
     res.json({ ok: true, message: 'If the email exists, a verification link has been sent' })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })

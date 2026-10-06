@@ -799,7 +799,7 @@ export async function importCustomersFromCSV(rows: Record<string, string>[]): Pr
       const phone = pick(row, 'Phone (1)', 'Phone', 'phone', 'mobile', 'Mobile') || null
       const city = pick(row, 'Default Address City', 'Default Address (City)', 'city', 'City') || null
       const province = pick(row, 'Default Address Province', 'Default Address Province Code', 'Default Address (Province)', 'province') || null
-      const addr1 = pick(row, 'Default Address Address1', 'Default Address (Address 1)', 'address', 'Address', 'Address 1') || null
+
       const shopifyId = pick(row, 'Customer ID', 'customer_id', 'shopify_id', 'shopifyId', 'id')
         .replace(/^gid:\/\/shopify\/Customer\//, '') || null
 

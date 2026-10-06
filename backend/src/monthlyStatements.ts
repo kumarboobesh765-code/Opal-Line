@@ -4,6 +4,7 @@ import * as schema from './db/schema'
 import { logger } from './logger'
 import { generateCustomerStatementPDF } from './statements'
 import { notifyCustomerStatement } from './notifications'
+import { createScheduler } from './lib/scheduler'
 
 /**
  * Monthly customer statements: on the 1st of each month at 08:30 local time,
@@ -12,8 +13,6 @@ import { notifyCustomerStatement } from './notifications'
 const DAY = 1
 const HOUR = 8
 const MINUTE = 30
-
-let timer: NodeJS.Timeout | null = null
 
 function msUntilNextRun(now = new Date()): number {
   const next = new Date(now)
@@ -61,29 +60,20 @@ async function runMonthlyStatements(): Promise<void> {
 // immediately. The next 1st-of-month is routinely ~29 days out, so an unclamped
 // timeout fired at once, re-armed, and ran the whole job again — a hot loop that
 // pinned a core and starved the event loop (health checks stopped responding).
-const MAX_TIMEOUT_MS = 2 ** 31 - 1
-
-function schedule(): void {
-  timer = setTimeout(() => {
-    const remaining = msUntilNextRun()
-    if (remaining > 0) {
-      // The clamped timer fired before the real due time. Re-arm only.
-      schedule()
-      return
-    }
-    schedule()
-    void runMonthlyStatements()
-  }, Math.min(msUntilNextRun(), MAX_TIMEOUT_MS))
-  timer.unref()
-}
+// The shared scheduler clamps every delay and re-checks the clock on each
+// wake-up, so that clamp is now the default rather than something to remember.
+const scheduler = createScheduler({
+  label: 'Monthly statements',
+  msUntilNextRun,
+  run: () => runMonthlyStatements(),
+})
 
 export function startMonthlyStatements(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info({ next: new Date(Date.now() + msUntilNextRun()).toISOString() }, 'Monthly statements scheduler started (1st, 08:30)')
 }
 
 export function stopMonthlyStatements(): void {
-  if (timer) clearTimeout(timer)
-  timer = null
+  scheduler.stop()
 }

@@ -141,7 +141,7 @@ export async function generateCreditNotePDF(returnId: string): Promise<Buffer | 
     // Finalize
     doc.end()
     return done
-  } catch (err) {
+  } catch {
     return null
   }
 }

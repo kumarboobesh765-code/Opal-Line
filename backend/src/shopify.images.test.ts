@@ -150,7 +150,7 @@ describe('reconcileListingImages (survivors-only write-back)', () => {
     const deletes = calls.filter((c) => c.method === 'DELETE')
     assert.equal(deletes.length, 1)
     assert.match(deletes[0].url, /\/products\/7\/images\/101\.json$/)
-    assert.ok(!deletes.some((c) => /\/images\/102\.json$/.test(c.url)), 'kept image must not be deleted')
+    assert.ok(!deletes.some((c) => c.url.endsWith('/images/102.json')), 'kept image must not be deleted')
   })
 
   test('waits for Shopify async image processing before writing back', async () => {

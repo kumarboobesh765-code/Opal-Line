@@ -9,8 +9,8 @@ import { actorFromRequest, recordActivity } from '../activity'
 import { logger } from '../logger'
 import { pushRestoredDataToShopify } from '../shopify'
 import { getMasterKey } from '../lib/crypto'
-import { notifyBackupComplete, notifyLowStock, notifyDailySummary, notifyBackupFiles } from '../notifications'
-import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateWhatsApp, sendLowStockWhatsApp, sendPaymentReminderWhatsApp, isWhatsAppConfigured } from '../whatsapp'
+import { notifyBackupComplete, notifyLowStock,  notifyBackupFiles } from '../notifications'
+import { sendInvoiceWhatsApp, sendOrderConfirmationWhatsApp, sendShippingUpdateWhatsApp, sendLowStockWhatsApp,  isWhatsAppConfigured } from '../whatsapp'
 import { filterAttachableFiles, MAX_TOTAL_ATTACHMENT_MB } from '../mailAttachments'
 import { routeParam } from '../lib/routeParams'
 
@@ -176,7 +176,6 @@ function sanitizeExportRow(table: string, row: Record<string, unknown>): Record<
   return clean
 }
 
-function Crypto() { return require('node:crypto') }
 
 function resolveScope(type: string | undefined): BackupScope {
   const key = typeof type === 'string' && SCOPE_BY_KEY.has(type) ? type : null
@@ -1220,7 +1219,7 @@ backupRouter.delete('/files/:fileName', requirePermission('system', 'delete'), a
       ip: actor.ip,
     })
     res.json({ ok: true, fileName })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Could not delete backup file' })
   }
 })
@@ -1256,7 +1255,7 @@ backupRouter.post('/notifications/low-stock', requirePermission('system', 'view'
     if (products.length === 0) return res.json({ ok: true, message: 'No low stock items', count: 0 })
     const sent = await notifyLowStock(email, products.map((p: any) => ({ name: p.name, sku: p.sku, stock: Number(p.stock), reorderLevel: Number(p.reorder_level) })))
     res.json({ ok: sent, email, count: products.length })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Low stock check failed' })
   }
 })
@@ -1270,7 +1269,7 @@ backupRouter.post('/notifications/daily-summary', requirePermission('system', 'e
     const { sendDailySummaryEmail } = await import('../autoBackup')
     const sent = await sendDailySummaryEmail(email)
     res.json({ ok: sent, email })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Daily summary failed' })
   }
 })
@@ -1446,7 +1445,7 @@ backupRouter.post('/whatsapp/send-invoice', requirePermission('sales', 'create')
       itemCount: Number(items[0]?.c || 0),
     })
     res.json({ ok: sent, phoneNumber })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to send WhatsApp' })
   }
 })
@@ -1598,7 +1597,7 @@ backupRouter.get('/files/:fileName/download', requirePermission('system', 'view'
 // Download all backup files as a single ZIP archive
 backupRouter.get('/files/download-all', requirePermission('system', 'view'), async (_req, res) => {
   try {
-    const { zipSync, strToU8 } = await import('fflate')
+    const { zipSync } = await import('fflate')
     const dir = backupDirectory()
     const names = (await readdir(dir)).filter((n) => n.endsWith('.json'))
     if (names.length === 0) return res.status(404).json({ error: 'No backup files to download' })

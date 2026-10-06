@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { and, desc, eq, or, sql } from 'drizzle-orm'
+import { desc, eq, or, sql } from 'drizzle-orm'
 import { db } from './db/client'
 import * as s from './db/schema'
 import { logger } from './logger'

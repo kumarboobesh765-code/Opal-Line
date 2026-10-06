@@ -19,12 +19,6 @@ function requireDb(res: Response) {
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`
-const compactInr = (n: number) => {
-  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)}Cr`
-  if (n >= 100000) return `₹${(n / 100000).toFixed(2)}L`
-  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}k`
-  return `₹${Math.round(n)}`
-}
 
 function pad(n: number) {
   return String(n).padStart(2, '0')
@@ -58,11 +52,6 @@ const OUTSTANDING_WHERE = sql`(payment_status in ('pending','partial') or status
 const BUSINESS_NAME_PATTERN = /house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp/i
 const BUSINESS_NAME_RE = 'house|jewels|llp|pvt|ltd|exports|trading|industries|firm|company|corp'
 
-function pct(part: number, whole: number) {
-  if (!whole) return '—'
-  const v = Math.round((part / whole) * 1000) / 10
-  return `${v}%`
-}
 
 const iconFor = (name: string, category: string | null): string => {
   const n = `${name} ${category ?? ''}`.toLowerCase()
@@ -140,7 +129,7 @@ dashboardRouter.get('/dashboard/kpis', async (_req, res) => {
       { key: 'outstanding', label: 'Outstanding', value: inr(outstanding), trend: 'flat', delta: '—', deltaLabel: `${outstandingCount} invoices`, icon: 'clock', accent: 'red' },
       { key: 'lowStock', label: 'Low Stock Items', value: String(lowStock), trend: 'flat', delta: '—', deltaLabel: 'Needs Reorder', icon: 'package-x', accent: 'slate' },
     ])
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -185,7 +174,7 @@ dashboardRouter.get('/dashboard/summary', async (_req, res) => {
       todayExpenses: round2(num(expenseAgg[0]?.today)),
       pendingPayments: round2(num(outstandingRows[0]?.total)),
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -322,7 +311,7 @@ dashboardRouter.get('/dashboard/sales-overview', async (req, res) => {
       })
     }
     res.json(points)
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -360,7 +349,7 @@ dashboardRouter.get('/dashboard/top-products', async (_req, res) => {
         icon: iconFor(r.name, r.category),
       })),
     )
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -391,7 +380,7 @@ dashboardRouter.get('/dashboard/payment-status', async (_req, res) => {
       ],
       total: round2(num(r.total)),
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -415,7 +404,7 @@ dashboardRouter.get('/dashboard/low-stock', async (_req, res) => {
         status: num(p.stock) === 0 || num(p.stock) * 2 <= num(p.reorderLevel) ? ('critical' as const) : ('low' as const),
       })),
     )
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -486,7 +475,7 @@ dashboardRouter.get('/dashboard/activities', async (_req, res) => {
         time: friendlyTime(l.timestamp),
       })),
     )
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -565,7 +554,7 @@ dashboardRouter.get('/dashboard/analytics', async (_req, res) => {
       { label: 'Gross Profit Margin', value: `${round2(cur.margin * 100)}%`, delta: pctDelta(cur.margin, prev.margin), trend: cur.margin >= prev.margin ? 'up' : 'down' },
       { label: 'Inventory Value', value: inr(inventoryValue) },
     ])
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -582,7 +571,7 @@ dashboardRouter.get('/dashboard/inventory-overview', async (_req, res) => {
       lowStock: products.filter((p) => num(p.stock) <= num(p.reorderLevel)).length,
       outOfStock: products.filter((p) => num(p.stock) === 0).length,
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -831,7 +820,7 @@ dashboardRouter.get('/dashboard/profit', async (req, res) => {
       bestSellers,
       expenseBreakdown,
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -851,7 +840,7 @@ dashboardRouter.get('/dashboard/stock-categories', async (_req, res) => {
       .where(and(ne(schema.products.category, '')))
       .groupBy(schema.products.category)
     res.json(rows.sort((a, b) => b.qty - a.qty))
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -915,7 +904,7 @@ dashboardRouter.get('/reports/product-margins', async (req, res) => {
         marginPct: totalRevenue > 0 ? round2((totalProfit / totalRevenue) * 100) : 0,
       },
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1011,7 +1000,7 @@ dashboardRouter.get('/reports/gst', async (req, res) => {
       filing: filingMonths,
       gstin: CONSTANTS.GSTIN_DEFAULT,
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1091,7 +1080,7 @@ dashboardRouter.get('/reports/gst/export', async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="gstr1-${prefix}.csv"`)
     return res.send('\ufeff' + lines.join('\n'))
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1111,7 +1100,7 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
       .from(schema.salesInvoiceItems)
       .innerJoin(schema.salesInvoices, eq(schema.salesInvoices.id, schema.salesInvoiceItems.invoiceId))
 
-    const [products] = await Promise.all([db!.select().from(schema.products)])
+    const products = await db!.select().from(schema.products)
 
     const salesBySku = new Map<string, { qty: number; firstSale: number }>()
     for (const it of items) {
@@ -1243,7 +1232,7 @@ dashboardRouter.get('/dashboard/stock-running', async (_req, res) => {
         totalPotentialMargin,
       },
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1275,8 +1264,6 @@ dashboardRouter.get('/reports/day-book', async (req, res) => {
       db!.select().from(schema.activityLogs).where(inDay(schema.activityLogs.timestamp)).orderBy(schema.activityLogs.timestamp).limit(100),
     ])
 
-    const sum = (rows: Array<Record<string, string | number | null | undefined>>) =>
-      round2(rows.reduce((a, r) => a + Number(r.amount ?? r.grandTotal ?? 0), 0))
     const totals = {
       invoiced: round2(invoices.reduce((a, r) => a + Number(r.grandTotal ?? 0), 0)),
       collected: round2(payments.reduce((a, r) => a + Number(r.amount ?? 0), 0)),
@@ -1294,7 +1281,7 @@ dashboardRouter.get('/reports/day-book', async (req, res) => {
       shipments: shipments.map((s) => ({ id: s.id, orderRef: s.orderRef, customer: s.customer, courier: s.courier, trackingNumber: s.trackingNumber, status: s.status, createdAt: s.createdAt })),
       activities: activities.map((a) => ({ id: a.id, user: a.user, action: a.action, module: a.module, entity: a.entity, details: a.details, timestamp: a.timestamp })),
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load day book' })
   }
 })
@@ -1339,7 +1326,7 @@ dashboardRouter.get('/orders/:id/full', async (req, res) => {
       customer,
       contact,
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load order detail' })
   }
 })
@@ -1534,7 +1521,7 @@ dashboardRouter.get('/reports/gst-reconciliation', async (req, res) => {
       b2cTaxable: round2(b2cTaxable),
       mismatches,
     })
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to generate GST reconciliation' })
   }
 })

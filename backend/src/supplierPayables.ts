@@ -6,6 +6,7 @@ import { recordActivity } from './activity'
 import { collectSupplierDues } from './purchases'
 import { sendEmail } from './notifications'
 import { escapeHtml } from './htmlEscape'
+import { createScheduler } from './lib/scheduler'
 
 /**
  * Supplier payables sweep — a daily "here's who you owe" email.
@@ -22,7 +23,6 @@ import { escapeHtml } from './htmlEscape'
 const HOUR = 9
 const MINUTE = 20
 
-let timer: NodeJS.Timeout | null = null
 let lastRunKey = ''
 
 function round2(n: number): number {
@@ -138,18 +138,18 @@ export async function runSupplierPayables(opts: { force?: boolean } = {}): Promi
   return { sent: true, suppliers: dues.length, total, overdue }
 }
 
-function schedule(): void {
-  timer = setTimeout(() => {
-    void runSupplierPayables()
-      .catch((err) => logger.error({ err }, 'Supplier payables sweep failed'))
-      .finally(schedule)
-  }, msUntilNextRun())
-  timer.unref?.()
-}
+const scheduler = createScheduler({
+  label: 'Supplier payables sweep',
+  msUntilNextRun,
+  run: () => runSupplierPayables(),
+  // The original re-armed in `.finally`, so a slow sweep delayed the next one.
+  mode: 'run-then-rearm',
+  onError: (err) => logger.error({ err }, 'Supplier payables sweep failed'),
+})
 
 export function startSupplierPayables(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info(
     { next: new Date(Date.now() + msUntilNextRun()).toISOString() },
     'Supplier payables scheduler started (daily 09:20)',
@@ -157,8 +157,7 @@ export function startSupplierPayables(): void {
 }
 
 export function stopSupplierPayables(): void {
-  if (timer) clearTimeout(timer)
-  timer = null
+  scheduler.stop()
 }
 
 /** Test seam: has today's sweep already gone out? */

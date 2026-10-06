@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, basename, resolve } from 'node:path'
-import type { Request, Response, NextFunction } from 'express'
+import type { Request, Response } from 'express'
 import { logger } from './logger'
 
 // Uploads live under the backend package root (same logic as backups), so the

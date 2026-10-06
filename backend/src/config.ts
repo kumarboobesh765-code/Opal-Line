@@ -17,6 +17,7 @@ export function normalizeShopDomain(value: string): string {
 // mistake — treat it as unset so the app reports “not configured” instead of
 // crashing every request with an obscure ByteString header error.
 export function asCredential(v: string): string {
+  // eslint-disable-next-line no-control-regex -- deliberately matches the Latin-1 range to reject unmaskable header values
   return /^[\x00-\xFF]*$/.test(v) ? v : ''
 }
 

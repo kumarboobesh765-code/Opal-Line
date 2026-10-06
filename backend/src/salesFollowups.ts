@@ -4,6 +4,7 @@ import * as schema from './db/schema'
 import { logger } from './logger'
 import { recordActivity } from './activity'
 import { expireStaleQuotations, quotationIsExpired } from './routes/quotations'
+import { createScheduler } from './lib/scheduler'
 
 /**
  * Sales follow-ups — the "what needs chasing today?" list.
@@ -222,8 +223,6 @@ export async function summariseSalesFollowUps(followUps: SalesFollowUp[]): Promi
 const HOUR = 10
 const MINUTE = 5
 
-let timer: NodeJS.Timeout | null = null
-
 function msUntilNextRun(now = new Date()): number {
   const next = new Date(now)
   next.setHours(HOUR, MINUTE, 0, 0)
@@ -261,18 +260,18 @@ export async function runSalesFollowUps(): Promise<{ expired: number; followUps:
   return { expired, followUps: followUps.length }
 }
 
-function schedule(): void {
-  timer = setTimeout(() => {
-    void runSalesFollowUps()
-      .catch((err) => logger.error({ err }, 'Sales follow-up sweep failed'))
-      .finally(schedule)
-  }, msUntilNextRun())
-  timer.unref?.()
-}
+const scheduler = createScheduler({
+  label: 'Sales follow-up sweep',
+  msUntilNextRun,
+  run: () => runSalesFollowUps(),
+  // The original re-armed in `.finally`, so a slow sweep delayed the next one.
+  mode: 'run-then-rearm',
+  onError: (err) => logger.error({ err }, 'Sales follow-up sweep failed'),
+})
 
 export function startSalesFollowUps(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info(
     { next: new Date(Date.now() + msUntilNextRun()).toISOString() },
     'Sales follow-up scheduler started (daily 10:05)',
@@ -280,6 +279,5 @@ export function startSalesFollowUps(): void {
 }
 
 export function stopSalesFollowUps(): void {
-  if (timer) clearTimeout(timer)
-  timer = null
+  scheduler.stop()
 }

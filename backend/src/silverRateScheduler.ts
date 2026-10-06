@@ -1,6 +1,7 @@
 import { db, schema } from './db/client'
 import { applySilverRate } from './shopify'
 import { logger } from './logger'
+import { createScheduler } from './lib/scheduler'
 
 export const SILVER_RATE_HOUR = 9
 export const SILVER_RATE_MINUTE = 0
@@ -55,7 +56,7 @@ export function getSchedulerStatus(): SilverRateSchedulerStatus {
   return {
     ...status,
     nextRunAt: new Date(Date.now() + msUntilNextRun()).toISOString(),
-    enabled: timer !== null,
+    enabled: scheduler.armed,
     fetching: status.fetching,
   }
 }
@@ -147,19 +148,15 @@ export async function runSilverRateUpdate(): Promise<{ ok: boolean; rate: number
   }
 }
 
-let timer: NodeJS.Timeout | null = null
-
-function schedule(): void {
-  timer = setTimeout(() => {
-    schedule()
-    void runSilverRateUpdate()
-  }, msUntilNextRun())
-  timer.unref()
-}
+const scheduler = createScheduler({
+  label: 'Silver rate auto-update',
+  msUntilNextRun,
+  run: () => runSilverRateUpdate(),
+})
 
 export function startSilverRateScheduler(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info(
     { next: istFileStamp(new Date(Date.now() + msUntilNextRun())), timezone: IST_TIMEZONE },
     'Silver rate auto-update scheduled (daily 9:00 AM)',
@@ -167,10 +164,7 @@ export function startSilverRateScheduler(): void {
 }
 
 export function stopSilverRateScheduler(): void {
-  if (timer) {
-    clearTimeout(timer)
-    timer = null
-  }
+  scheduler.stop()
 }
 
 /** Manual "Fetch spot rate now": runs one pass immediately regardless of the

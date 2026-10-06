@@ -4,6 +4,7 @@ import { db } from './db/client'
 import * as schema from './db/schema'
 import { logger } from './logger'
 import { sendEmail } from './notifications'
+import { createScheduler } from './lib/scheduler'
 
 /**
  * Weekly Owner Insights: every Monday 08:00, email the owner a KPI summary
@@ -11,8 +12,6 @@ import { sendEmail } from './notifications'
  */
 const HOUR = 8
 const MINUTE = 0
-
-let timer: NodeJS.Timeout | null = null
 
 function msUntilNextRun(now = new Date()): number {
   const next = new Date(now)
@@ -172,21 +171,18 @@ async function runWeeklyOwnerReport(): Promise<void> {
   }
 }
 
-function schedule(): void {
-  timer = setTimeout(() => {
-    schedule()
-    void runWeeklyOwnerReport()
-  }, msUntilNextRun())
-  timer.unref()
-}
+const scheduler = createScheduler({
+  label: 'Weekly owner report',
+  msUntilNextRun,
+  run: () => runWeeklyOwnerReport(),
+})
 
 export function startWeeklyOwnerReport(): void {
-  if (timer) return
-  schedule()
+  if (scheduler.armed) return
+  scheduler.schedule()
   logger.info({ next: new Date(Date.now() + msUntilNextRun()).toISOString() }, 'Weekly owner report scheduler started (Monday 08:00)')
 }
 
 export function stopWeeklyOwnerReport(): void {
-  if (timer) clearTimeout(timer)
-  timer = null
+  scheduler.stop()
 }

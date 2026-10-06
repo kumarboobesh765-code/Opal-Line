@@ -45,6 +45,13 @@ jobs:
       - name: Lint (frontend, oxlint)
         run: npm run lint
 
+      # The backend was never linted in CI, which is why its warning count
+      # drifted unnoticed (47 -> 98 -> 97). `--max-warnings 0` makes the
+      # current clean state a hard gate: any new warning fails the build
+      # instead of being absorbed into a number nobody reads.
+      - name: Lint (backend, oxlint --max-warnings 0)
+        run: npm run lint:backend
+
       - name: Typecheck (backend, tsc)
         run: npm run typecheck
 
