@@ -11,6 +11,7 @@ import { isEmailIngestConfigured } from '../orderEmailIngest'
 import { requirePermission } from '../rbac'
 import { requireAuth } from '../sessions'
 import { logger } from '../logger'
+import { inspectOpalPorts } from '../systemPorts'
 
 export const systemRouter = Router()
 
@@ -98,6 +99,19 @@ systemRouter.get('/log-files', requireAuth, requirePermission('system', 'view'),
     }
   })
   res.json({ directory: dir, files })
+})
+
+// Which process holds each port in the Opal Line block (47191-47198)? Backs
+// the "Port block" card on the System Status page so a leftover process that
+// caused "port already in use" can be identified instead of guessed at.
+systemRouter.get('/ports', requireAuth, requirePermission('system', 'view'), async (_req, res) => {
+  try {
+    const ports = await inspectOpalPorts()
+    res.json({ block: '47191-47198', ports })
+  } catch (err) {
+    logger.error({ err }, 'port inspection failed')
+    res.status(500).json({ error: 'Failed to inspect ports' })
+  }
 })
 
 systemRouter.get('/logs', requireAuth, requirePermission('system', 'view'), (req, res) => {

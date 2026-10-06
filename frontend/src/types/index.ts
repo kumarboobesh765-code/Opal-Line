@@ -1062,6 +1062,21 @@ export interface SystemStatusInfo {
   paths: { logs: string; env: string | null }
 }
 
+export interface SystemPortInfo {
+  port: number
+  label: string
+  inUse: boolean
+  pid: number | null
+  process: string | null
+  isSelf: boolean
+  source: 'netstat' | 'probe'
+}
+
+export interface SystemPortsInfo {
+  block: string
+  ports: SystemPortInfo[]
+}
+
 export interface SystemLogFileInfo {
   key: string
   name: string
