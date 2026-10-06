@@ -106,6 +106,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Quit/shutdown behaviour. Lives here rather than in `checks` because it
+      # is Windows-only: taskkill /T, netstat -ano and findstr do not exist on
+      # the Ubuntu runner, so a step gated on runner.os in the ubuntu job can
+      # only ever be skipped and would never catch the regression. Placed before
+      # the installer build so a failure costs a minute, not half an hour.
+      - name: Desktop shutdown test (port release on quit)
+        run: npm run test:desktop
+
       # GitHub withholds repository secrets from Dependabot-triggered runs, so
       # on a dependency PR this job used to die at the step below with a
       # misleading failure that had nothing to do with the dependency.
