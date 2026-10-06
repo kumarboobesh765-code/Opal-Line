@@ -52,6 +52,13 @@ jobs:
       - name: Lint (backend, oxlint --max-warnings 0)
         run: npm run lint:backend
 
+      # The palette lives in three blocks that must agree (`:root`, `.dark`,
+      # and the forced-light `@media print` block). A colour tweak can clear
+      # the build and still put unreadable text on a dark page or print
+      # invoices in a stale palette, so contrast is measured here.
+      - name: Palette contrast (WCAG AA, light + dark + print)
+        run: node scripts/check-palette.mjs
+
       - name: Typecheck (backend, tsc)
         run: npm run typecheck
 

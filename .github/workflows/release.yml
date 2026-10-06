@@ -125,6 +125,42 @@ jobs:
             }
           }
           $blockmap = "$($setup.FullName).blockmap"
+
+          # Self-signed signing and SmartScreen.
+          #
+          # The signature above can be cryptographically perfect and Windows
+          # Defender SmartScreen will still block the download, because
+          # Microsoft treats a self-signed certificate as though it were
+          # unsigned. `Subject == Issuer` is how PowerShell exposes that, and
+          # nothing in the build can detect it — so detect it here, loudly,
+          # rather than letting it reach users as a support call.
+          #
+          # This warns rather than fails on purpose: a self-signed installer
+          # still installs and still runs, and blocking every release until a
+          # CA certificate is purchased would be worse than a loud log line.
+          # Once the signing cert comes from a real CA this goes quiet.
+          $signer = $sig.SignerCertificate
+          if (-not $signer) {
+            Write-Warning 'Installer has no signer certificate — SmartScreen will block it.'
+          } elseif ($signer.Subject -eq $signer.Issuer) {
+            $banner = @(
+              '==========================================================',
+              'SMARTSCREED WILL BLOCK THIS INSTALLER FOR END USERS',
+              '',
+              'The signing certificate is SELF-SIGNED (subject == issuer).',
+              'Microsoft treats that exactly like an unsigned app, so every',
+              'download shows "Windows protected your PC" regardless of how',
+              'correct this signature is.',
+              '',
+              'Fix: obtain a code-signing certificate from a CA (DigiCert,',
+              'Sectigo, GlobalSign), export it with',
+              'scripts/export-signing-pfx.ps1, and set WIN_SIGNING_PFX_B64.',
+              'Reputation with SmartScreen then accrues over real downloads.'
+            )
+            Write-Warning ($banner -join [Environment]::NewLine)
+          } else {
+            Write-Host "Signing cert issued by $($signer.Issuer) — SmartScreen-eligible."
+          }
           if (-not (Test-Path $blockmap)) {
             Write-Error "Missing blockmap next to installer: $blockmap"
             exit 1
