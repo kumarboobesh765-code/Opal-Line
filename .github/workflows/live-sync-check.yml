@@ -1,0 +1,102 @@
+# Live end-to-end verification of the two-way Shopify collections sync against
+# the REAL store (test-j82dnprq), the same checks run manually before v1.0.12:
+#
+#   1. live-product-collection-push-check.mts — seeds a temporary local product,
+#      pushes it (listing + collect membership), pulls it back, moves it to a
+#      second collection through the update path, then deletes every trace
+#      (listing, collects, local row, sync logs) and verifies the store is back
+#      to baseline.
+#   2. live-collections-check.mts — the direct membership round-trip (push a
+#      membership, pull it into the billing DB, change it, restore it).
+#
+# Both scripts fall back to repo secrets for credentials and a throwaway
+# PostgreSQL service for state, so nothing of the run survives the job. They
+# exit non-zero on any failed assertion (exit 2 = precondition missing), so a
+# regression in the sync code turns this job red instead of being noticed by a
+# human in the storefront.
+#
+# Credentials come from repository secrets (set once via
+# scripts/set-gh-secret.mjs):
+#   SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN
+# If they are absent (forks, Dependabot runs) the job notices and skips instead
+# of failing — the same pattern ci.yml uses for the signing certificate.
+name: Live Shopify sync checks
+
+on:
+  schedule:
+    # Mondays 04:30 UTC — outside the shop's hours, low collision risk with
+    # manual runs.
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  live-sync:
+    name: Live products ↔ collections round-trip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
+      SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+      SHOPIFY_API_VERSION: '2025-10'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # The secrets context is unavailable in a job-level `if` (actions/
+      # runner#520), so availability is computed once here and every live step
+      # below is gated on it. Missing credentials skip loudly instead of
+      # failing a fork that can never have them.
+      - name: Check live credentials are available
+        id: creds
+        run: |
+          if [ -n "$SHOPIFY_STORE_URL" ] && [ -n "$SHOPIFY_ACCESS_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo '::notice::SHOPIFY_STORE_URL / SHOPIFY_ACCESS_TOKEN secrets are not set — live checks skipped.'
+          fi
+
+      # The scripts query products/settings/sync_logs, so the schema has to
+      # exist first. This is the app's own first-run bootstrap — the exact DDL
+      # a fresh desktop install runs — against the throwaway service database.
+      - name: Create schema (first-run bootstrap)
+        if: steps.creds.outputs.available == 'true'
+        working-directory: backend
+        run: |
+          node --import tsx -e "import('./src/db/bootstrap.ts').then(async (m) => { const r = await m.bootstrapDatabase(); console.log(JSON.stringify(r)); }).catch((err) => { console.error(err); process.exit(1) })"
+
+      # Runs first because it seeds its own product and imports the live
+      # catalog into this database as a side effect of its pull phases.
+      - name: Live check — product push/pull collection sync
+        if: steps.creds.outputs.available == 'true'
+        working-directory: backend
+        run: npx tsx scripts/live-product-collection-push-check.mts
+
+      # Needs a linked product with a local collection, which the run above has
+      # just imported from the store.
+      - name: Live check — collection membership round-trip
+        if: steps.creds.outputs.available == 'true'
+        working-directory: backend
+        run: npx tsx scripts/live-collections-check.mts
