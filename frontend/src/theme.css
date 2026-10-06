@@ -19,6 +19,10 @@
 
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-gold: hsl(var(--gold));
+  --color-gold-foreground: hsl(var(--gold-foreground));
+  --color-gold-muted: hsl(var(--gold-muted));
+  --color-gold-border: hsl(var(--gold-border));
   --color-primary-50: hsl(var(--primary-50));
   --color-primary-100: hsl(var(--primary-100));
   --color-primary-200: hsl(var(--primary-200));
