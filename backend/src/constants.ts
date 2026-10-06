@@ -16,6 +16,10 @@ export const CONSTANTS = {
   ]),
   SHOPIFY_API_LIMIT: 250 as number,
   SHOPIFY_MAX_PAGES: 5 as number,
+  // A product can belong to many collections, so collects outnumber products;
+  // the default 5-page cap silently dropped memberships for the tail of a
+  // large catalogue — allow many more pages for membership reads.
+  SHOPIFY_COLLECTION_MAX_PAGES: 20 as number,
   SHOPIFY_MAX_RETRIES: 3 as number,
   SHOPIFY_BASE_RETRY_DELAY_MS: 1000 as number,
   SESSION_TTL_MS: 24 * 60 * 60 * 1000 as number,

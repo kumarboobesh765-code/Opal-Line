@@ -372,7 +372,16 @@ async function syncProducts(): Promise<number> {
     // Inventory is an enhancement; product catalog must never fail because of it.
   }
   try {
-    await attachCollectionsToProducts()
+    try {
+      await attachCollectionsToProducts()
+    } catch (err) {
+      // Collections are an enhancement — never fail the catalog pull over
+      // them, but record the failure so a broken collections sync shows up in
+      // the sync log instead of silently doing nothing.
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      logger.warn({ err }, 'Shopify collections could not be attached to products')
+      await persistLog({ entity: 'Product', direction: 'in', action: 'Collection Sync', status: 'failed', error: message, retry: true })
+    }
   } catch {
     // Collections are an enhancement too; never fail the catalog pull over them.
   }
@@ -391,7 +400,7 @@ export async function attachCollectionsToProducts(): Promise<void> {
   const [custom, smart, collects] = await Promise.all([
     paginate<any>('custom_collections', 'limit=250'),
     paginate<any>('smart_collections', 'limit=250'),
-    paginate<any>('collects', 'limit=250'),
+    paginate<any>('collects', 'limit=250', CONSTANTS.SHOPIFY_COLLECTION_MAX_PAGES),
   ])
   const titleById = new Map<string, string>()
   for (const c of [...custom, ...smart]) {
@@ -416,6 +425,251 @@ export async function attachCollectionsToProducts(): Promise<void> {
     if (p.collection && !merged.includes(p.collection)) merged.unshift(p.collection)
     return { ...p, collection: merged.slice(0, 5).join(' | ') }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Collection membership — the missing half of the two-way collections sync.
+//
+// A push used to write only an `opal-collection:` tag and mirror the local
+// collection into product_type; no collect was ever created, so the product
+// never joined a Shopify collection and the storefront stayed out of sync with
+// the billing catalogue. Every push now ensures membership of the matching
+// custom collection, and a collection change removes the membership the app
+// itself created earlier (tracked through the tag written by the previous
+// push). Smart collections are rule-driven and reject collects with a 403, so
+// they are reported as skipped instead of being duplicated.
+// ---------------------------------------------------------------------------
+
+export interface CollectionSyncOutcome {
+  /** Memberships created by this push. */
+  added: string[]
+  /** Memberships that already existed. */
+  existing: string[]
+  /** Memberships removed because the local collection changed. */
+  removed: string[]
+  /** Titles needing no collect (smart collection, or empty value). */
+  skipped: string[]
+  /** Per-title failures; non-empty is surfaced in the sync log. */
+  errors: string[]
+}
+
+type CollectionEntry = { id: number; kind: 'custom' | 'smart' }
+
+// Titles resolved once per push batch (custom + smart collection listings).
+// pushProductsToShopify() resets it at the start of every batch so a
+// collection created in Shopify admin meanwhile is never duplicated.
+let collectionDirectory: Map<string, CollectionEntry> | null = null
+
+export function resetCollectionDirectory(): void {
+  collectionDirectory = null
+}
+
+/** Split a collection field into titles: "Classic | Modern" → two entries. */
+export function collectionSegments(value: unknown): string[] {
+  if (typeof value !== 'string') return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const part of value.split('|')) {
+    const title = part.trim()
+    if (!title) continue
+    const key = title.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(title)
+  }
+  return out
+}
+
+/** The Opal collection encoded in a product's tags (`opal-collection:<title>`). */
+export function collectionFromTags(tags: unknown): string | null {
+  const raw = typeof tags === 'string' ? tags : Array.isArray(tags) ? tags.join(',') : ''
+  const found = raw
+    .split(',')
+    .map((t) => t.trim())
+    .find((t) => t.startsWith('opal-collection:'))
+  const value = found ? found.slice('opal-collection:'.length).trim() : ''
+  return value || null
+}
+
+async function loadCollectionDirectory(): Promise<Map<string, CollectionEntry>> {
+  if (collectionDirectory) return collectionDirectory
+  const [custom, smart] = await Promise.all([
+    paginate<any>('custom_collections', 'limit=250'),
+    paginate<any>('smart_collections', 'limit=250'),
+  ])
+  const dir = new Map<string, CollectionEntry>()
+  // Custom first: only custom collections accept explicit membership, so a
+  // custom collection must win a title clash with a smart one.
+  for (const c of custom) {
+    if (c?.id == null) continue
+    dir.set(String(c.title ?? '').trim().toLowerCase(), { id: Number(c.id), kind: 'custom' })
+  }
+  for (const c of smart) {
+    if (c?.id == null) continue
+    const key = String(c.title ?? '').trim().toLowerCase()
+    if (!dir.has(key)) dir.set(key, { id: Number(c.id), kind: 'smart' })
+  }
+  collectionDirectory = dir
+  return dir
+}
+
+/** Find a collection by title, creating a custom collection when the store has none. */
+async function resolveCollection(title: string): Promise<CollectionEntry> {
+  const dir = await loadCollectionDirectory()
+  const key = title.toLowerCase()
+  const hit = dir.get(key)
+  if (hit) return hit
+  const res = await fetch(new URL(apiPath(config.apiVersion, 'custom_collections')), {
+    method: 'POST',
+    headers: { 'X-Shopify-Access-Token': config.accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ custom_collection: { title } }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new ShopifyError(`Shopify API error ${res.status} while creating collection "${title}": ${text.slice(0, 200)}`, res.status)
+  }
+  const json = (await res.json().catch(() => ({}))) as { custom_collection?: { id?: number } }
+  const id = Number(json.custom_collection?.id ?? 0)
+  if (!id) throw new ShopifyError(`Shopify did not return an id for collection "${title}"`, 502)
+  const entry: CollectionEntry = { id, kind: 'custom' }
+  dir.set(key, entry)
+  return entry
+}
+
+/**
+ * The collect row linking this product to this collection, if any. The
+ * product_id/collection_id filters are applied server-side when supported and
+ * verified client-side here, so a response that ignored them can never be
+ * mistaken for this membership — a wrong id would delete the wrong collect.
+ */
+async function fetchCollectId(productId: number, collectionId: number): Promise<number | null> {
+  const url = new URL(apiPath(config.apiVersion, 'collects'))
+  url.search = new URLSearchParams({
+    product_id: String(productId),
+    collection_id: String(collectionId),
+    limit: String(CONSTANTS.SHOPIFY_API_LIMIT),
+  }).toString()
+  const res = await fetch(url, { headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' } })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new ShopifyError(`Shopify API error ${res.status} while reading collection membership: ${text.slice(0, 200)}`, res.status)
+  }
+  const json = (await res.json().catch(() => ({}))) as {
+    collects?: Array<{ id?: number; product_id?: number; collection_id?: number }>
+  }
+  const match = (json.collects ?? []).find(
+    (c) => Number(c.product_id) === productId && Number(c.collection_id) === collectionId,
+  )
+  return match ? Number(match.id) || null : null
+}
+
+async function postCollect(productId: number, collectionId: number): Promise<'created' | 'exists'> {
+  const res = await fetch(new URL(apiPath(config.apiVersion, 'collects')), {
+    method: 'POST',
+    headers: { 'X-Shopify-Access-Token': config.accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ collect: { product_id: productId, collection_id: collectionId } }),
+  })
+  if (res.ok) return 'created'
+  // 422/409 = already a member (concurrent push) — the desired state holds.
+  if (res.status === 422 || res.status === 409) return 'exists'
+  const text = await res.text().catch(() => '')
+  throw new ShopifyError(`Shopify API error ${res.status} while adding the product to a collection: ${text.slice(0, 200)}`, res.status)
+}
+
+/**
+ * Make Shopify collection membership match the local collection for one
+ * product: add a collect for every current title (creating the custom
+ * collection when the store has none) and drop memberships for titles the app
+ * itself pushed earlier but the user has since changed or cleared. Failures
+ * are collected per title instead of thrown, so a membership problem can
+ * never fail the product push that triggered it.
+ */
+export async function syncLocalCollectionMembership(
+  productId: number,
+  collectionValue: unknown,
+  previousCollection?: unknown,
+): Promise<CollectionSyncOutcome> {
+  const outcome: CollectionSyncOutcome = { added: [], existing: [], removed: [], skipped: [], errors: [] }
+  if (!isConfigured() || !Number.isFinite(productId) || productId <= 0) return outcome
+  const current = collectionSegments(collectionValue)
+  const previous = collectionSegments(previousCollection)
+  const currentKeys = new Set(current.map((t) => t.toLowerCase()))
+
+  for (const title of current) {
+    try {
+      const entry = await resolveCollection(title)
+      // Smart collections are rule-driven; POSTing a collect for one 403s.
+      if (entry.kind === 'smart') {
+        outcome.skipped.push(title)
+        continue
+      }
+      const already = await fetchCollectId(productId, entry.id)
+      if (already) {
+        outcome.existing.push(title)
+        continue
+      }
+      const created = await postCollect(productId, entry.id)
+      if (created === 'created') outcome.added.push(title)
+      else outcome.existing.push(title)
+    } catch (err) {
+      outcome.errors.push(`${title}: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
+  }
+
+  for (const title of previous) {
+    if (currentKeys.has(title.toLowerCase())) continue
+    try {
+      const dir = await loadCollectionDirectory()
+      const entry = dir.get(title.toLowerCase())
+      // Only custom collections ever received a collect from us — nothing to remove.
+      if (!entry || entry.kind !== 'custom') continue
+      const collectId = await fetchCollectId(productId, entry.id)
+      if (!collectId) continue
+      const res = await fetch(new URL(apiPath(config.apiVersion, `collects/${collectId}`)), {
+        method: 'DELETE',
+        headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
+      })
+      if (res.ok || res.status === 404) outcome.removed.push(title)
+      else {
+        const text = await res.text().catch(() => '')
+        outcome.errors.push(`${title}: Shopify API error ${res.status} while removing membership: ${text.slice(0, 200)}`)
+      }
+    } catch (err) {
+      outcome.errors.push(`${title}: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
+  }
+  return outcome
+}
+
+/**
+ * Run the membership sync for a push and record the result in the sync log.
+ * Never throws: collection membership is deliberately kept separate from the
+ * product push so a membership failure cannot fail (or duplicate) the listing.
+ */
+async function pushCollectionMembership(
+  local: LocalProductForPush,
+  productId: number,
+  previousCollection: string | null,
+): Promise<void> {
+  try {
+    const outcome = await syncLocalCollectionMembership(productId, local.collection, previousCollection)
+    if (outcome.errors.length > 0) {
+      const message = outcome.errors.join('; ')
+      addLog('products', 'failed', 1, `Collection sync failed for ${local.sku}: ${message}`)
+      await persistLog({ entity: 'Product', shopifyId: local.sku, direction: 'out', action: 'Collection Sync', status: 'failed', error: message, retry: true })
+      return
+    }
+    const changed = outcome.added.length > 0 || outcome.removed.length > 0
+    if (changed) {
+      const detail = [...outcome.added, ...outcome.removed.map((t) => `-${t}`)].join(', ')
+      addLog('products', 'success', 1, `Collections updated for ${local.sku}: ${detail}`)
+      await persistLog({ entity: 'Product', shopifyId: local.sku, direction: 'out', action: 'Collection Sync', status: 'success' })
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    addLog('products', 'failed', 1, `Collection sync failed for ${local.sku}: ${message}`)
+    await persistLog({ entity: 'Product', shopifyId: local.sku, direction: 'out', action: 'Collection Sync', status: 'failed', error: message, retry: true })
+  }
 }
 
 async function syncOrders(): Promise<number> {
@@ -1026,7 +1280,7 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
       title: local.name,
       body_html: toDescriptionHtml(local.description, local.name),
       vendor: local.vendor || local.supplier || 'Opal Line',
-      product_type: local.collection || local.productType || local.category || '',
+      product_type: collectionSegments(local.collection)[0] || local.productType || local.category || '',
       tags,
       status: 'active',
       variants: [variant],
@@ -1053,6 +1307,9 @@ async function createShopifyProduct(local: LocalProductForPush): Promise<{ produ
   }
   const json = (await res.json()) as { product?: { id?: number; variants?: Array<{ id?: number; inventory_item_id?: number }> } }
   const productId = Number(json.product?.id ?? 0)
+  // The listing exists now — make storefront collection membership match the
+  // local collection. Best-effort; never fails the product create.
+  await pushCollectionMembership(local, productId, null)
   if (!productId) {
     throw new ShopifyError('Shopify returned an unexpected response while creating the product.', 502)
   }
@@ -1084,6 +1341,7 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
   const existingAlt = new Set<string>()
   const existingSrcPaths = new Set<string>()
   let listingBefore: Array<{ id?: number; alt?: string | null; src?: string }> = []
+  let previousCollection: string | null = null
   try {
     const get = await fetch(url, {
       headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
@@ -1091,6 +1349,9 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
     if (get.ok) {
       const json = (await get.json()) as { product?: { images?: Array<{ id?: number; alt?: string | null; src?: string }> } }
       listingBefore = json.product?.images ?? []
+      // Remember the collection the app pushed last time so a collection
+      // change can drop exactly the membership it created earlier.
+      previousCollection = collectionFromTags((json as { product?: { tags?: unknown } }).product?.tags)
       for (const img of listingBefore) {
         if (img.alt) existingAlt.add(img.alt)
         if (img.src) {
@@ -1112,7 +1373,7 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
     title: local.name,
     body_html: toDescriptionHtml(local.description, local.name),
     vendor: local.vendor || local.supplier || 'Opal Line',
-    product_type: local.collection || local.productType || local.category || '',
+    product_type: collectionSegments(local.collection)[0] || local.productType || local.category || '',
     tags: buildShopifyTags(local),
   }
 
@@ -1132,6 +1393,10 @@ async function updateShopifyProductContent(local: LocalProductForPush): Promise<
 
   // A product PUT never creates gallery entries — new images must go through
   // the dedicated product-images endpoint (one call per image).
+  // The content update landed — now make storefront collection membership
+  // match the local collection (best-effort; never fails the content push).
+  await pushCollectionMembership(local, id, previousCollection)
+
   const justAddedPathnames = new Set<string>()
   for (const img of newImages) {
     const image: Record<string, string> = {}
@@ -1433,6 +1698,9 @@ export async function pushProductsToShopify(ids?: string[]): Promise<ShopifyPush
   let skipped = 0
   const errors: string[] = []
   let locations: { id: number; name: string }[] = []
+  // Shopify-side collections may have changed since the last push — refetch
+  // the directory once per batch so a title never gets a duplicate collection.
+  resetCollectionDirectory()
 
   try {
     for (const row of rows) {
