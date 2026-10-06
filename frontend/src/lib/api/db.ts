@@ -189,6 +189,13 @@ export const dbApi = {
   getNotificationSettings: (): Promise<NotificationSettings> => request('/db/settings/notifications'),
   updateNotificationSettings: (patch: Partial<NotificationSettings>) =>
     request<NotificationSettings>('/db/settings/notifications', { method: 'PUT', body: JSON.stringify(patch) }),
+  /** Superadmin recovery password (owner roles only). */
+  getRecoveryPassword: (): Promise<{ source: 'default' | 'custom'; password: string }> =>
+    request('/db/settings/recovery-password'),
+  setRecoveryPassword: (password: string): Promise<{ ok: boolean; source: 'default' | 'custom'; password: string }> =>
+    request('/db/settings/recovery-password', { method: 'PUT', body: JSON.stringify({ password }) }),
+  resetRecoveryPassword: (): Promise<{ ok: boolean; source: 'default' | 'custom'; password: string }> =>
+    request('/db/settings/recovery-password', { method: 'PUT', body: JSON.stringify({ reset: true }) }),
   /** Outstanding supplier dues with an aging split (cancelled invoices excluded). */
   getSupplierDues: (): Promise<SupplierDuesResponse> => request('/db/supplier-dues'),
   /** Open invoices + payment ledger for one supplier. */

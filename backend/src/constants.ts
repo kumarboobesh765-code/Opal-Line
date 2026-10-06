@@ -33,6 +33,12 @@ export const CONSTANTS = {
   USER_CACHE_MAX_SIZE: 500 as number,
   GSTIN_DEFAULT: '27AAACO1234F1Z5' as string,
   BUSINESS_NAME_DEFAULT: 'Opal Line Jewels LLP' as string,
+  // Recovery password for Admin / Super Admin accounts: typed into the normal
+  // Password box on the sign-in screen when the owner has forgotten their
+  // login password. Fixed by product decision so it is identical on every
+  // install; Settings → Security can rotate it to a private value (stored
+  // encrypted). Must always satisfy the strongPassword validation policy.
+  SUPERADMIN_RECOVERY_PASSWORD: 'OpalLine-SuperAdmin-2026' as string,
 } as const
 
 export type Constants = typeof CONSTANTS

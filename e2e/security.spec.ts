@@ -20,6 +20,7 @@ const PROTECTED_GET = [
   '/api/v1/backup/files',
   '/api/v1/shopify/status',
   '/api/v1/settings/whatsapp-status',
+  '/api/v1/db/settings/recovery-password',
   '/api/v1/db/silver-rates?limit=1',
   '/api/v1/db/dashboard/kpis',
   '/api/v1/print-templates',
