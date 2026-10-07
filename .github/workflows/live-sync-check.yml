@@ -33,7 +33,7 @@ jobs:
   live-sync:
     name: Live products ↔ collections round-trip
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -85,7 +85,10 @@ jobs:
         if: steps.creds.outputs.available == 'true'
         working-directory: backend
         run: |
-          node --import tsx -e "import('./src/db/bootstrap.ts').then(async (m) => { const r = await m.bootstrapDatabase(); console.log(JSON.stringify(r)); }).catch((err) => { console.error(err); process.exit(1) })"
+          # process.exit(0): bootstrap leaves the pg pool open, so the node
+          # process otherwise never exits and the step hangs until the job
+          # timeout cancels the whole run (observed on the first dispatch).
+          node --import tsx -e "import('./src/db/bootstrap.ts').then(async (m) => { const r = await m.bootstrapDatabase(); console.log(JSON.stringify(r)); process.exit(0); }).catch((err) => { console.error(err); process.exit(1) })"
 
       # Runs first because it seeds its own product and imports the live
       # catalog into this database as a side effect of its pull phases.
