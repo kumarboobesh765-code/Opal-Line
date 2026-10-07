@@ -4,7 +4,9 @@ import argon2 from 'argon2'
 import { desc, eq, ilike, inArray, or, sql, and, gte, lte } from 'drizzle-orm'
 import { db, schema, checkDbHealth } from '../db/client'
 import { applyStockMovement,  ensureDefaultLocation, resolveMovementLocation } from '../stock'
-import { requirePermission } from '../rbac'
+import { computeUserPermissions, requirePermission } from '../rbac'
+import { validate, recoveryPasswordSchema } from '../validation'
+import { clearRecoveryPassword, getRecoveryPassword, getRecoveryPasswordSource, isRecoveryRole, RECOVERY_PASSWORD_KEY, setRecoveryPassword } from '../recoveryPassword'
 import { actorFromRequest,  recordActivity } from '../activity'
 import { encrypt, decrypt,  encryptSecret } from '../lib/crypto'
 import { isConfigured as isShopifyConfigured, config as shopifyConfig, normalizeShopDomain } from '../config'
@@ -2750,6 +2752,13 @@ dbRouter.get('/settings', requirePermission('system', 'view'), async (_req, res)
     const row = rows[0] ? { ...rows[0] } : null
     if (row) {
       for (const k of SETTINGS_SECRET_COLUMNS) delete row[k as keyof typeof row]
+      // The recovery password's encrypted override never rides along in the
+      // generic payload — it is read/written only by /settings/recovery-password.
+      if (row.notificationSettings && typeof row.notificationSettings === 'object') {
+        const ns = { ...(row.notificationSettings as Record<string, unknown>) }
+        delete ns[RECOVERY_PASSWORD_KEY]
+        ;(row as Record<string, unknown>).notificationSettings = ns
+      }
     }
     res.json(row ?? null)
   } catch {
@@ -2765,6 +2774,18 @@ dbRouter.put('/settings', requirePermission('system', 'edit'), async (req, res) 
     // Never allow writing encrypted credential columns through the generic
     // settings endpoint; connection secrets are managed via /settings/connections.
     for (const k of SETTINGS_SECRET_COLUMNS) delete body[k as keyof typeof body]
+    // Same rule for the recovery password override: a settings round-trip must
+    // preserve the stored value untouched (the dedicated endpoint manages it).
+    if (body.notificationSettings && typeof body.notificationSettings === 'object') {
+      const incoming = { ...(body.notificationSettings as Record<string, unknown>) }
+      delete incoming[RECOVERY_PASSWORD_KEY]
+      const [current] = await db!.select({ ns: s.settings.notificationSettings }).from(s.settings).where(eq(s.settings.id, SETTINGS_ID)).limit(1)
+      const existingNs = (current?.ns ?? null) as Record<string, unknown> | null
+      if (existingNs && RECOVERY_PASSWORD_KEY in existingNs) {
+        incoming[RECOVERY_PASSWORD_KEY] = existingNs[RECOVERY_PASSWORD_KEY]
+      }
+      body.notificationSettings = incoming
+    }
     body.updatedAt = new Date().toISOString()
     const [row] = await db!
       .insert(s.settings)
@@ -2783,6 +2804,64 @@ dbRouter.put('/settings', requirePermission('system', 'edit'), async (req, res) 
     res.json(row)
   } catch {
     res.status(400).json({ error: 'Failed to update settings' })
+  }
+})
+
+// ─── Superadmin recovery password ─────────────────────────────────────────
+// The stable password that can act as an Admin / Super Admin login password
+// when the owner has forgotten theirs (login-direct; see recoveryPassword.ts).
+// Owner roles only: a system.view/edit user with any other role gets 403 and
+// never sees the value.
+async function ownerOnlyGuard(req: Request, res: Response): Promise<boolean> {
+  const userId = req.userId
+  if (!userId) {
+    res.status(401).json({ error: 'Not authenticated' })
+    return false
+  }
+  const perms = await computeUserPermissions(userId)
+  if (!perms) {
+    res.status(401).json({ error: 'User not found' })
+    return false
+  }
+  if (!isRecoveryRole(perms.role)) {
+    res.status(403).json({ error: 'Only Admin / Super Admin accounts can manage the recovery password' })
+    return false
+  }
+  return true
+}
+
+dbRouter.get('/settings/recovery-password', requirePermission('system', 'view'), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    if (!(await ownerOnlyGuard(req, res))) return
+    res.json({ source: await getRecoveryPasswordSource(), password: await getRecoveryPassword() })
+  } catch {
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+dbRouter.put('/settings/recovery-password', requirePermission('system', 'edit'), validate(recoveryPasswordSchema), async (req, res) => {
+  if (!requireDb(res)) return
+  try {
+    if (!(await ownerOnlyGuard(req, res))) return
+    const reset = req.body?.reset === true
+    if (reset) await clearRecoveryPassword()
+    else await setRecoveryPassword(String(req.body?.password ?? ''))
+    const actor = actorFromRequest(req)
+    void recordActivity({
+      action: reset ? 'Recovery Password Reset to Default' : 'Recovery Password Rotated',
+      module: 'system',
+      entity: 'Settings',
+      details: reset
+        ? 'Recovery password set back to the built-in default'
+        : 'Recovery password changed to a custom value',
+      userId: actor.userId,
+      ip: actor.ip,
+    })
+    res.json({ ok: true, source: await getRecoveryPasswordSource(), password: await getRecoveryPassword() })
+  } catch (err) {
+    logger.error({ err }, 'recovery password update failed')
+    res.status(500).json({ error: 'Failed to update recovery password' })
   }
 })
 
@@ -3686,7 +3765,9 @@ dbRouter.get('/settings/notifications', requirePermission('system', 'view'), asy
       weeklyReportEnabled: true,
       recipientEmail: process.env.NOTIFICATION_EMAIL ?? '',
     }
-    res.json(notif)
+    const out = { ...(notif as Record<string, unknown>) }
+    delete out[RECOVERY_PASSWORD_KEY]
+    res.json(out)
   } catch (err) {
     logger.error({ err }, 'Notification settings load failed')
     res.status(500).json({ error: 'Failed to load notification settings' })
@@ -3695,7 +3776,10 @@ dbRouter.get('/settings/notifications', requirePermission('system', 'view'), asy
 
 dbRouter.put('/settings/notifications', requirePermission('system', 'edit'), async (req, res) => {
   try {
-    const body = req.body as Record<string, unknown>
+    const body = { ...(req.body as Record<string, unknown>) }
+    // The recovery password override is managed only by its dedicated
+    // endpoint — a generic notification-settings write must not inject it.
+    delete body[RECOVERY_PASSWORD_KEY]
     const [row] = await db!.select().from(schema.settings).where(sql`${schema.settings.id} = 'app'`).limit(1)
     const existing = (row as any)?.notificationSettings ?? {}
     const merged = { ...existing, ...body }

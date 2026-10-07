@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, Building2, Check, Landmark, Loader2, LogOut, Monitor, Moon, Save, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
+import { Bell, Building2, Check, Eye, EyeOff, KeyRound, Landmark, Loader2, LogOut, Monitor, Moon, Save, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -365,6 +365,7 @@ function SettingsContent() {
             </Card>
 
             <SessionSecurityCard />
+            <RecoveryPasswordCard />
           </div>
         </TabsContent>
       </Tabs>
@@ -503,6 +504,133 @@ function SessionSecurityCard() {
           <Button variant="outline" size="sm" className="mt-3" onClick={revokeOthers} disabled={revoking}>
             <LogOut className="h-3.5 w-3.5" /> {revoking ? 'Signing out…' : 'Log out other devices'}
           </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function RecoveryPasswordCard() {
+  const { currentUser } = useAuth()
+  const isOwner = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin'
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [source, setSource] = useState<'default' | 'custom'>('default')
+  const [password, setPassword] = useState('')
+  const [show, setShow] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  useEffect(() => {
+    if (!isOwner) return
+    dbApi
+      .getRecoveryPassword()
+      .then((r) => {
+        setPassword(r.password)
+        setSource(r.source)
+      })
+      .catch(() => toast.error('Could not load the recovery password'))
+      .finally(() => setLoading(false))
+  }, [isOwner])
+
+  // Mirrors the backend strongPassword policy so the user is not told about
+  // the rules only after the server rejects the value.
+  const valid =
+    draft.length >= 8 && /[A-Z]/.test(draft) && /[a-z]/.test(draft) && /[0-9]/.test(draft) && /[^A-Za-z0-9]/.test(draft)
+
+  const save = async () => {
+    if (!valid) return
+    setSaving(true)
+    try {
+      const r = await dbApi.setRecoveryPassword(draft)
+      setPassword(r.password)
+      setSource(r.source)
+      setDraft('')
+      toast.success('Recovery password updated')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update the recovery password')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const resetToDefault = async () => {
+    if (
+      !(await confirmDialog({
+        title: 'Reset to the built-in recovery password?',
+        description: 'The custom value will be discarded and the default shipped with the app becomes effective again.',
+        confirmLabel: 'Reset to default',
+        danger: true,
+      }))
+    )
+      return
+    setSaving(true)
+    try {
+      const r = await dbApi.resetRecoveryPassword()
+      setPassword(r.password)
+      setSource(r.source)
+      setDraft('')
+      toast.success('Recovery password reset to the built-in default')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not reset the recovery password')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!isOwner) return null
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center gap-2">
+          <KeyRound className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground">Recovery password</h3>
+        </div>
+        <div className="rounded-lg border p-4 space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Forgot your sign-in password? Type this recovery password in the Password box on the Sign-in screen — it works as
+            the password for Admin and Super Admin accounts only, and every use is recorded in the activity log.
+          </p>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              Current recovery password ({source === 'default' ? 'built-in default' : 'custom value'})
+            </Label>
+            <div className="relative">
+              <Input
+                type={show ? 'text' : 'password'}
+                readOnly
+                value={loading ? '' : password}
+                aria-label="Current recovery password"
+                className="pr-9"
+              />
+              <button
+                type="button"
+                onClick={() => setShow((s) => !s)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={show ? 'Hide recovery password' : 'Show recovery password'}
+              >
+                {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Set a new recovery password (optional)</Label>
+            <Input
+              type="password"
+              placeholder="At least 8 chars with upper, lower, number and symbol"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              aria-label="New recovery password"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={save} disabled={!valid || saving || loading}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save new value
+            </Button>
+            <Button size="sm" variant="outline" onClick={resetToDefault} disabled={saving || source === 'default'}>
+              Reset to built-in default
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

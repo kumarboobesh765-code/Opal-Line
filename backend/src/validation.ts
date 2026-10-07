@@ -184,6 +184,13 @@ export const changePasswordSchema = z.object({
   newPassword: strongPassword,
 })
 
+// Either rotate the superadmin recovery password to a new strong value or
+// reset it back to the built-in default.
+export const recoveryPasswordSchema = z.union([
+  z.object({ password: strongPassword }),
+  z.object({ reset: z.literal(true) }),
+])
+
 export const verifyEmailSchema = z.object({
   token: z.string().min(1, 'Verification token is required'),
 })

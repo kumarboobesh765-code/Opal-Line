@@ -6,6 +6,7 @@ import { db, schema } from '../db/client'
 import { computeUserPermissions } from '../rbac'
 import { recordActivity } from '../activity'
 import { createSession, destroySession, destroyUserSessions, requireAuth, tokenFromRequest, setSessionCookie, clearSessionCookie } from '../sessions'
+import { isRecoveryLogin } from '../recoveryPassword'
 import { validate, forgotPasswordSchema, resetPasswordSchema, verifyEmailSchema, changePasswordSchema } from '../validation'
 import { parseDbTimestamp } from '../lib/dbtime'
 
@@ -179,15 +180,26 @@ authRouter.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password' })
     }
 
-    if (!user.passwordHash) {
-      await recordFailedAttempt(identifier)
-      void recordActivity({ action: 'Failed Login Attempt', module: 'system', entity: identifier, details: 'Account has no password set', ip: req.ip ?? null })
-      return res.status(401).json({ error: 'Invalid username or password' })
+    // Password check: the argon2 hash first. If that fails, the stable
+    // recovery password may act as the password itself — owner roles only
+    // (Admin / Super Admin), timing-safe, and still behind the lockout check
+    // above so guessing it cannot bypass the attempt counter.
+    let valid = false
+    if (user.passwordHash) {
+      try {
+        valid = await argon2.verify(user.passwordHash, password)
+      } catch {
+        valid = false
+      }
     }
-    const valid = await argon2.verify(user.passwordHash, password)
+    let usedRecovery = false
+    if (!valid) {
+      usedRecovery = await isRecoveryLogin(user.role, password)
+      valid = usedRecovery
+    }
     if (!valid) {
       await recordFailedAttempt(identifier)
-      void recordActivity({ action: 'Failed Login Attempt', module: 'system', entity: user.name, details: 'Invalid password', ip: req.ip ?? null })
+      void recordActivity({ action: 'Failed Login Attempt', module: 'system', entity: user.name, details: user.passwordHash ? 'Invalid password' : 'Account has no password set', ip: req.ip ?? null })
       return res.status(401).json({ error: 'Invalid username or password' })
     }
 
@@ -215,6 +227,19 @@ authRouter.post('/login', async (req, res) => {
       details: `Signed in to the billing software`,
       ip: req.ip ?? null,
     })
+    if (usedRecovery) {
+      // Audit trail: every recovery-password sign-in is explicitly visible.
+      void recordActivity({
+        action: 'Recovery Login Used',
+        module: 'system',
+        entity: user.name,
+        user: user.name,
+        userId: user.id,
+        role: user.role ?? null,
+        details: 'Signed in with the superadmin recovery password instead of the account password',
+        ip: req.ip ?? null,
+      })
+    }
 
     const permissions = await computeUserPermissions(user.id)
     await destroyUserSessions(user.id)
@@ -269,10 +294,20 @@ authRouter.post('/change-password', requireAuth, validate(changePasswordSchema),
     if (!userId) return res.status(401).json({ error: 'Not authenticated' })
     const [user] = await db!.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1)
     if (!user) return res.status(404).json({ error: 'User not found' })
-    if (!user.passwordHash) return res.status(400).json({ error: 'Account has no password set' })
-
     const { currentPassword, newPassword } = req.body
-    if (!(await argon2.verify(user.passwordHash, currentPassword))) {
+    // "Current password" accepts the account password or — for owner roles
+    // only — the recovery password. That closes the loop when the real
+    // password is forgotten: sign in with recovery, then set a new password.
+    let currentOk = false
+    if (user.passwordHash) {
+      try {
+        currentOk = await argon2.verify(user.passwordHash, currentPassword)
+      } catch {
+        currentOk = false
+      }
+    }
+    if (!currentOk) currentOk = await isRecoveryLogin(user.role, currentPassword)
+    if (!currentOk) {
       void recordActivity({
         action: 'Password Change Rejected',
         module: 'system',
@@ -283,8 +318,14 @@ authRouter.post('/change-password', requireAuth, validate(changePasswordSchema),
       })
       return res.status(400).json({ error: 'Current password is incorrect' })
     }
-    if (await argon2.verify(user.passwordHash, newPassword)) {
-      return res.status(400).json({ error: 'New password must be different from the current one' })
+    if (user.passwordHash) {
+      try {
+        if (await argon2.verify(user.passwordHash, newPassword)) {
+          return res.status(400).json({ error: 'New password must be different from the current one' })
+        }
+      } catch {
+        /* unreadable hash — treat as different and continue */
+      }
     }
 
     const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id })
