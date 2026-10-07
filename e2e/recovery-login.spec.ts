@@ -6,10 +6,12 @@ import { E2E_PASSWORD, E2E_USER } from './global-setup'
  * password itself on the sign-in screen (owner accounts only — the role gate
  * itself is covered by backend/src/recoveryPassword.test.ts).
  *
- * The value must stay in sync with CONSTANTS.SUPERADMIN_RECOVERY_PASSWORD
- * (backend/src/constants.ts) — it is deliberately fixed for every install.
+ * The value must stay in sync with the plaintext documented in
+ * docs/recovery-password.md and with CONSTANTS.SUPERADMIN_RECOVERY_PASSWORD_HASH
+ * (backend/src/constants.ts), which stores only its argon2id hash — the value
+ * is deliberately fixed for every install.
  */
-const RECOVERY_PASSWORD = 'OpalLine-SuperAdmin-2026'
+const RECOVERY_PASSWORD = 'Ajith130503@'
 
 test.describe('recovery password login', () => {
   test.use({ storageState: { cookies: [], origins: [] } })

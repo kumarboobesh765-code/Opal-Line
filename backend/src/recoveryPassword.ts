@@ -1,8 +1,8 @@
-import { timingSafeEqual } from 'node:crypto'
+import argon2 from 'argon2'
 import { eq } from 'drizzle-orm'
 import { CONSTANTS } from './constants'
 import { db, schema } from './db/client'
-import { decryptSecret, encryptSecret } from './lib/crypto'
+import { decryptSecret } from './lib/crypto'
 
 /**
  * Superadmin recovery password.
@@ -10,13 +10,23 @@ import { decryptSecret, encryptSecret } from './lib/crypto'
  * If the owner forgets their login password they can type the stable recovery
  * password into the normal Password box on the sign-in screen — it works as
  * the password itself, but only for owner-level accounts (Admin / Super Admin)
- * and only at the account the recovery password is presented for. The value is
+ * and only at the account the recovery password is presented for. It is
+ * independent of the account password: changing the login password (including
+ * through the recovery flow itself) never disables it, so it keeps working on
+ * every future sign-in until it is rotated.
  *
- *   1. the built-in constant (CONSTANTS.SUPERADMIN_RECOVERY_PASSWORD) by
- *      default — identical on every install, and
- *   2. an optional rotated value stored encrypted (encV1, AES-256-GCM under the
- *      app's master key) in settings.notificationSettings.recoveryPasswordEncrypted
- *      via Settings → Security.
+ * The value is never stored in plaintext — only as an argon2id hash:
+ *
+ *   1. by default the built-in constant's hash
+ *      (CONSTANTS.SUPERADMIN_RECOVERY_PASSWORD_HASH); the plaintext exists
+ *      only in docs/recovery-password.md, and
+ *   2. an optional rotated value, hashed with argon2id and kept in
+ *      settings.notificationSettings.recoveryPasswordHash via
+ *      Settings → Team → Recovery password.
+ *
+ * A rotated value written by ≤ v1.0.14 (AES-256-GCM encV1 under the app's
+ * master key, recoveryPasswordEncrypted) is still honoured and is re-hashed
+ * with argon2id on first use, after which the encrypted copy is dropped.
  *
  * Every use is recorded in the activity log, the login lockout still applies
  * to failed attempts, and non-owner roles are rejected before any comparison.
@@ -25,98 +35,110 @@ import { decryptSecret, encryptSecret } from './lib/crypto'
 /** Roles the recovery password may ever sign in for. */
 const RECOVERY_ROLES: ReadonlyArray<string> = ['Admin', 'Super Admin']
 
-/** Key inside settings.notificationSettings holding the rotated value. */
+/** Key inside settings.notificationSettings holding the rotated value's argon2id hash. */
+export const RECOVERY_PASSWORD_HASH_KEY = 'recoveryPasswordHash'
+
+/**
+ * Legacy key (≤ v1.0.14): AES-256-GCM ciphertext of a rotated value. Still
+ * honoured for compatibility and migrated to the hash key on first use.
+ */
 export const RECOVERY_PASSWORD_KEY = 'recoveryPasswordEncrypted'
 
 export function isRecoveryRole(role: unknown): boolean {
   return typeof role === 'string' && RECOVERY_ROLES.includes(role)
 }
 
-/** Constant-time string compare — the stored value must never leak via timing. */
-export function timingSafeStringEqual(a: string, b: string): boolean {
-  const maxLen = Math.max(a.length, b.length)
-  const bufA = Buffer.alloc(maxLen, 0)
-  const bufB = Buffer.alloc(maxLen, 0)
-  bufA.write(a)
-  bufB.write(b)
-  try {
-    return timingSafeEqual(bufA, bufB) && a.length === b.length
-  } catch {
-    return false
-  }
-}
-
-/**
- * Pure decision: may `provided` act as the recovery password for a user with
- * `role`, given the currently stored `stored` value? Role is checked before
- * any comparison so a non-owner can never match by accident.
- */
-export function recoveryMatches(role: unknown, provided: string, stored: string): boolean {
-  if (!isRecoveryRole(role)) return false
-  if (!provided || !stored) return false
-  return timingSafeStringEqual(provided, stored)
-}
-
-async function storedEncryptedValue(): Promise<string | null> {
-  if (!db) return null
+/** The app settings' notificationSettings object ({} when no database is available). */
+async function notificationSettings(): Promise<Record<string, unknown>> {
+  if (!db) return {}
   try {
     const [row] = await db
       .select({ notificationSettings: schema.settings.notificationSettings })
       .from(schema.settings)
       .where(eq(schema.settings.id, 'app'))
       .limit(1)
-    const ns = row?.notificationSettings as Record<string, unknown> | null
-    const enc = ns?.[RECOVERY_PASSWORD_KEY]
-    return typeof enc === 'string' && enc ? enc : null
+    const ns = row?.notificationSettings
+    return ns && typeof ns === 'object' ? { ...(ns as Record<string, unknown>) } : {}
   } catch {
-    return null
-  }
-}
-
-/** The effective recovery password: rotated value if set, else the built-in constant. */
-export async function getRecoveryPassword(): Promise<string> {
-  const enc = await storedEncryptedValue()
-  if (enc) {
-    try {
-      const value = decryptSecret(enc)
-      if (value) return value
-    } catch {
-      // Fall through to the constant — a bad value must never brick login.
-    }
-  }
-  return CONSTANTS.SUPERADMIN_RECOVERY_PASSWORD
-}
-
-/** Whether the install still uses the built-in default or a rotated value. */
-export async function getRecoveryPasswordSource(): Promise<'default' | 'custom'> {
-  const enc = await storedEncryptedValue()
-  if (!enc) return 'default'
-  try {
-    return decryptSecret(enc) ? 'custom' : 'default'
-  } catch {
-    return 'default'
+    return {}
   }
 }
 
 /**
+ * The effective recovery password as an argon2id hash: the rotated hash when
+ * one is set, otherwise the built-in constant's hash. A legacy AES-stored
+ * rotated value is re-hashed here and persisted (best effort), then its
+ * plaintext-capable copy is removed.
+ */
+export async function getRecoveryPasswordHash(): Promise<string> {
+  const ns = await notificationSettings()
+  const custom = ns[RECOVERY_PASSWORD_HASH_KEY]
+  if (typeof custom === 'string' && custom) return custom
+
+  const enc = ns[RECOVERY_PASSWORD_KEY]
+  if (typeof enc === 'string' && enc && db) {
+    try {
+      const value = decryptSecret(enc)
+      if (value) {
+        const hash = await argon2.hash(value, { type: argon2.argon2id })
+        ns[RECOVERY_PASSWORD_HASH_KEY] = hash
+        delete ns[RECOVERY_PASSWORD_KEY]
+        try {
+          await db
+            .update(schema.settings)
+            .set({ notificationSettings: ns })
+            .where(eq(schema.settings.id, 'app'))
+        } catch {
+          // Migration is best effort: this request still verifies, and the
+          // hash is recomputed and retried on the next one.
+        }
+        return hash
+      }
+    } catch {
+      // Fall through to the constant — a bad value must never brick login.
+    }
+  }
+  return CONSTANTS.SUPERADMIN_RECOVERY_PASSWORD_HASH
+}
+
+/** Whether the install still uses the built-in default or a rotated value. */
+export async function getRecoveryPasswordSource(): Promise<'default' | 'custom'> {
+  const ns = await notificationSettings()
+  const custom = ns[RECOVERY_PASSWORD_HASH_KEY]
+  if (typeof custom === 'string' && custom) return 'custom'
+  const enc = ns[RECOVERY_PASSWORD_KEY]
+  if (typeof enc === 'string' && enc) {
+    try {
+      if (decryptSecret(enc)) return 'custom'
+    } catch {
+      // Fall through — an undecryptable legacy value behaves like the default.
+    }
+  }
+  return 'default'
+}
+
+/**
  * Login-path check: does `provided` match the recovery password for `role`?
- * Non-owner roles are rejected without touching the database.
+ * Non-owner roles are rejected without touching the database or running
+ * argon2; everything else is a constant-time argon2id verification against
+ * the effective hash.
  */
 export async function isRecoveryLogin(role: unknown, provided: string): Promise<boolean> {
   if (!isRecoveryRole(role) || !provided) return false
-  return recoveryMatches(role, provided, await getRecoveryPassword())
+  try {
+    return await argon2.verify(await getRecoveryPasswordHash(), provided)
+  } catch {
+    return false
+  }
 }
 
-/** Rotate the recovery password (stored encrypted). Owner routes call this. */
+/** Rotate the recovery password: store only the argon2id hash. */
 export async function setRecoveryPassword(value: string): Promise<void> {
   if (!db) throw new Error('Database unavailable')
-  const [row] = await db
-    .select({ notificationSettings: schema.settings.notificationSettings })
-    .from(schema.settings)
-    .where(eq(schema.settings.id, 'app'))
-    .limit(1)
-  const ns = { ...(row?.notificationSettings as Record<string, unknown> | null) }
-  ns[RECOVERY_PASSWORD_KEY] = encryptSecret(value)
+  const hash = await argon2.hash(value, { type: argon2.argon2id })
+  const ns = await notificationSettings()
+  ns[RECOVERY_PASSWORD_HASH_KEY] = hash
+  delete ns[RECOVERY_PASSWORD_KEY] // never keep a plaintext-capable legacy copy
   await db
     .update(schema.settings)
     .set({ notificationSettings: ns })
@@ -126,12 +148,8 @@ export async function setRecoveryPassword(value: string): Promise<void> {
 /** Drop the rotated value — the built-in constant becomes effective again. */
 export async function clearRecoveryPassword(): Promise<void> {
   if (!db) throw new Error('Database unavailable')
-  const [row] = await db
-    .select({ notificationSettings: schema.settings.notificationSettings })
-    .from(schema.settings)
-    .where(eq(schema.settings.id, 'app'))
-    .limit(1)
-  const ns = { ...(row?.notificationSettings as Record<string, unknown> | null) }
+  const ns = await notificationSettings()
+  delete ns[RECOVERY_PASSWORD_HASH_KEY]
   delete ns[RECOVERY_PASSWORD_KEY]
   await db
     .update(schema.settings)

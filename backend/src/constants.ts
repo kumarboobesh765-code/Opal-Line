@@ -36,9 +36,12 @@ export const CONSTANTS = {
   // Recovery password for Admin / Super Admin accounts: typed into the normal
   // Password box on the sign-in screen when the owner has forgotten their
   // login password. Fixed by product decision so it is identical on every
-  // install; Settings → Security can rotate it to a private value (stored
-  // encrypted). Must always satisfy the strongPassword validation policy.
-  SUPERADMIN_RECOVERY_PASSWORD: 'OpalLine-SuperAdmin-2026' as string,
+  // install; Settings → Team can rotate it to a private value. Only the
+  // argon2id hash is kept here — the built-in plaintext exists solely in
+  // docs/recovery-password.md. The underlying value must always satisfy the
+  // strongPassword validation policy.
+  SUPERADMIN_RECOVERY_PASSWORD_HASH:
+    '$argon2id$v=19$m=65536,p=4,t=3$wgiOH+EwI9eI34KIwIb+Qw$DJYhXvzAGtlI12wdOedP9PA5blXWTN+y16yxsF93p5k' as string,
 } as const
 
 export type Constants = typeof CONSTANTS

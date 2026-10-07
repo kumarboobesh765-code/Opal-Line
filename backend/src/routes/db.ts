@@ -6,7 +6,7 @@ import { db, schema, checkDbHealth } from '../db/client'
 import { applyStockMovement,  ensureDefaultLocation, resolveMovementLocation } from '../stock'
 import { computeUserPermissions, requirePermission } from '../rbac'
 import { validate, recoveryPasswordSchema } from '../validation'
-import { clearRecoveryPassword, getRecoveryPassword, getRecoveryPasswordSource, isRecoveryRole, RECOVERY_PASSWORD_KEY, setRecoveryPassword } from '../recoveryPassword'
+import { clearRecoveryPassword, getRecoveryPasswordSource, isRecoveryRole, RECOVERY_PASSWORD_HASH_KEY, RECOVERY_PASSWORD_KEY, setRecoveryPassword } from '../recoveryPassword'
 import { actorFromRequest,  recordActivity } from '../activity'
 import { encrypt, decrypt,  encryptSecret } from '../lib/crypto'
 import { isConfigured as isShopifyConfigured, config as shopifyConfig, normalizeShopDomain } from '../config'
@@ -2752,11 +2752,13 @@ dbRouter.get('/settings', requirePermission('system', 'view'), async (_req, res)
     const row = rows[0] ? { ...rows[0] } : null
     if (row) {
       for (const k of SETTINGS_SECRET_COLUMNS) delete row[k as keyof typeof row]
-      // The recovery password's encrypted override never rides along in the
-      // generic payload — it is read/written only by /settings/recovery-password.
+      // The recovery password (hash or legacy ciphertext) never rides along
+      // in the generic payload — it is read/written only by
+      // /settings/recovery-password.
       if (row.notificationSettings && typeof row.notificationSettings === 'object') {
         const ns = { ...(row.notificationSettings as Record<string, unknown>) }
         delete ns[RECOVERY_PASSWORD_KEY]
+        delete ns[RECOVERY_PASSWORD_HASH_KEY]
         ;(row as Record<string, unknown>).notificationSettings = ns
       }
     }
@@ -2779,10 +2781,14 @@ dbRouter.put('/settings', requirePermission('system', 'edit'), async (req, res) 
     if (body.notificationSettings && typeof body.notificationSettings === 'object') {
       const incoming = { ...(body.notificationSettings as Record<string, unknown>) }
       delete incoming[RECOVERY_PASSWORD_KEY]
+      delete incoming[RECOVERY_PASSWORD_HASH_KEY]
       const [current] = await db!.select({ ns: s.settings.notificationSettings }).from(s.settings).where(eq(s.settings.id, SETTINGS_ID)).limit(1)
       const existingNs = (current?.ns ?? null) as Record<string, unknown> | null
       if (existingNs && RECOVERY_PASSWORD_KEY in existingNs) {
         incoming[RECOVERY_PASSWORD_KEY] = existingNs[RECOVERY_PASSWORD_KEY]
+      }
+      if (existingNs && RECOVERY_PASSWORD_HASH_KEY in existingNs) {
+        incoming[RECOVERY_PASSWORD_HASH_KEY] = existingNs[RECOVERY_PASSWORD_HASH_KEY]
       }
       body.notificationSettings = incoming
     }
@@ -2834,7 +2840,7 @@ dbRouter.get('/settings/recovery-password', requirePermission('system', 'view'),
   if (!requireDb(res)) return
   try {
     if (!(await ownerOnlyGuard(req, res))) return
-    res.json({ source: await getRecoveryPasswordSource(), password: await getRecoveryPassword() })
+    res.json({ source: await getRecoveryPasswordSource() })
   } catch {
     res.status(500).json({ error: 'Internal server error' })
   }
@@ -2858,7 +2864,7 @@ dbRouter.put('/settings/recovery-password', requirePermission('system', 'edit'),
       userId: actor.userId,
       ip: actor.ip,
     })
-    res.json({ ok: true, source: await getRecoveryPasswordSource(), password: await getRecoveryPassword() })
+    res.json({ ok: true, source: await getRecoveryPasswordSource() })
   } catch (err) {
     logger.error({ err }, 'recovery password update failed')
     res.status(500).json({ error: 'Failed to update recovery password' })
@@ -3767,6 +3773,7 @@ dbRouter.get('/settings/notifications', requirePermission('system', 'view'), asy
     }
     const out = { ...(notif as Record<string, unknown>) }
     delete out[RECOVERY_PASSWORD_KEY]
+    delete out[RECOVERY_PASSWORD_HASH_KEY]
     res.json(out)
   } catch (err) {
     logger.error({ err }, 'Notification settings load failed')
@@ -3777,9 +3784,10 @@ dbRouter.get('/settings/notifications', requirePermission('system', 'view'), asy
 dbRouter.put('/settings/notifications', requirePermission('system', 'edit'), async (req, res) => {
   try {
     const body = { ...(req.body as Record<string, unknown>) }
-    // The recovery password override is managed only by its dedicated
-    // endpoint — a generic notification-settings write must not inject it.
+    // The recovery password is managed only by its dedicated endpoint —
+    // a generic notification-settings write must not inject it.
     delete body[RECOVERY_PASSWORD_KEY]
+    delete body[RECOVERY_PASSWORD_HASH_KEY]
     const [row] = await db!.select().from(schema.settings).where(sql`${schema.settings.id} = 'app'`).limit(1)
     const existing = (row as any)?.notificationSettings ?? {}
     const merged = { ...existing, ...body }
