@@ -760,6 +760,11 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
     return { ok: false, synced: 0, created: 0, updated: 0, removed: 0, errors: [], message: 'A sync is already in progress' }
   }
 
+  // Hoisted out of the try block so a failure still reports how far the pull
+  // got instead of pretending nothing was written.
+  let created = 0
+  let updated = 0
+  let removed = 0
   try {
     await syncProducts()
 
@@ -773,8 +778,6 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
       if (key) bySku.set(key, r)
     }
 
-    let created = 0
-    let updated = 0
     const pricingRate = (await getLatestSilverRate())?.rate ?? 92.8
     for (const p of live) {
       const sku = String(p.sku ?? '').trim() || `SHOP-${p.id}`
@@ -818,7 +821,7 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
         updated++
       } else {
         const pricing = backComputePricing(price, pricingRate)
-        await db.insert(schema.products).values({
+        const values = {
           id: randomUUID(),
           name: p.title || sku,
           sku,
@@ -851,12 +854,19 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
           // Set chargeOnTax from the product data (first sync) or preserve existing
           chargeOnTax: p.chargeOnTax ?? true,
           createdAt: new Date().toISOString().slice(0, 10),
-        })
+        }
+        const [inserted] = await db.insert(schema.products).values(values).returning()
         created++
+        // Register the fresh row so a SECOND live product carrying the same
+        // SKU takes the update path above instead of colliding with this
+        // insert: the store can contain duplicate SKUs, and on a brand-new
+        // database that collision used to abort the entire first import on
+        // products_sku_idx (warm databases never hit it — both products map
+        // onto the existing row through the update path).
+        if (inserted) bySku.set(skuKey, inserted)
       }
     }
 
-    let removed = 0
     for (const r of rows) {
       const key = String(r.sku ?? '').trim().toLowerCase()
       if (liveSkus.has(key)) continue
@@ -875,10 +885,15 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
     await persistLog({ entity: 'Product', direction: 'in', action: 'Import', status: 'success' })
     return { ok: true, synced: live.length, created, updated, removed, errors: [] }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
+    let message = err instanceof Error ? err.message : 'Unknown error'
+    // Drizzle wraps the postgres error as `cause`; surface it so the sync log
+    // and callers see the real constraint (e.g. duplicate SKU) instead of only
+    // the generated SQL.
+    const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : null
+    if (cause && !message.includes(cause)) message = `${message} — ${cause}`
     store.lastError = message
     await persistLog({ entity: 'Product', direction: 'in', action: 'Import', status: 'failed', error: message, retry: true })
-    return { ok: false, synced: 0, created: 0, updated: 0, removed: 0, errors: [message], message }
+    return { ok: false, synced: 0, created, updated, removed, errors: [message], message }
   } finally {
     releaseSyncLock()
   }
