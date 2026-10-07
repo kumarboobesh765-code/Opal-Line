@@ -41,7 +41,7 @@ if (pgPassword && !process.env.DATABASE_URL) {
 }
 
 const { decrypt, decryptSecret } = await import('../src/lib/crypto')
-const { db, schema } = await import('../src/db/client')
+const { db, schema, getRawClient } = await import('../src/db/client')
 
 function maybeDecrypt(value: string | null | undefined): string {
   if (!value) return ''
@@ -273,4 +273,12 @@ if (otherTitle) {
 // ── summary ───────────────────────────────────────────────────────────────
 console.log('─'.repeat(70))
 console.log(`RESULT: ${passed} passed, ${failed} failed`)
-process.exit(failed === 0 ? 0 : 1)
+// Close the pool and let the process exit naturally: force-exiting while a
+// handle is mid-close trips a libuv teardown assertion on Windows
+// ("handle->flags & UV_HANDLE_CLOSING") and turns a green run into exit 127.
+await getRawClient()?.end({ timeout: 3 }).catch(() => undefined)
+const exitCode = failed === 0 ? 0 : 1
+process.exitCode = exitCode
+// Safety net: if some handle never closes, force the exit anyway.
+const safety = setTimeout(() => process.exit(exitCode), 10_000)
+safety.unref()

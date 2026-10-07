@@ -749,6 +749,172 @@ export function mergeImages(local: string[] | null, shopify: string[]): string[]
   return out
 }
 
+/**
+ * Local catalog row as the pull sees it — the subset of products columns the
+ * sync loop reads. Kept structural so tests can supply in-memory rows while
+ * drizzle's `$inferSelect` rows satisfy it structurally.
+ */
+export interface CatalogRow {
+  id: string
+  sku: string
+  name: string
+  barcode: string | null
+  category: string
+  collection: string | null
+  netWeight: number | null
+  makingCharge: number | null
+  silverRate: number | null
+  stock: number | null
+  vendor: string | null
+  productType: string | null
+  description: string | null
+  compareAtPrice: number | null
+  image: string | null
+  images: unknown
+  chargeOnTax: boolean
+  shopifyId: string | null
+  shopifyStatus: string | null
+  status: string | null
+}
+
+/** Insert payload built by the pull — exactly what `insert(schema.products).values()` takes. */
+export type CatalogInsertValues = typeof schema.products.$inferInsert
+
+/** Update payload the pull writes through the update path. */
+export interface CatalogPatch {
+  name: string
+  barcode: string | null
+  category: string
+  collection: string | null
+  stock: number | null
+  shopifyId: string
+  shopifyStatus: string
+  status: string
+  vendor: string | null
+  productType: string | null
+  description: string | null
+  compareAtPrice: number | null
+  image: string | null
+  images: string[] | null
+  netWeight: number | null
+  makingCharge: number | null
+  silverRate: number | null
+  chargeOnTax: boolean
+}
+
+/** Data access the pull needs; injected so the loop is unit-testable. */
+export interface CatalogApplyIo {
+  insert(values: CatalogInsertValues): Promise<CatalogRow | undefined>
+  update(existing: CatalogRow, patch: CatalogPatch): Promise<void>
+}
+
+/**
+ * Reconcile the live Shopify catalog into the local rows: existing SKUs are
+ * updated (keeping pricing data), unknown SKUs are inserted.
+ *
+ * A fresh row is registered in the SKU map immediately, so a SECOND live
+ * product carrying the same SKU takes the update path instead of colliding
+ * with the insert: the store can contain duplicate SKUs, and on a brand-new
+ * database that collision used to abort the entire first import on
+ * products_sku_idx (warm databases never hit it — both products map onto the
+ * existing row through the update path).
+ */
+export async function applyLiveCatalog(
+  live: SyncProduct[],
+  rows: CatalogRow[],
+  pricingRate: number,
+  io: CatalogApplyIo,
+): Promise<{ created: number; updated: number }> {
+  const bySku = new Map<string, CatalogRow>()
+  for (const r of rows) {
+    const key = String(r.sku ?? '').trim().toLowerCase()
+    if (key) bySku.set(key, r)
+  }
+
+  let created = 0
+  let updated = 0
+  for (const p of live) {
+    const sku = String(p.sku ?? '').trim() || `SHOP-${p.id}`
+    const skuKey = sku.toLowerCase()
+    if (!skuKey) continue
+    const price = Number(p.price ?? 0) || 0
+    const compareAt = p.compareAtPrice != null ? Number(p.compareAtPrice) : null
+    const effectiveCompareAt = compareAt != null && compareAt > 0 ? compareAt : null
+    const existing = bySku.get(skuKey)
+    if (existing) {
+      const hasWeight = existing.netWeight != null && Number(existing.netWeight) > 0
+      const pricing = hasWeight ? null : backComputePricing(price, pricingRate)
+      const patch: CatalogPatch = {
+        name: p.title || existing.name,
+        barcode: p.barcode ?? existing.barcode,
+        category: p.productType || existing.category,
+        collection: p.collection || p.productType || existing.collection,
+        stock: Number.isFinite(p.inventoryQuantity) ? p.inventoryQuantity : existing.stock,
+        shopifyId: String(p.id),
+        shopifyStatus: 'synced',
+        status: 'active',
+        vendor: p.vendor || existing.vendor,
+        productType: p.productType || existing.productType,
+        // Shopify body_html is authoritative for descriptions coming from
+        // the storefront; keep local text when Shopify has none.
+        description: p.description ? p.description : existing.description,
+        compareAtPrice: effectiveCompareAt ?? existing.compareAtPrice,
+        image: p.image ?? existing.image,
+        // Mirror Shopify's gallery; keep any local-only uploads that aren't
+        // yet on Shopify (they'll be pushed on the next product push).
+        images: mergeImages(existing.images as string[] | null, p.images),
+        netWeight: pricing ? pricing.netWeight : existing.netWeight,
+        makingCharge: pricing ? pricing.makingCharge : existing.makingCharge,
+        silverRate: pricing ? pricingRate : existing.silverRate,
+        // Preserve existing chargeOnTax value; do not overwrite from Shopify list endpoint
+        chargeOnTax: existing.chargeOnTax,
+      }
+      await io.update(existing, patch)
+      updated++
+    } else {
+      const pricing = backComputePricing(price, pricingRate)
+      const values: CatalogInsertValues = {
+        id: randomUUID(),
+        name: p.title || sku,
+        sku,
+        barcode: p.barcode ?? null,
+        category: p.productType || 'Uncategorized',
+        collection: p.collection || p.productType || null,
+        purity: 92.5,
+        grossWeight: null,
+        stoneWeight: null,
+        netWeight: pricing ? pricing.netWeight : null,
+        makingCharge: pricing ? pricing.makingCharge : null,
+        gst: 3,
+        hsn: null,
+        supplier: null,
+        silverRate: pricing ? pricingRate : null,
+        sellingPrice: price,
+        compareAtPrice: effectiveCompareAt,
+        stock: Number.isFinite(p.inventoryQuantity) ? p.inventoryQuantity : 0,
+        reorderLevel: null,
+        shopifyStatus: 'synced',
+        shopifyId: String(p.id),
+        status: 'active',
+        image: p.image ?? null,
+        images: p.images.length > 0 ? p.images : null,
+        vendor: p.vendor || null,
+        productType: p.productType || null,
+        description: p.description || null,
+        tags: null,
+        trackInventory: true,
+        // Set chargeOnTax from the product data (first sync) or preserve existing
+        chargeOnTax: p.chargeOnTax ?? true,
+        createdAt: new Date().toISOString().slice(0, 10),
+      }
+      const inserted = await io.insert(values)
+      created++
+      if (inserted) bySku.set(skuKey, inserted)
+    }
+  }
+  return { created, updated }
+}
+
 export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
   if (!isConfigured()) {
     return { ok: false, synced: 0, created: 0, updated: 0, removed: 0, errors: ['Shopify is not configured. See server/.env'], message: 'Shopify is not configured' }
@@ -756,6 +922,7 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
   if (!db) {
     return { ok: false, synced: 0, created: 0, updated: 0, removed: 0, errors: ['Database is not configured'], message: 'Database is not configured' }
   }
+  const database = db
   if (!(await acquireSyncLock('products'))) {
     return { ok: false, synced: 0, created: 0, updated: 0, removed: 0, errors: [], message: 'A sync is already in progress' }
   }
@@ -772,100 +939,16 @@ export async function syncProductsToDb(): Promise<ProductsDbSyncResult> {
     const liveSkus = new Set(live.map((p) => (String(p.sku ?? '').trim() || `SHOP-${p.id}`).toLowerCase()).filter(Boolean))
 
     const rows = await db.select().from(schema.products)
-    const bySku = new Map<string, (typeof rows)[number]>()
-    for (const r of rows) {
-      const key = String(r.sku ?? '').trim().toLowerCase()
-      if (key) bySku.set(key, r)
-    }
 
     const pricingRate = (await getLatestSilverRate())?.rate ?? 92.8
-    for (const p of live) {
-      const sku = String(p.sku ?? '').trim() || `SHOP-${p.id}`
-      const skuKey = sku.toLowerCase()
-      if (!skuKey) continue
-      const price = Number(p.price ?? 0) || 0
-      const compareAt = p.compareAtPrice != null ? Number(p.compareAtPrice) : null
-      const effectiveCompareAt = compareAt != null && compareAt > 0 ? compareAt : null
-      const existing = bySku.get(skuKey)
-      if (existing) {
-        const hasWeight = existing.netWeight != null && Number(existing.netWeight) > 0
-        const pricing = hasWeight ? null : backComputePricing(price, pricingRate)
-        await db
-          .update(schema.products)
-          .set({
-            name: p.title || existing.name,
-            barcode: p.barcode ?? existing.barcode,
-            category: p.productType || existing.category,
-            collection: p.collection || p.productType || existing.collection,
-            stock: Number.isFinite(p.inventoryQuantity) ? p.inventoryQuantity : existing.stock,
-            shopifyId: String(p.id),
-            shopifyStatus: 'synced',
-            status: 'active',
-            vendor: p.vendor || existing.vendor,
-            productType: p.productType || existing.productType,
-            // Shopify body_html is authoritative for descriptions coming from
-            // the storefront; keep local text when Shopify has none.
-            description: p.description ? p.description : existing.description,
-            compareAtPrice: effectiveCompareAt ?? existing.compareAtPrice,
-            image: p.image ?? existing.image,
-            // Mirror Shopify's gallery; keep any local-only uploads that aren't
-            // yet on Shopify (they'll be pushed on the next product push).
-            images: mergeImages(existing.images as string[] | null, p.images),
-            netWeight: pricing ? pricing.netWeight : existing.netWeight,
-            makingCharge: pricing ? pricing.makingCharge : existing.makingCharge,
-            silverRate: pricing ? pricingRate : existing.silverRate,
-            // Preserve existing chargeOnTax value; do not overwrite from Shopify list endpoint
-            chargeOnTax: existing.chargeOnTax,
-          })
-          .where(eq(schema.products.id, existing.id))
-        updated++
-      } else {
-        const pricing = backComputePricing(price, pricingRate)
-        const values = {
-          id: randomUUID(),
-          name: p.title || sku,
-          sku,
-          barcode: p.barcode ?? null,
-          category: p.productType || 'Uncategorized',
-          collection: p.collection || p.productType || null,
-          purity: 92.5,
-          grossWeight: null,
-          stoneWeight: null,
-          netWeight: pricing ? pricing.netWeight : null,
-          makingCharge: pricing ? pricing.makingCharge : null,
-          gst: 3,
-          hsn: null,
-          supplier: null,
-          silverRate: pricing ? pricingRate : null,
-          sellingPrice: price,
-          compareAtPrice: effectiveCompareAt,
-          stock: Number.isFinite(p.inventoryQuantity) ? p.inventoryQuantity : 0,
-          reorderLevel: null,
-          shopifyStatus: 'synced',
-          shopifyId: String(p.id),
-          status: 'active',
-          image: p.image ?? null,
-          images: p.images.length > 0 ? p.images : null,
-          vendor: p.vendor || null,
-          productType: p.productType || null,
-          description: p.description || null,
-          tags: null,
-          trackInventory: true,
-          // Set chargeOnTax from the product data (first sync) or preserve existing
-          chargeOnTax: p.chargeOnTax ?? true,
-          createdAt: new Date().toISOString().slice(0, 10),
-        }
-        const [inserted] = await db.insert(schema.products).values(values).returning()
-        created++
-        // Register the fresh row so a SECOND live product carrying the same
-        // SKU takes the update path above instead of colliding with this
-        // insert: the store can contain duplicate SKUs, and on a brand-new
-        // database that collision used to abort the entire first import on
-        // products_sku_idx (warm databases never hit it — both products map
-        // onto the existing row through the update path).
-        if (inserted) bySku.set(skuKey, inserted)
-      }
-    }
+    const applied = await applyLiveCatalog(live, rows, pricingRate, {
+      insert: async (values) => (await database.insert(schema.products).values(values).returning())[0],
+      update: async (existing, patch) => {
+        await database.update(schema.products).set(patch).where(eq(schema.products.id, existing.id))
+      },
+    })
+    created = applied.created
+    updated = applied.updated
 
     for (const r of rows) {
       const key = String(r.sku ?? '').trim().toLowerCase()
