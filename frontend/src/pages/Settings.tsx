@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, Building2, Check, Eye, EyeOff, KeyRound, Landmark, Loader2, LogOut, Monitor, Moon, Save, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
+import { Bell, Building2, Check, KeyRound, Landmark, Loader2, LogOut, Monitor, Moon, Save, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Sun, Tag, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -516,18 +516,13 @@ function RecoveryPasswordCard() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [source, setSource] = useState<'default' | 'custom'>('default')
-  const [password, setPassword] = useState('')
-  const [show, setShow] = useState(false)
   const [draft, setDraft] = useState('')
 
   useEffect(() => {
     if (!isOwner) return
     dbApi
-      .getRecoveryPassword()
-      .then((r) => {
-        setPassword(r.password)
-        setSource(r.source)
-      })
+      .getRecoveryPasswordState()
+      .then((r) => setSource(r.source))
       .catch(() => toast.error('Could not load the recovery password'))
       .finally(() => setLoading(false))
   }, [isOwner])
@@ -542,7 +537,6 @@ function RecoveryPasswordCard() {
     setSaving(true)
     try {
       const r = await dbApi.setRecoveryPassword(draft)
-      setPassword(r.password)
       setSource(r.source)
       setDraft('')
       toast.success('Recovery password updated')
@@ -566,7 +560,6 @@ function RecoveryPasswordCard() {
     setSaving(true)
     try {
       const r = await dbApi.resetRecoveryPassword()
-      setPassword(r.password)
       setSource(r.source)
       setDraft('')
       toast.success('Recovery password reset to the built-in default')
@@ -595,23 +588,17 @@ function RecoveryPasswordCard() {
             <Label className="text-xs text-muted-foreground">
               Current recovery password ({source === 'default' ? 'built-in default' : 'custom value'})
             </Label>
-            <div className="relative">
-              <Input
-                type={show ? 'text' : 'password'}
-                readOnly
-                value={loading ? '' : password}
-                aria-label="Current recovery password"
-                className="pr-9"
-              />
-              <button
-                type="button"
-                onClick={() => setShow((s) => !s)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label={show ? 'Hide recovery password' : 'Show recovery password'}
-              >
-                {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
+            <Input
+              type="text"
+              readOnly
+              value="••••••••••"
+              aria-label="Current recovery password (hidden)"
+              disabled={loading}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              The value is stored only as a one-way Argon2 hash and cannot be displayed here. If you do not have it, set a
+              new value below or reset to the built-in default (see the installation guide).
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Set a new recovery password (optional)</Label>
