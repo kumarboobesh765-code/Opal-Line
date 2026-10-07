@@ -27,18 +27,21 @@ process.env.SHOPIFY_API_VERSION ||= '2024-10'
 delete process.env.DATABASE_URL
 
 type FetchCall = { url: string; method: string; body?: unknown }
-type Scripted = { status: number; body?: unknown; link?: string }
+type Scripted = { status: number; body?: unknown; link?: string; retryAfter?: string }
 
 let calls: FetchCall[] = []
 let script: (call: FetchCall) => Scripted = () => ({ status: 404 })
 
 const originalFetch = globalThis.fetch
 
-function jsonResponse(status: number, body: unknown = {}, link?: string): Response {
+function jsonResponse(status: number, body: unknown = {}, link?: string, retryAfter?: string): Response {
+  const headers: Record<string, string> = {}
+  if (link) headers.link = link
+  if (retryAfter) headers['Retry-After'] = retryAfter
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: new Headers(link ? { link } : {}),
+    headers: new Headers(headers),
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as unknown as Response
@@ -59,7 +62,7 @@ before(async () => {
     }
     calls.push(call)
     const res = script(call)
-    return jsonResponse(res.status, res.body, res.link)
+    return jsonResponse(res.status, res.body, res.link, res.retryAfter)
   }) as typeof fetch
 })
 
@@ -292,6 +295,28 @@ describe('syncLocalCollectionMembership (push)', () => {
     assert.deepEqual(out.existing, ['Classic'])
     assert.deepEqual(out.removed, [])
     assert.equal(calls.filter((c) => isMethod(c, 'DELETE')).length, 0)
+  })
+
+  test('retries a throttled membership read (429) instead of failing the sync', async () => {
+    // Regression: bare fetch meant one throttle burst failed the whole
+    // membership sync with "Shopify API error 429 while reading collection
+    // membership" (live run 37584384670, step 9).
+    let membershipReads = 0
+    script = (call) => {
+      if (isResource(call, 'custom_collections')) return { status: 200, body: { custom_collections: [{ id: 7, title: 'Classic' }] } }
+      if (isResource(call, 'smart_collections')) return { status: 200, body: { smart_collections: [] } }
+      if (isResource(call, 'collects', 'GET')) {
+        membershipReads++
+        if (membershipReads === 1) return { status: 429, body: { errors: 'Throttled' }, retryAfter: '0' }
+        return { status: 200, body: { collects: [] } }
+      }
+      if (isResource(call, 'collects', 'POST')) return { status: 201, body: { collect: { id: 501 } } }
+      return { status: 404 }
+    }
+    const out = await shopify.syncLocalCollectionMembership(91, 'Classic')
+    assert.deepEqual(out.errors, [])
+    assert.deepEqual(out.added, ['Classic'])
+    assert.equal(membershipReads, 2, 'expected the throttled GET to be retried')
   })
 
   test('records failures without throwing when the collections API rejects', async () => {

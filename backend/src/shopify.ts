@@ -207,6 +207,33 @@ async function shopifyRequest<T>(resource: string, query = '', _attempt = 0): Pr
   throw new ShopifyError('Max retries exceeded for Shopify API', 503)
 }
 
+/**
+ * Admin API fetch that retries throttled (429) and transient server (5xx)
+ * responses with the same backoff policy as shopifyRequest: honor Retry-After
+ * when Shopify sends one, otherwise exponential backoff from the shared base
+ * delay. Every other status — including a final 429/5xx once retries are
+ * exhausted — is handed back to the caller so its own handling stays intact
+ * (409/422 "already a member", 404 "already gone", ...). Collection membership
+ * used to use bare fetch here, so a single throttle burst failed the sync with
+ * "Shopify API error 429 while reading collection membership".
+ */
+async function adminFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const maxRetries = CONSTANTS.SHOPIFY_MAX_RETRIES
+  const baseDelay = CONSTANTS.SHOPIFY_BASE_RETRY_DELAY_MS
+  for (let tryNum = 0; tryNum <= maxRetries; tryNum++) {
+    const res = await fetch(input, init)
+    const retryable = res.status === 429 || res.status >= 500
+    if (!retryable || tryNum === maxRetries) return res
+    // Drain the body before waiting so the connection is released.
+    await res.text().catch(() => '')
+    const retryAfter = res.status === 429 ? res.headers.get('Retry-After') : null
+    const parsed = retryAfter ? parseInt(retryAfter, 10) : Number.NaN
+    const delay = Number.isFinite(parsed) && parsed >= 0 ? parsed * 1000 : baseDelay * Math.pow(2, tryNum)
+    await sleep(delay)
+  }
+  throw new ShopifyError('Max retries exceeded for Shopify API', 503)
+}
+
 export async function testShopifyConnection(overrides?: {
   shop?: string
   accessToken?: string
@@ -519,7 +546,7 @@ async function resolveCollection(title: string): Promise<CollectionEntry> {
   const key = title.toLowerCase()
   const hit = dir.get(key)
   if (hit) return hit
-  const res = await fetch(new URL(apiPath(config.apiVersion, 'custom_collections')), {
+  const res = await adminFetch(new URL(apiPath(config.apiVersion, 'custom_collections')), {
     method: 'POST',
     headers: { 'X-Shopify-Access-Token': config.accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ custom_collection: { title } }),
@@ -549,7 +576,7 @@ async function fetchCollectId(productId: number, collectionId: number): Promise<
     collection_id: String(collectionId),
     limit: String(CONSTANTS.SHOPIFY_API_LIMIT),
   }).toString()
-  const res = await fetch(url, { headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' } })
+  const res = await adminFetch(url, { headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' } })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new ShopifyError(`Shopify API error ${res.status} while reading collection membership: ${text.slice(0, 200)}`, res.status)
@@ -564,7 +591,7 @@ async function fetchCollectId(productId: number, collectionId: number): Promise<
 }
 
 async function postCollect(productId: number, collectionId: number): Promise<'created' | 'exists'> {
-  const res = await fetch(new URL(apiPath(config.apiVersion, 'collects')), {
+  const res = await adminFetch(new URL(apiPath(config.apiVersion, 'collects')), {
     method: 'POST',
     headers: { 'X-Shopify-Access-Token': config.accessToken, 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ collect: { product_id: productId, collection_id: collectionId } }),
@@ -625,7 +652,7 @@ export async function syncLocalCollectionMembership(
       if (!entry || entry.kind !== 'custom') continue
       const collectId = await fetchCollectId(productId, entry.id)
       if (!collectId) continue
-      const res = await fetch(new URL(apiPath(config.apiVersion, `collects/${collectId}`)), {
+      const res = await adminFetch(new URL(apiPath(config.apiVersion, `collects/${collectId}`)), {
         method: 'DELETE',
         headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
       })
