@@ -93,10 +93,38 @@ function check(name: string, ok: boolean, detail = '') {
 }
 
 // ── raw Shopify REST helpers (independent of the code under test) ─────────
+// The store enforces 2 calls/second; bursts from this script (parallel
+// membership reads, cleanup retry loops) trip 429 on a fast runner. Honour
+// Retry-After instead of failing the assertion on the first throttle.
+async function fetchWithBackoff(url: URL, init: RequestInit = {}): Promise<Response> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(url, init)
+    if (res.status !== 429) return res
+    const retryAfter = Number(res.headers.get('Retry-After'))
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 750 * (attempt + 1)
+    await sleep(waitMs)
+  }
+  return fetch(url, init)
+}
+
+// Shopify can take a few seconds to reflect a product write on read-back
+// (observed in CI: a 200 PUT's tags still read stale >3s later while collect
+// membership had already moved). Poll briefly instead of asserting a single
+// sample — a state that never converges still fails after the deadline.
+async function until<T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 15000): Promise<T> {
+  const start = Date.now()
+  let last = await fn()
+  while (!ok(last) && Date.now() - start < ms) {
+    await sleep(1000)
+    last = await fn()
+  }
+  return last
+}
+
 async function rest<T>(path: string, query = ''): Promise<T> {
   const url = new URL(`https://${config.shop}.myshopify.com/admin/api/${config.apiVersion}/${path}`)
   if (query) url.search = query
-  const res = await fetch(url, {
+  const res = await fetchWithBackoff(url, {
     headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
   })
   if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${(await res.text()).slice(0, 200)}`)
@@ -105,7 +133,7 @@ async function rest<T>(path: string, query = ''): Promise<T> {
 
 async function restDelete(path: string): Promise<number> {
   const url = new URL(`https://${config.shop}.myshopify.com/admin/api/${config.apiVersion}/${path}`)
-  const res = await fetch(url, {
+  const res = await fetchWithBackoff(url, {
     method: 'DELETE',
     headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
   })
@@ -322,10 +350,18 @@ try {
   createdShopifyId = numericId || null
 
   if (numericId) {
-    const listing = await rest<{ product?: { tags?: string; product_type?: string } }>(`products/${numericId}.json`)
+    // Read-back of a fresh write can lag (see until() above) — poll briefly.
+    const listing = await until(
+      () => rest<{ product?: { tags?: string; product_type?: string } }>(`products/${numericId}.json`),
+      (j) => String(j.product?.tags ?? '').split(',').some((t) => t.trim() === `opal-collection:${titleA}`),
+    )
     const tags = String(listing.product?.tags ?? '')
     check(`create: listing carries opal-collection tag`, tags.split(',').some((t) => t.trim() === `opal-collection:${titleA}`), tags)
-    const titles = await membershipsOf(numericId)
+    const titles = await until(
+      () => membershipsOf(numericId),
+      (list) => list.some((t) => t.toLowerCase() === titleA.toLowerCase()),
+      10000,
+    )
     check(`create: product is member of "${titleA}"`, titles.some((t) => t.toLowerCase() === titleA.toLowerCase()), titles.join(', ') || '(none)')
 
     const syncLogs = await db.select().from(schema.syncLogs).where(eq(schema.syncLogs.shopifyId, sku))
@@ -354,10 +390,19 @@ try {
     check('move: push ok', push2.ok, push2.errors.join('; '))
     check('move: one listing updated (not recreated)', push2.updated === 1 && push2.created === 0, `created=${push2.created} updated=${push2.updated}`)
 
-    const listing = await rest<{ product?: { tags?: string } }>(`products/${numericId}.json`)
+    const listing = await until(
+      () => rest<{ product?: { tags?: string } }>(`products/${numericId}.json`),
+      (j) => String(j.product?.tags ?? '').split(',').some((t) => t.trim() === `opal-collection:${titleB}`),
+    )
     const tags = String(listing.product?.tags ?? '')
     check(`move: tag now opal-collection:${titleB}`, tags.split(',').some((t) => t.trim() === `opal-collection:${titleB}`), tags)
-    const titles = await membershipsOf(numericId)
+    const titles = await until(
+      () => membershipsOf(numericId),
+      (list) =>
+        list.some((t) => t.toLowerCase() === titleB.toLowerCase()) &&
+        !list.some((t) => t.toLowerCase() === titleA.toLowerCase()),
+      10000,
+    )
     check(`move: member of "${titleB}"`, titles.some((t) => t.toLowerCase() === titleB.toLowerCase()), titles.join(', ') || '(none)')
     check(
       `move: old membership "${titleA}" dropped`,
@@ -365,9 +410,20 @@ try {
       titles.join(', ') || '(none)',
     )
 
-    const pull2 = await shopify.syncProductsToDb()
+    // The pull mirrors whatever the storefront currently reports; while tags
+    // are still catching up, re-pull until the membership view converges or
+    // the deadline passes (a state that never converges still fails below).
+    let pull2 = await shopify.syncProductsToDb()
+    let row = await localRow(localId)
+    const moveDeadline = Date.now() + 25000
+    for (;;) {
+      const seg = shopify.collectionSegments(row?.collection).map((s) => s.toLowerCase())
+      if ((seg.includes(titleB.toLowerCase()) && !seg.includes(titleA.toLowerCase())) || Date.now() >= moveDeadline) break
+      await sleep(3000)
+      pull2 = await shopify.syncProductsToDb()
+      row = await localRow(localId)
+    }
     check('move: pull after move succeeded', pull2.ok, pull2.errors.join('; '))
-    const row = await localRow(localId)
     const segments = shopify.collectionSegments(row?.collection).map((s) => s.toLowerCase())
     check(`move: billing DB collection now "${titleB}"`, segments.includes(titleB.toLowerCase()) && !segments.includes(titleA.toLowerCase()), `collection="${row?.collection}"`)
 

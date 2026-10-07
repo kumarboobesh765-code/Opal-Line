@@ -81,10 +81,27 @@ function check(name: string, ok: boolean, detail = '') {
 }
 
 // ── raw Shopify REST helpers (independent of the code under test) ─────────
+// The store enforces 2 calls/second — honour Retry-After instead of failing
+// an assertion on the first throttle.
+async function sleep(ms: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms))
+}
+
+async function fetchWithBackoff(url: URL, init: RequestInit = {}): Promise<Response> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(url, init)
+    if (res.status !== 429) return res
+    const retryAfter = Number(res.headers.get('Retry-After'))
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 750 * (attempt + 1)
+    await sleep(waitMs)
+  }
+  return fetch(url, init)
+}
+
 async function rest<T>(path: string, query = ''): Promise<T> {
   const url = new URL(`https://${config.shop}.myshopify.com/admin/api/${config.apiVersion}/${path}`)
   if (query) url.search = query
-  const res = await fetch(url, {
+  const res = await fetchWithBackoff(url, {
     headers: { 'X-Shopify-Access-Token': config.accessToken, Accept: 'application/json' },
   })
   if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${(await res.text()).slice(0, 200)}`)
