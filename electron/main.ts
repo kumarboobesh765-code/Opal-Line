@@ -4,6 +4,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, openSync, closeSync, readSync, statSync, createWriteStream, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
+import { pruneLogIfTooBig } from './logrotate'
 import * as https from 'node:https'
 
 let mainWindow: BrowserWindow | null = null
@@ -35,6 +36,7 @@ function logLine(stream: string, text: string): void {
   try {
     const f = join(LOG_DIR, isDev ? 'dev.log' : 'app.log')
     require('node:fs').appendFileSync(f, line)
+    pruneLogIfTooBig(f, Buffer.byteLength(line))
   } catch { /* ignore */ }
 }
 
