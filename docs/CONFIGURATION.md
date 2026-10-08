@@ -410,7 +410,7 @@ approval and rejection is written to the activity log with the actor's name.
 
 ## 13. Rate limiting (operational notes)
 
-- Login: 20 attempts / 15 min / IP; password reset: stricter; email endpoints:
+- Login: 30 attempts / 15 min / IP; password reset: stricter; email endpoints:
   30/hour. Counters are **persisted in Postgres** (`rate_limit_hits`,
   `login_attempts`) and survive restarts.
 - Behind a proxy, set `TRUST_PROXY` (§2) so per-IP limits see real client IPs.

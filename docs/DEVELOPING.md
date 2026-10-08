@@ -178,5 +178,5 @@ or with `gh release edit v1.0.11 --latest`.
   returns 401. Seeding uses `SEED_ADMIN_PASSWORD` from `src/db/seed.ts`.
 - **`npm ci` fails if the installed app is running** — it holds locks on
   `node_modules`. Quit Opal Line Billing first.
-- **Login is rate limited** to 20 attempts / 15 minutes.
+- **Login is rate limited** to 30 attempts / 15 minutes.
 - **State-changing API calls need `x-csrf-token`** from `GET /api/v1/csrf-token`.
