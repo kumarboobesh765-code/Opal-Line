@@ -38,6 +38,22 @@ jobs:
             exit 1
           }
 
+      # Fail fast (before the 10-minute install/cert/test prelude) if the tag
+      # was cut from a commit whose package.json does not carry the release
+      # version — e.g. tagging before merging the version-bump PR. The build
+      # used to silently rewrite package.json to match the tag, which hid the
+      # mismatch instead of catching it.
+      - name: Verify tag matches package.json version
+        shell: pwsh
+        run: |
+          $v = '${{ github.ref_name }}' -replace '^v', ''
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($pkg.version -ne $v) {
+            Write-Error "package.json version ($($pkg.version)) does not match release tag (${{ github.ref_name }}). Merge the version-bump commit into the tagged commit before tagging."
+            exit 1
+          }
+          Write-Host "package.json version $($pkg.version) matches tag ${{ github.ref_name }}"
+
       - name: Install dependencies
         run: npm ci
         env:
@@ -85,12 +101,11 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: Sync package version with tag
+      - name: Report build version
         shell: pwsh
         run: |
-          $v = '${{ github.ref_name }}' -replace '^v', ''
-          npm version $v --no-git-tag-version --allow-same-version
-          Write-Host "Building version $v"
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          Write-Host "Building version $($pkg.version) (verified against tag above)"
 
       - name: Build signed Windows installer
         run: npm run electron:build
