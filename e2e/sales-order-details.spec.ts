@@ -15,10 +15,29 @@ test.describe('sales order details dialog', () => {
       return
     }
 
-    // Open the details dialog from the first row's "View order" action.
-    await page.getByRole('button', { name: /view order/i }).first().click({ timeout: 20000 })
-
-    const dialog = page.getByRole('dialog')
+    // Open details dialogs until we find an order that HAS a phone — the
+    // Phone row is conditionally rendered (SalesOrders.tsx renders it only
+    // when a phone exists), and databases full of guest orders (no phone on
+    // the order, its addresses, or the customer) would otherwise make this
+    // assertion unpassable. Same guarded-skip convention as the tests above.
+    let dialog = page.getByRole('dialog')
+    let phoneRowFound = false
+    const maxAttempts = Math.min(await orderRows.count(), 8)
+    for (let i = 0; i < maxAttempts; i++) {
+      await orderRows.nth(i).getByRole('button', { name: /view order/i }).click({ timeout: 20000 })
+      dialog = page.getByRole('dialog')
+      await expect(dialog.getByText('Customer', { exact: true })).toBeVisible({ timeout: 10000 })
+      if ((await dialog.getByText('Phone', { exact: true }).count()) > 0) {
+        phoneRowFound = true
+        break
+      }
+      await page.keyboard.press('Escape')
+      await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 5000 })
+    }
+    if (!phoneRowFound) {
+      test.skip(true, 'no order in this database has a phone number (Phone row is conditional)')
+      return
+    }
     // The dialog must always identify WHO placed the order — this was the
     // regression: the customer name row was missing entirely.
     const customerRow = dialog.getByText('Customer', { exact: true }).locator('..')
@@ -31,7 +50,7 @@ test.describe('sales order details dialog', () => {
     await expect(dialog.getByText('Order Value', { exact: true })).toBeVisible()
     await expect(dialog.getByText('Payment', { exact: true })).toBeVisible()
     // Regression guard: the phone used to render twice (contact row + flat
-    // address row). It must appear exactly once as a labelled row now.
+    // address row). On an order that has a phone it must appear exactly once.
     await expect(dialog.getByText('Phone', { exact: true })).toHaveCount(1)
   })
 
