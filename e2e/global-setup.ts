@@ -8,7 +8,7 @@ export const E2E_PASSWORD = process.env.E2E_PASSWORD ?? 'Opal@2026'
 
 /**
  * Logs in once and stores the session cookies for every test. The backend
- * rate-limits /auth/login (20 req / 15 min / IP), so tests must NEVER log in
+ * rate-limits /auth/login (30 req / 15 min / IP), so tests must NEVER log in
  * individually — reuse this state instead.
  */
 export default async function globalSetup(): Promise<void> {

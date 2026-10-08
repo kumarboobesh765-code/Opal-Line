@@ -9,7 +9,7 @@ export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   timeout: 45_000,
   expect: { timeout: 10_000 },
-  // One worker: the backend rate-limits /auth/login (20 requests / 15 min / IP),
+  // One worker: the backend rate-limits /auth/login (30 requests / 15 min / IP),
   // so the suite must not parallelise authentication traffic.
   fullyParallel: false,
   workers: 1,

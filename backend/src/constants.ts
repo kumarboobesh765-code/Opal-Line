@@ -26,7 +26,10 @@ export const CONSTANTS = {
   SESSION_COOKIE_NAME: 'opal.session' as string,
   PAGINATION_DEFAULT_LIMIT: 50 as number,
   PAGINATION_MAX_LIMIT: 200 as number,
-  RATE_LIMIT_AUTH_MAX: 20 as number,
+  // 30 attempts / 15 minutes / IP: enough headroom for the Playwright suite's
+  // back-to-back global-setup logins (20 tripped HTTP 429 mid-QA), while the
+  // per-account lockout in login_attempts stays the real brute-force guard.
+  RATE_LIMIT_AUTH_MAX: 30 as number,
   RATE_LIMIT_AUTH_WINDOW_MS: 15 * 60 * 1000 as number,
   REQUEST_SIZE_LIMIT: '1mb' as string,
   LOG_MAX_ENTRIES: 50 as number,
