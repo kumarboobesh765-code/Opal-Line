@@ -244,7 +244,7 @@ export default function SalesInvoicesPage() {
             <Button variant="outline" size="sm" onClick={() => exportTable('sales-invoices.csv', columns, filtered)}>
               <Download className="h-3.5 w-3.5" /> Export
             </Button>
-            <Button size="sm" onClick={() => navigate('/shopify/orders')}>
+            <Button size="sm" onClick={() => navigate('/sales/orders')}>
               <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New Invoice</span><span className="sm:hidden">New</span>
             </Button>
           </div>
