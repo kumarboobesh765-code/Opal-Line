@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { dbApi } from '@/lib/api'
+import { printCurrentPage } from '@/lib/printTemplate'
 import { formatCurrency, formatDateTime } from '@/lib/format'
 
 interface DayBookData {
@@ -88,7 +89,7 @@ export default function DayBookPage() {
             <Button variant="outline" size="sm" onClick={load} disabled={loading}>
               {loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
             </Button>
-            <Button variant="outline" size="sm" onClick={() => window.print()}>
+            <Button variant="outline" size="sm" onClick={() => void printCurrentPage()}>
               <Printer className="h-3.5 w-3.5" /> Print
             </Button>
           </div>

@@ -14,6 +14,7 @@ import {
   DEFAULT_PRINT_CONFIG,
   buildPrintHtml,
   mergePrintConfig,
+  openHtmlPreview,
   type PrintDesignerConfig,
   type PrintDoc,
   type PrintDocExtras,
@@ -107,11 +108,9 @@ export default function PrintDesignerPage() {
 
   const openPreviewWindow = () => {
     if (!html) return
-    const w = window.open('', '_blank', 'width=900,height=760')
-    if (!w) return
-    w.opener = null
-    w.document.write(html)
-    w.document.close()
+    // Desktop: a real window via IPC (window.open is denied there);
+    // browser: the old popup. No printing — this is a preview.
+    void openHtmlPreview(html, `Print preview — ${docType}`)
   }
 
   const refreshList = () => {

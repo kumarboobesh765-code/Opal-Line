@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/auth/auth-context'
 import { PageHeader } from '@/components/ui/page-header'
+import { printCurrentPage } from '@/lib/printTemplate'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -182,15 +183,16 @@ export default function DashboardPage() {
 
   // Print the dashboard as a standalone snapshot: a print-scoped stylesheet
   // (index.css) unwraps the app shell while the "print-dashboard" body class
-  // is present; afterprint removes it again.
-  const printDashboard = () => {
+  // is present. printCurrentPage resolves when the dialog/silent job is done
+  // (the desktop app prints to the default printer with no dialog), then the
+  // class comes off again.
+  const printDashboard = async () => {
     document.body.classList.add('print-dashboard')
-    const cleanup = () => {
+    try {
+      await printCurrentPage()
+    } finally {
       document.body.classList.remove('print-dashboard')
-      window.removeEventListener('afterprint', cleanup)
     }
-    window.addEventListener('afterprint', cleanup)
-    window.print()
   }
 
   // Receivables aging drill-down: lazily fetch (and cache) the invoices behind

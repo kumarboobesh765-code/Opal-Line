@@ -531,11 +531,123 @@ export function buildPrintHtml(doc: PrintDoc, config: PrintDesignerConfig, extra
     </body></html>`
 }
 
-/** Open the built document in a print window (same UX as the existing flows). */
-export function printDocument(doc: PrintDoc, config: PrintDesignerConfig, extras: PrintDocExtras): void {
+/** Result of a desktop print/PDF/preview IPC call (see electron/print.ts). */
+export interface PrintBridgeResult {
+  ok: boolean
+  error?: string
+}
+
+export interface PdfBridgeResult extends PrintBridgeResult {
+  cancelled?: boolean
+  path?: string
+}
+
+interface PrintBridge {
+  printHtml: (html: string, title?: string) => Promise<PrintBridgeResult>
+  printPage: () => Promise<PrintBridgeResult>
+  previewHtml: (html: string, title?: string) => Promise<PrintBridgeResult>
+  exportPdf: (html: string, suggestedName?: string) => Promise<PdfBridgeResult>
+}
+
+function printBridge(): PrintBridge | undefined {
+  return (window as unknown as { electronAPI?: PrintBridge }).electronAPI
+}
+
+function popupWithPrint(html: string): void {
   const w = window.open('', '_blank', 'width=900,height=760')
   if (!w) return
   w.opener = null
-  w.document.write(buildPrintHtml(doc, config, extras) + `<script>window.onload=function(){window.focus();window.print();}</script>`)
+  w.document.write(html + `<script>window.onload=function(){window.focus();window.print();}</script>`)
   w.document.close()
+}
+
+/**
+ * Send a built document to the printer.
+ *
+ * Desktop app: the main process renders it in a hidden window and calls
+ * webContents.print({ silent: true }) — the job goes straight to the OS
+ * DEFAULT printer with no dialog and no app picker (window.open popups are
+ * denied there anyway, which is why printing used to do nothing).
+ *
+ * Plain browser (dev server / e2e): falls back to the old print popup.
+ */
+export async function printHtmlToPrinter(html: string, title?: string): Promise<void> {
+  const api = printBridge()
+  if (api?.printHtml) {
+    try {
+      const res = await api.printHtml(html, title)
+      if (!res.ok) console.warn('[print] failed:', res.error)
+    } catch (err) {
+      console.warn('[print] bridge error:', err)
+    }
+    return
+  }
+  popupWithPrint(html)
+}
+
+/**
+ * Print the CURRENT page (the flows that rely on @media print styling:
+ * Dashboard, DayBook, the invoice dialog).
+ * Desktop: a silent job on the app window's webContents → the OS default
+ * printer, no dialog. Browser: window.print() as before.
+ * Resolves when the dialog/job has finished, so callers can clean up
+ * print-only state (e.g. the dashboard body class) afterwards.
+ */
+export async function printCurrentPage(): Promise<void> {
+  const api = printBridge()
+  if (api?.printPage) {
+    try {
+      const res = await api.printPage()
+      if (!res.ok) console.warn('[print] page print failed:', res.error)
+    } catch (err) {
+      console.warn('[print] bridge error:', err)
+    }
+    return
+  }
+  window.print()
+}
+
+/** Open a built document in a window WITHOUT printing (Print Designer preview). */
+export async function openHtmlPreview(html: string, title?: string): Promise<void> {
+  const api = printBridge()
+  if (api?.previewHtml) {
+    try {
+      const res = await api.previewHtml(html, title)
+      if (!res.ok) console.warn('[preview] failed:', res.error)
+    } catch (err) {
+      console.warn('[preview] bridge error:', err)
+    }
+    return
+  }
+  const w = window.open('', '_blank', 'width=900,height=760')
+  if (!w) return
+  w.opener = null
+  w.document.write(html)
+  w.document.close()
+}
+
+/**
+ * Export a built document as a PDF.
+ * Desktop: webContents.printToPDF + save dialog (no printer needed).
+ * Browser: the old print popup, where the user picks "Save as PDF".
+ */
+export async function exportHtmlPdf(
+  html: string,
+  suggestedName?: string,
+): Promise<PdfBridgeResult> {
+  const api = printBridge()
+  if (api?.exportPdf) {
+    try {
+      return await api.exportPdf(html, suggestedName)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  popupWithPrint(html)
+  return { ok: true }
+}
+
+/** Print one built document (desktop: silent default printer; browser: popup). */
+export function printDocument(doc: PrintDoc, config: PrintDesignerConfig, extras: PrintDocExtras): void {
+  void printHtmlToPrinter(buildPrintHtml(doc, config, extras))
 }
