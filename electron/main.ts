@@ -54,8 +54,13 @@ function logLine(stream: string, text: string): void {
 
 function pgRoot(): string | null {
   if (isDev) {
-    const dev = resolve(__dirname, '..', 'backend', 'pgsql')
-    return existsSync(dev) ? dev : null
+    // Works from source (tsx electron/main.ts → __dirname = electron/) and
+    // from the compiled output (electron/dist/main.js → one level deeper):
+    // the portable Postgres lives at <repo>/backend/pgsql.
+    const dev = [resolve(__dirname, '..'), resolve(__dirname, '..', '..')]
+      .map((root) => join(root, 'backend', 'pgsql'))
+      .find((p) => existsSync(p))
+    return dev ?? null
   }
   const bundled = join(process.resourcesPath, 'pgsql')
   return existsSync(bundled) ? bundled : null
@@ -454,10 +459,23 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
     let args: string[]
 
     if (isDev) {
-      cwd = resolve(__dirname, '..', 'backend')
-      entry = resolve(__dirname, '..', 'backend', 'src', 'index.ts')
+      // Same dual-layout resolution as pgRoot(): the backend lives at
+      // <repo>/backend whether we run from source or from electron/dist.
+      const backendDir = [resolve(__dirname, '..'), resolve(__dirname, '..', '..')]
+        .map((root) => join(root, 'backend'))
+        .find((p) => existsSync(join(p, 'src', 'index.ts')))
+      if (!backendDir) {
+        reject(new Error('backend source not found relative to ' + __dirname))
+        return
+      }
+      cwd = backendDir
+      entry = join(backendDir, 'src', 'index.ts')
       cmd = 'npx'
-      args = ['tsx', entry]
+      // shell: true (required for npx.cmd on Windows) joins args with spaces
+      // WITHOUT quoting them — in a repo path containing spaces (e.g.
+      // "LONI GROUPS DM1") the entry path splits mid-argument and tsx dies
+      // with ERR_MODULE_NOT_FOUND. Quote the path ourselves.
+      args = ['tsx', /\s/.test(entry) ? `"${entry}"` : entry]
       backendProcess = spawn(cmd, args, {
         cwd,
         env: { ...process.env, PORT: String(BACKEND_PORT), DOTENV_CONFIG_PATH: envPath, APP_VERSION: app.getVersion(), LOG_DIR },
