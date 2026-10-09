@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, openSy
 import { execSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { pruneLogIfTooBig } from './logrotate'
+import { consolidateUserData } from './userdata'
 import * as https from 'node:https'
 
 let mainWindow: BrowserWindow | null = null
@@ -30,6 +31,16 @@ function ensureDirs(): void {
     if (!existsSync(d)) mkdirSync(d, { recursive: true })
   }
 }
+
+// Electron defaults its userData folder to %APPDATA%\<package.json name>,
+// which split cookies/caches/localStorage into a SECOND folder
+// ("opal-line-project") next to the real app data on every fresh install.
+// Redirect everything into APP_DATA before the app is ready (Chromium has not
+// opened its profile yet at module load), migrating the old default folder so
+// upgraded installs keep their session state.
+const DEFAULT_USER_DATA = app.getPath('userData')
+consolidateUserData(DEFAULT_USER_DATA, APP_DATA)
+app.setPath('userData', APP_DATA)
 
 function logLine(stream: string, text: string): void {
   const line = `[${new Date().toISOString()}] [${stream}] ${text.trimEnd()}\n`

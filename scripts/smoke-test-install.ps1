@@ -180,6 +180,16 @@ while ((Get-Date) -lt $deadline -and -not $apiUp) {
 Report 'Backend health endpoint responds' $apiUp 'http://127.0.0.1:47192/api/v1/health'
 Report 'Health payload ok=true' $healthOk
 
+# The app must keep ALL of its state in one folder. Electron's default
+# userData (derived from package.json's name) used to split cookies/caches
+# into a SECOND %APPDATA% folder on every fresh install. Give Chromium a
+# moment to write profile data, then assert no stray folder appeared.
+Start-Sleep -Seconds 3
+$stray = @('opal-line-project', 'opal-line-billing') |
+  ForEach-Object { Join-Path $env:APPDATA $_ } |
+  Where-Object { Test-Path $_ }
+Report 'Single AppData folder (no stray Electron profile)' ($stray.Count -eq 0) (($stray -join ', '))
+
 if (-not ($pgUp -and $healthOk)) {
   Write-Host "`n--- diagnostics: app.log (tail) ---" -ForegroundColor Yellow
   Get-Content (Join-Path $appDataLogs 'app.log') -Tail 25 -ErrorAction SilentlyContinue
