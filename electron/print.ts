@@ -93,6 +93,10 @@ function withRenderedDocument<T>(html: string, title: string, fn: (win: BrowserW
     win.webContents.once('did-fail-load', (_e, code, desc) =>
       finish(() => reject(new Error(`could not render the document: ${desc} (${code})`))))
     win.webContents.once('did-finish-load', () => {
+      // Rendering is done — the print phase below has its own per-attempt
+      // timeouts (the system print dialog may legitimately stay open for
+      // minutes), so the render timer must not cut it short.
+      clearTimeout(timer)
       try { win.setTitle(title) } catch { /* cosmetic only */ }
       fn(win).then(
         (value) => finish(() => resolve(value)),
@@ -109,39 +113,40 @@ function withRenderedDocument<T>(html: string, title: string, fn: (win: BrowserW
 }
 
 function printOnce(win: BrowserWindow, silent: boolean): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      win.webContents.print({ silent }, (ok) => resolve(ok))
-    } catch {
-      resolve(false)
-    }
-  })
+  return printAttempt(win.webContents, silent)
 }
 
 /**
  * Print an EXISTING webContents (the app's own window — the @media print
  * flows: Dashboard, DayBook, invoice dialog) to the default printer.
  */
-/** Hard ceiling per print attempt — a hung print dialog must not pin the
- *  renderer forever (the Dashboard cleanup waits on this promise). */
-const PRINT_TIMEOUT_MS = 60_000
+/** Per-attempt ceilings. On a machine with NO default printer
+ *  webContents.print()'s callback may never fire at all — without these the
+ *  promise hangs forever (the Dashboard cleanup awaits it). Silent attempts
+ *  must fail fast; the system print dialog gets a generous window for the
+ *  user to pick a printer. */
+const SILENT_PRINT_TIMEOUT_MS = 30_000
+const DIALOG_PRINT_TIMEOUT_MS = 300_000
+
+function printAttempt(wc: WebContents, silent: boolean): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => done(false), silent ? SILENT_PRINT_TIMEOUT_MS : DIALOG_PRINT_TIMEOUT_MS)
+    try { wc.print({ silent }, (ok) => done(ok)) } catch { done(false) }
+  })
+}
 
 export function printWebContents(
   wc: WebContents,
   opts: { fallbackToDialog?: boolean } = {},
 ): Promise<PrintResult> {
-  const once = (silent: boolean): Promise<boolean> =>
-    new Promise((resolve) => {
-      let settled = false
-      const done = (ok: boolean) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve(ok)
-      }
-      const timer = setTimeout(() => done(false), PRINT_TIMEOUT_MS)
-      try { wc.print({ silent }, (ok) => done(ok)) } catch { done(false) }
-    })
+  const once = (silent: boolean): Promise<boolean> => printAttempt(wc, silent)
   return (async () => {
     try {
       if (await once(true)) return { ok: true }
