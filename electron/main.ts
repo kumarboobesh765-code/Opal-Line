@@ -556,6 +556,24 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
   })
 }
 
+// Branded startup splash — shown while Postgres and the backend boot (the
+// real UI cannot load before the backend is up, and that used to leave the
+// user staring at an empty desktop for seconds after clicking the icon).
+const SPLASH_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Opal Line Billing</title><style>
+  html, body { height: 100%; margin: 0 }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+         font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0 }
+  .ring { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #1e293b;
+          border-top-color: #38bdf8; animation: spin .9s linear infinite }
+  .brand { font-size: 21px; font-weight: 600; letter-spacing: .3px }
+  .sub { font-size: 13px; color: #94a3b8 }
+  @keyframes spin { to { transform: rotate(360deg) } }
+</style></head><body>
+  <div class="ring"></div>
+  <div class="brand">Opal Line Billing</div>
+  <div class="sub">Starting up…</div>
+</body></html>`
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440, height: 900, minWidth: 1024, minHeight: 600,
@@ -567,11 +585,10 @@ function createWindow() {
     show: false,
   })
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:47195')
-  } else {
-    mainWindow.loadURL(`http://localhost:${BACKEND_PORT}`)
-  }
+  // Splash FIRST: the real UI cannot load until Postgres and the backend are
+  // up (see main()), so show branded startup feedback immediately instead of
+  // leaving the user with nothing after clicking the icon.
+  mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML)).catch(() => undefined)
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
   // Defence-in-depth: the renderer must only ever be the app's own UI. Block
@@ -615,6 +632,33 @@ function createWindow() {
     }
   })
   mainWindow.on('closed', () => { mainWindow = null })
+
+  // A crashed renderer used to leave a dead, white window until the user
+  // restarted the app. Log it and reload the UI — at most 3 times, so a
+  // genuinely broken build cannot crash-loop forever.
+  let crashReloads = 0
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logLine('electron', `renderer gone: ${details.reason} (exitCode=${details.exitCode})`)
+    if (details.reason === 'clean-exit') return
+    if (crashReloads >= 3) {
+      logLine('electron', 'renderer crashed repeatedly — giving up on auto-reload')
+      return
+    }
+    crashReloads++
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload()
+  })
+}
+
+function appUrl(): string {
+  return isDev ? 'http://localhost:47195' : `http://localhost:${BACKEND_PORT}`
+}
+
+/** Swap the startup splash for the real app UI (backend is ready). */
+function loadAppInWindow(): void {
+  mainWindow?.loadURL(appUrl()).catch((err) => {
+    console.error('[electron] Failed to load the app UI:', err)
+    logLine('electron', 'failed to load app UI: ' + String((err as Error)?.message ?? err))
+  })
 }
 
 // ── Printing ──────────────────────────────────────────────────────────────
@@ -1060,7 +1104,7 @@ ipcMain.handle('updates:install', () => {
 })
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) { createWindow(); loadAppInWindow() } })
 
 /**
  * Release the ports this instance holds.
@@ -1108,13 +1152,18 @@ async function main() {
       app.quit()
       return
     }
+    // Show the splash window immediately — the Postgres + backend startup
+    // below can take several seconds, during which the user otherwise sees
+    // nothing at all after clicking the icon.
+    await app.whenReady()
+    createWindow()
     console.log('[electron] Ensuring PostgreSQL…')
     const managedUrl = await ensurePostgres()
     const { path: envPath, isFirstRun } = ensureEnvFile(managedUrl)
     console.log('[electron] Starting backend server…')
     await startBackend(envPath, managedUrl || null)
-    console.log('[electron] Backend started, creating window…')
-    createWindow()
+    console.log('[electron] Backend started, loading app…')
+    loadAppInWindow()
     // Auto-update: first check shortly after launch, then every 6 hours.
     if (app.isPackaged) {
       loadUpdatePrefs()
@@ -1180,7 +1229,10 @@ async function main() {
     console.error('[electron] Failed to start:', err)
     logLine('electron', 'startup failed: ' + String((err as Error)?.message ?? err))
     dialog.showErrorBox('Startup failed', String((err as Error)?.message ?? err))
-    if (!mainWindow) createWindow()
+    // Leave the user on the real UI (which shows its own connection error)
+    // rather than a splash that never finishes.
+    if (mainWindow) loadAppInWindow()
+    else createWindow()
   }
 }
 
