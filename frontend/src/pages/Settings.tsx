@@ -40,6 +40,19 @@ const DEFAULT_SETTINGS: AppSettings = {
   updatedAt: null,
 }
 
+/**
+ * Merge a settings row without letting DB NULLs (or missing columns) win over
+ * the defaults: a null reaching a controlled <input value> makes React warn
+ * and flips the input between controlled/uncontrolled — which is exactly what
+ * /system/settings logged whenever a settings column is NULL in the database.
+ */
+function withDefaults(row: Partial<AppSettings>): AppSettings {
+  const clean = Object.fromEntries(
+    Object.entries(row).filter(([, v]) => v !== null && v !== undefined),
+  ) as Partial<AppSettings>
+  return { ...DEFAULT_SETTINGS, ...clean }
+}
+
 export default function SettingsPage() {
   return (
     <RequireModule module="system">
@@ -53,7 +66,7 @@ function ComplianceCard() {
   const [gateway, setGateway] = useState<{ provider: string; gatewayConfigured: boolean } | null>(null)
 
   useEffect(() => {
-    dbApi.getSettings().then((row) => { if (row) setSettings({ ...DEFAULT_SETTINGS, ...row }) }).catch(() => {})
+    dbApi.getSettings().then((row) => { if (row) setSettings(withDefaults(row)) }).catch(() => {})
     // The gateway state lives on the per-invoice status endpoint, so probe any
     // invoice-free response we have: a 404 still tells us nothing, so instead
     // ask for the mode through settings and infer the provider from the API.
@@ -124,7 +137,7 @@ function SettingsContent() {
     dbApi
       .getSettings()
       .then((row) => {
-        if (row) setSettings({ ...DEFAULT_SETTINGS, ...row })
+        if (row) setSettings(withDefaults(row))
       })
       .catch(() => {})
       .finally(() => setLoaded(true))

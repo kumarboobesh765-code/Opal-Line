@@ -34,4 +34,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setUpdatePrefs: (prefs: Partial<UpdatePrefsDto>): Promise<UpdatePrefsDto> =>
     ipcRenderer.invoke('updates:set-prefs', prefs),
   clearUpdateFailure: (): Promise<UpdateStatusDto> => ipcRenderer.invoke('updates:clear-failure'),
+  // Printing bridge — window.open() popups are denied by the main window's
+  // window-open handler, so print flows send the built HTML here instead.
+  // printHtml spools straight to the OS default printer (no dialog).
+  printHtml: (html: string, title?: string): Promise<PrintBridgeResult> =>
+    ipcRenderer.invoke('print:html', html, title),
+  printPage: (): Promise<PrintBridgeResult> => ipcRenderer.invoke('print:page'),
+  previewHtml: (html: string, title?: string): Promise<PrintBridgeResult> =>
+    ipcRenderer.invoke('print:preview', html, title),
+  exportPdf: (html: string, suggestedName?: string): Promise<PdfBridgeResult> =>
+    ipcRenderer.invoke('export:pdf', html, suggestedName),
 })
+
+export interface PrintBridgeResult {
+  ok: boolean
+  error?: string
+}
+
+export interface PdfBridgeResult {
+  ok: boolean
+  cancelled?: boolean
+  path?: string
+  error?: string
+}

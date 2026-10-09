@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DataTable } from '@/components/ui/data-table'
+import { printCurrentPage } from '@/lib/printTemplate'
 import {
   Dialog,
   DialogContent,
@@ -363,7 +364,7 @@ export default function SalesInvoicesPage() {
           </div>
           <DialogFooter className="no-print shrink-0 flex-wrap gap-2 border-t border-border/60 px-5 py-3">
             <Button variant="outline" onClick={() => setViewInvoice(null)}>Close</Button>
-            <Button variant="outline" onClick={() => window.print()}>
+            <Button variant="outline" onClick={() => void printCurrentPage()}>
               <Printer className="h-4 w-4" /> Print / PDF
             </Button>
             {(() => {

@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
 import { dbApi } from '@/lib/api'
+import { exportHtmlPdf } from '@/lib/printTemplate'
+import { toast } from '@/components/ui/confirm'
 import type { SilverRate } from '@/types'
 import { formatCurrency, todayIST } from '@/lib/format'
 import { escapeHtml } from '@/lib/utils'
@@ -96,12 +98,9 @@ export default function BusinessReportsPage() {
     return ageDays <= 30 ? '0–30 days' : ageDays <= 60 ? '31–60 days' : ageDays <= 90 ? '61–90 days' : '90+ days'
   }
 
-  const exportPdf = () => {
+  const exportPdf = async () => {
     if (!summary || !stats) return
-    const w = window.open('', '_blank', 'width=900,height=700,noopener')
-    if (!w) return
-    w.opener = null
-    w.document.write(`<!doctype html><html><head><title>Business Report</title><style>
+    const html = `<!doctype html><html><head><title>Business Report</title><style>
       body{font-family:Arial,sans-serif;color:#111;margin:32px}
       h1{font-size:20px;margin:0 0 4px}.sub{color:#64748b;font-size:12px;margin-bottom:20px}
       table{width:100%;border-collapse:collapse;font-size:12px}
@@ -123,9 +122,16 @@ export default function BusinessReportsPage() {
         <tr><td>Active Suppliers</td><td>${escapeHtml(String(summary.activeSuppliers))} of ${escapeHtml(String(summary.totalSuppliers))}</td></tr>
         <tr><td>Pending Payments</td><td>${escapeHtml(formatCurrency(summary.pendingPayments))}</td></tr>
       </table>
-      <script>window.onload=function(){window.focus();window.print();}</script>
-    </body></html>`)
-    w.document.close()
+    </body></html>`
+    // Desktop: renderToPDF + save dialog (no printer needed). Browser: the
+    // old print popup, where the user picks "Save as PDF".
+    const res = await exportHtmlPdf(html, 'opal-line-business-report')
+    if (res.ok) {
+      if (res.path) toast.success(`PDF saved to ${res.path}`)
+      else toast.success('Choose "Save as PDF" in the print dialog to save the report.')
+    } else if (!res.cancelled) {
+      toast.error(`Could not export the PDF: ${res.error ?? 'unknown error'}`)
+    }
   }
 
   return (

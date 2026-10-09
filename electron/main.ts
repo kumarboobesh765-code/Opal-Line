@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { pruneLogIfTooBig } from './logrotate'
 import { consolidateUserData } from './userdata'
+import { printHtml, previewHtml, pdfFromHtml, printWebContents, type PrintResult, type PdfResult } from './print'
 import * as https from 'node:https'
 
 let mainWindow: BrowserWindow | null = null
@@ -558,7 +559,7 @@ function startBackend(envPath: string, managedDbUrl: string | null): Promise<voi
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440, height: 900, minWidth: 1024, minHeight: 600,
-    title: 'Opal Line — Billing Software',
+    title: 'Opal Line Billing',
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -573,7 +574,6 @@ function createWindow() {
   }
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
   // Defence-in-depth: the renderer must only ever be the app's own UI. Block
   // navigations to anything else (a compromised renderer or a stray target=
   // _self link must not turn the main window into an arbitrary website).
@@ -583,16 +583,32 @@ function createWindow() {
     `http://127.0.0.1:${BACKEND_PORT}`,
     '[::1]:47195',
   ])
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    let origin = ''
+  const isAppUrl = (u: string): boolean => {
     try {
-      const parsed = new URL(url)
-      origin = parsed.host ? `${parsed.protocol}//${parsed.host}` : ''
-    } catch { /* unparseable → treat as foreign */ }
-    const sameApp = origin !== '' && Array.from(appOrigins).some((o) => {
-      try { return new URL(o).host === new URL(url).host && new URL(o).protocol === new URL(url).protocol } catch { return false }
-    })
-    if (!sameApp) {
+      const parsed = new URL(u)
+      return Array.from(appOrigins).some((o) => {
+        try {
+          const origin = new URL(o)
+          return origin.host === parsed.host && origin.protocol === parsed.protocol
+        } catch { return false }
+      })
+    } catch { return false }
+  }
+  // Popups are ALWAYS denied — print flows use the print:html IPC channel now
+  // (see electron/print.ts) — but the click still has to do something:
+  //  - app-internal links (window.open('/api/.../download')) are file
+  //    downloads: start them here, otherwise backup/statement/label
+  //    downloads silently did nothing in the desktop app;
+  //  - http(s) links are external (WhatsApp, Razorpay, Shopify) → system
+  //    browser;
+  //  - anything else (about:blank, unparseable) is simply dropped.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAppUrl(url)) mainWindow?.webContents.downloadURL(url)
+    else if (/^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAppUrl(url)) {
       event.preventDefault()
       // Surface genuine external links in the user's browser instead.
       if (/^https?:/i.test(url)) shell.openExternal(url)
@@ -600,6 +616,31 @@ function createWindow() {
   })
   mainWindow.on('closed', () => { mainWindow = null })
 }
+
+// ── Printing ──────────────────────────────────────────────────────────────
+// The renderer's print/PDF/preview flows land here (electron/print.ts) because
+// the main window denies every window.open() popup. printHtml spools to the
+// OS default printer silently — no dialog, no app picker.
+ipcMain.handle('print:html', (_e, html: unknown, title: unknown): Promise<PrintResult> | PrintResult => {
+  if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
+  return printHtml(html, { title: typeof title === 'string' ? title : undefined })
+})
+ipcMain.handle('print:preview', (_e, html: unknown, title: unknown): Promise<PrintResult> | PrintResult => {
+  if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
+  return previewHtml(html, typeof title === 'string' ? title : undefined)
+})
+ipcMain.handle('export:pdf', (_e, html: unknown, suggestedName: unknown): Promise<PdfResult> | PdfResult => {
+  if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
+  return pdfFromHtml(html, {
+    suggestedName: typeof suggestedName === 'string' ? suggestedName : undefined,
+  })
+})
+// The @media print flows (Dashboard, DayBook, invoice dialog) print the app
+// window itself — silently, to the default printer.
+ipcMain.handle('print:page', (): Promise<PrintResult> | PrintResult => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no window to print' }
+  return printWebContents(mainWindow.webContents)
+})
 
 function stopPostgres(): void {
   if (!localPostgresStarted) return
