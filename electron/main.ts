@@ -6,7 +6,7 @@ import { execSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { pruneLogIfTooBig } from './logrotate'
 import { consolidateUserData } from './userdata'
-import { printHtml, previewHtml, pdfFromHtml, printWebContents, type PrintResult, type PdfResult, type PrintMode } from './print'
+import { printHtml, previewHtml, pdfFromHtml, exportPagePdf, printWebContents, type PrintResult, type PdfResult, type PrintMode } from './print'
 import * as https from 'node:https'
 
 let mainWindow: BrowserWindow | null = null
@@ -694,26 +694,29 @@ ipcMain.handle('print:html', (_e, html: unknown, title: unknown, mode: unknown):
 // The "how do you want to print?" chooser shown before every print. Native
 // message box, so it works no matter which window the flow started from:
 //   Default printer             → silent job to the OS default printer
+//   Save as PDF…                → save a .pdf instead of printing
 //   Choose printer and options… → the system print dialog (same as Ctrl+P)
-//   Cancel                       → nothing is printed
-ipcMain.handle('print:choose-mode', (): Promise<PrintMode | 'cancel'> => {
+//   Cancel                      → nothing is printed
+ipcMain.handle('print:choose-mode', (): Promise<PrintMode | 'pdf' | 'cancel'> => {
   const options: Electron.MessageBoxOptions = {
     type: 'question',
     title: 'Print',
     message: 'How do you want to print?',
     detail:
       'Default printer — sends the job straight to your Windows default printer.\n\n' +
-      'Choose printer and options… — opens the system print dialog (like Ctrl+P) ' +
+      'Save as PDF — saves a PDF copy instead of printing.\n\n' +
+      'Choose printer and options… — opens the Windows print dialog (like Ctrl+P) ' +
       'to pick the printer, number of copies and preferences.',
-    buttons: ['Default printer', 'Choose printer and options…', 'Cancel'],
+    buttons: ['Default printer', 'Save as PDF…', 'Choose printer and options…', 'Cancel'],
     defaultId: 0,
-    cancelId: 2,
+    cancelId: 3,
     noLink: true,
   }
   const show = mainWindow && !mainWindow.isDestroyed()
     ? dialog.showMessageBox(mainWindow, options)
     : dialog.showMessageBox(options)
-  return show.then(({ response }) => (response === 0 ? 'silent' : response === 1 ? 'dialog' : 'cancel'))
+  return show.then(({ response }) =>
+    response === 0 ? 'silent' : response === 1 ? 'pdf' : response === 2 ? 'dialog' : 'cancel')
 })
 ipcMain.handle('print:preview', (_e, html: unknown, title: unknown): Promise<PrintResult> | PrintResult => {
   if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
@@ -722,6 +725,14 @@ ipcMain.handle('print:preview', (_e, html: unknown, title: unknown): Promise<Pri
 ipcMain.handle('export:pdf', (_e, html: unknown, suggestedName: unknown): Promise<PdfResult> | PdfResult => {
   if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
   return pdfFromHtml(html, {
+    suggestedName: typeof suggestedName === 'string' ? suggestedName : undefined,
+  })
+})
+// "Save as PDF" for the @media-print flows (Dashboard, DayBook, invoice
+// dialog): printToPDF the app window mid print-only state, then a save dialog.
+ipcMain.handle('export:pdf-page', (_e, suggestedName: unknown): Promise<PdfResult> | PdfResult => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no window to export' }
+  return exportPagePdf(mainWindow.webContents, {
     suggestedName: typeof suggestedName === 'string' ? suggestedName : undefined,
   })
 })

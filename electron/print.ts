@@ -199,6 +199,24 @@ export function printHtml(
   })
 }
 
+/** Prompt for a save location (unless `savePath` skips it, e.g. tests) and
+ *  write the PDF bytes. Shared by pdfFromHtml and exportPagePdf. */
+async function savePdfData(data: Buffer, opts: { suggestedName?: string; savePath?: string }): Promise<PdfResult> {
+  let filePath = opts.savePath
+  if (!filePath) {
+    const suggested = (opts.suggestedName ?? 'opal-line-document').replace(/[<>:"/\\|?*]+/g, '-')
+    const save = await dialog.showSaveDialog({
+      title: 'Save PDF',
+      defaultPath: join(app.getPath('documents'), `${suggested}.pdf`),
+      filters: [{ name: 'PDF document', extensions: ['pdf'] }],
+    })
+    if (save.canceled || !save.filePath) return { ok: false, cancelled: true }
+    filePath = save.filePath
+  }
+  writeFileSync(filePath, data)
+  return { ok: true, path: filePath }
+}
+
 /** Render `html` and save it as a PDF via a save dialog, queued.
  *  `savePath` skips the dialog (used by the smoke test). */
 export function pdfFromHtml(
@@ -210,19 +228,27 @@ export function pdfFromHtml(
       const data = await withRenderedDocument(html, opts.title ?? 'Opal Line Billing', (win) =>
         win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' }),
       )
-      let filePath = opts.savePath
-      if (!filePath) {
-        const suggested = (opts.suggestedName ?? 'opal-line-document').replace(/[<>:"/\\|?*]+/g, '-')
-        const save = await dialog.showSaveDialog({
-          title: 'Save PDF',
-          defaultPath: join(app.getPath('documents'), `${suggested}.pdf`),
-          filters: [{ name: 'PDF document', extensions: ['pdf'] }],
-        })
-        if (save.canceled || !save.filePath) return { ok: false, cancelled: true }
-        filePath = save.filePath
-      }
-      writeFileSync(filePath, data)
-      return { ok: true, path: filePath }
+      return await savePdfData(data, opts)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+}
+
+/** Save the APP WINDOW itself as a PDF (the @media-print flows: Dashboard,
+ *  DayBook, invoice dialog). printToPDF runs the same print pipeline as
+ *  webContents.print, so the caller's print-only DOM state (body class,
+ *  open dialog) is captured exactly as it would be on paper. Queued like
+ *  every other job. */
+export function exportPagePdf(
+  wc: WebContents,
+  opts: { suggestedName?: string; savePath?: string } = {},
+): Promise<PdfResult> {
+  return enqueue(async () => {
+    try {
+      if (wc.isDestroyed()) return { ok: false, error: 'the window is gone' }
+      const data = await wc.printToPDF({ printBackground: true, pageSize: 'A4' })
+      return await savePdfData(data, opts)
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
