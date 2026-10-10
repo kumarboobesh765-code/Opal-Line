@@ -9,6 +9,14 @@
 // Prints one SMOKE_* JSON line per step for the test to assert on.
 const { app, BrowserWindow } = require('electron')
 const { printHtml, printWebContents, pdfFromHtml } = require('../electron/dist/print.js')
+const { join } = require('node:path')
+const { tmpdir } = require('node:os')
+
+// Pin the profile to a temp dir BEFORE app ready: a bare entry like this
+// would otherwise inherit Electron's default userData (%APPDATA%\Electron)
+// and litter the real profile directory on every dev/CI run. The shipped
+// app pins its own userData in main.ts — this keeps smoke runs out of both.
+app.setPath('userData', join(tmpdir(), 'opal-line-smoke-userdata'))
 
 const PDF_PATH = process.env.OPAL_SMOKE_PDF_PATH
 
