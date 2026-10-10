@@ -24,7 +24,13 @@ import { app, BrowserWindow } from 'electron'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { printWebContents } from '../electron/dist/print.js'
+
+// Pin the profile to a temp dir BEFORE app ready — without this the bare
+// entry inherits Electron's default userData (%APPDATA%\Electron) and litters
+// it on every dev/CI run. The shipped app pins its own userData in main.ts.
+app.setPath('userData', join(tmpdir(), 'opal-line-smoke-userdata'))
 
 app.on('window-all-closed', () => {})
 
@@ -42,6 +48,11 @@ function mapResponse(response) {
 
 app.whenReady()
   .then(async () => {
+    // 0. The profile must stay pinned to a temp dir (setPath above) — if this
+    //    regresses, every dev/CI run litters %APPDATA%\Electron again.
+    check('userData pinned to a temp profile',
+      app.getPath('userData').includes('opal-line-smoke-userdata'), app.getPath('userData'))
+
     // 1. Button → mode mapping.
     check('button 0 (Default printer) → silent', mapResponse(0) === 'silent')
     check('button 1 (Save as PDF…) → pdf', mapResponse(1) === 'pdf')
