@@ -41,13 +41,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('print:html', html, title, mode),
   printPage: (mode?: 'silent' | 'dialog'): Promise<PrintBridgeResult> => ipcRenderer.invoke('print:page', mode),
   // "How do you want to print?" chooser — native message box with
-  // Default printer / Choose printer and options… / Cancel.
-  choosePrintMode: (): Promise<'silent' | 'dialog' | 'cancel'> =>
+  // Default printer / Save as PDF… / Choose printer and options… / Cancel.
+  choosePrintMode: (): Promise<'silent' | 'dialog' | 'pdf' | 'cancel'> =>
     ipcRenderer.invoke('print:choose-mode'),
   previewHtml: (html: string, title?: string): Promise<PrintBridgeResult> =>
     ipcRenderer.invoke('print:preview', html, title),
   exportPdf: (html: string, suggestedName?: string): Promise<PdfBridgeResult> =>
     ipcRenderer.invoke('export:pdf', html, suggestedName),
+  // Save the APP window itself as a PDF (Dashboard/DayBook/invoice-dialog
+  // @media-print flows) — printToPDF + a save dialog in main.
+  exportPdfPage: (suggestedName?: string): Promise<PdfBridgeResult> =>
+    ipcRenderer.invoke('export:pdf-page', suggestedName),
 })
 
 export interface PrintBridgeResult {

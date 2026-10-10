@@ -551,7 +551,9 @@ export interface PdfBridgeResult extends PrintBridgeResult {
 /** How a print job runs: straight to the OS default printer, or through the
  *  system print dialog (the Ctrl+P-style picker). */
 export type PrintMode = 'silent' | 'dialog'
-export type PrintModeChoice = PrintMode | 'cancel'
+/** What the user picked in the "How do you want to print?" chooser: a print
+ *  job, a PDF save, or abort. */
+export type PrintModeChoice = PrintMode | 'pdf' | 'cancel'
 
 interface PrintBridge {
   printHtml: (html: string, title?: string, mode?: PrintMode) => Promise<PrintBridgeResult>
@@ -559,6 +561,7 @@ interface PrintBridge {
   choosePrintMode?: () => Promise<PrintModeChoice>
   previewHtml: (html: string, title?: string) => Promise<PrintBridgeResult>
   exportPdf: (html: string, suggestedName?: string) => Promise<PdfBridgeResult>
+  exportPdfPage?: (suggestedName?: string) => Promise<PdfBridgeResult>
 }
 
 function printBridge(): PrintBridge | undefined {
@@ -573,10 +576,13 @@ function popupWithPrint(html: string): void {
   w.document.close()
 }
 
-/** Ask how to print: native chooser (Default printer / system print dialog /
- *  Cancel). Called once per user action, so a bulk batch is asked only once.
- *  Plain browser (dev server / e2e, no bridge): the popup path there ends in
- *  the browser's own print dialog anyway, so answer 'silent' directly. */
+/** Ask how to print: native chooser (Default printer / Save as PDF… /
+ *  system print dialog / Cancel). Called once per user action, so a bulk
+ *  batch is asked only once. The IPC is fired synchronously on call — callers
+ *  kick it off BEFORE building the document so the dialog is already opening
+ *  while the HTML renders. Plain browser (dev server / e2e, no bridge): the
+ *  popup path there ends in the browser's own print dialog anyway, so answer
+ *  'silent' directly. */
 export async function choosePrintMode(): Promise<PrintModeChoice> {
   const api = printBridge()
   if (api?.choosePrintMode) {
@@ -592,23 +598,26 @@ export async function choosePrintMode(): Promise<PrintModeChoice> {
 
 /**
  * Send a built document to the printer.
+ * *  Desktop app: the main process renders it in a hidden window and calls
+ *  webContents.print() — 'silent' spools straight to the OS DEFAULT printer
+ *  (no dialog, no app picker); 'dialog' opens the system print dialog (like
+ *  Ctrl+P); 'pdf' saves a .pdf via a save dialog. window.open popups are
+ *  denied there anyway, which is why printing used to do nothing.
  *
- * Desktop app: the main process renders it in a hidden window and calls
- * webContents.print() — 'silent' spools straight to the OS DEFAULT printer
- * (no dialog, no app picker); 'dialog' opens the system print dialog (like
- * Ctrl+P). window.open popups are denied there anyway, which is why printing
- * used to do nothing.
- *
- * Without an explicit `mode` the user is asked first (the print chooser).
- * Plain browser (dev server / e2e): falls back to the old print popup.
+ *  Without an explicit `mode` the user is asked first (the print chooser).
+ *  Plain browser (dev server / e2e): falls back to the old print popup.
  */
 export async function printHtmlToPrinter(
   html: string,
   title?: string,
-  mode?: PrintMode,
+  mode?: PrintModeChoice,
 ): Promise<void> {
   const picked = mode ?? (await choosePrintMode())
   if (picked === 'cancel') return
+  if (picked === 'pdf') {
+    await exportHtmlPdf(html, title)
+    return
+  }
   const api = printBridge()
   if (api?.printHtml) {
     try {
@@ -630,9 +639,24 @@ export async function printHtmlToPrinter(
  * Resolves when the dialog/job has finished, so callers can clean up
  * print-only state (e.g. the dashboard body class) afterwards.
  */
-export async function printCurrentPage(mode?: PrintMode): Promise<void> {
+export async function printCurrentPage(mode?: PrintModeChoice, name?: string): Promise<void> {
   const picked = mode ?? (await choosePrintMode())
   if (picked === 'cancel') return
+  if (picked === 'pdf') {
+    const api = printBridge()
+    if (api?.exportPdfPage) {
+      try {
+        const res = await api.exportPdfPage(name)
+        if (!res.ok && !res.cancelled) console.warn('[print] page pdf failed:', res.error)
+      } catch (err) {
+        console.warn('[print] bridge error:', err)
+      }
+      return
+    }
+    // Plain browser: the browser's own print dialog includes "Save as PDF".
+    window.print()
+    return
+  }
   const api = printBridge()
   if (api?.printPage) {
     try {
@@ -686,13 +710,29 @@ export async function exportHtmlPdf(
   return { ok: true }
 }
 
-/** Print one built document (desktop: silent default printer; browser: popup).
- *  Without an explicit `mode` the user is asked first. */
+/** Print one document (desktop: default printer / save as PDF / system
+ *  dialog; browser: popup). Without an explicit `mode` the user is asked
+ *  FIRST: the chooser IPC fires before the synchronous HTML build, so the
+ *  dialog opens while the document is still being prepared instead of after
+ *  (the old build-then-ask order is what made the chooser feel laggy). */
 export function printDocument(
   doc: PrintDoc,
   config: PrintDesignerConfig,
   extras: PrintDocExtras,
-  mode?: PrintMode,
+  mode?: PrintModeChoice,
 ): void {
-  void printHtmlToPrinter(buildPrintHtml(doc, config, extras), undefined, mode)
+  // Kick off the chooser before any work; an explicit mode (batch flows)
+  // resolves immediately without a second dialog.
+  const pick = mode !== undefined ? Promise.resolve(mode) : choosePrintMode()
+  void (async () => {
+    const picked = await pick
+    if (picked === 'cancel') return
+    const html = buildPrintHtml(doc, config, extras)
+    if (picked === 'pdf') {
+      const res = await exportHtmlPdf(html, `${extras.docType}-${doc.number}`)
+      if (!res.ok && !res.cancelled) console.warn('[print] pdf export failed:', res.error)
+      return
+    }
+    await printHtmlToPrinter(html, undefined, picked)
+  })()
 }
