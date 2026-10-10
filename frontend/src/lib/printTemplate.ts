@@ -175,9 +175,15 @@ export interface PrintDoc {
   items?: Array<Record<string, unknown>>
 }
 
-/** Open one or more built documents in print windows (batch = one window per doc). */
-export function printDocuments(batch: Array<{ doc: PrintDoc; config: PrintDesignerConfig; extras: PrintDocExtras }>): void {
-  for (const b of batch) printDocument(b.doc, b.config, b.extras)
+/** Open one or more built documents in print windows (batch = one window per
+ *  doc). The print chooser is shown ONCE for the whole batch, and a Cancel
+ *  aborts every document — asking per-document would spam a dialog per order. */
+export async function printDocuments(
+  batch: Array<{ doc: PrintDoc; config: PrintDesignerConfig; extras: PrintDocExtras }>,
+): Promise<void> {
+  const picked = await choosePrintMode()
+  if (picked === 'cancel') return
+  for (const b of batch) printDocument(b.doc, b.config, b.extras, picked)
 }
 
 export interface PrintDocExtras {
@@ -542,9 +548,15 @@ export interface PdfBridgeResult extends PrintBridgeResult {
   path?: string
 }
 
+/** How a print job runs: straight to the OS default printer, or through the
+ *  system print dialog (the Ctrl+P-style picker). */
+export type PrintMode = 'silent' | 'dialog'
+export type PrintModeChoice = PrintMode | 'cancel'
+
 interface PrintBridge {
-  printHtml: (html: string, title?: string) => Promise<PrintBridgeResult>
-  printPage: () => Promise<PrintBridgeResult>
+  printHtml: (html: string, title?: string, mode?: PrintMode) => Promise<PrintBridgeResult>
+  printPage: (mode?: PrintMode) => Promise<PrintBridgeResult>
+  choosePrintMode?: () => Promise<PrintModeChoice>
   previewHtml: (html: string, title?: string) => Promise<PrintBridgeResult>
   exportPdf: (html: string, suggestedName?: string) => Promise<PdfBridgeResult>
 }
@@ -561,21 +573,46 @@ function popupWithPrint(html: string): void {
   w.document.close()
 }
 
+/** Ask how to print: native chooser (Default printer / system print dialog /
+ *  Cancel). Called once per user action, so a bulk batch is asked only once.
+ *  Plain browser (dev server / e2e, no bridge): the popup path there ends in
+ *  the browser's own print dialog anyway, so answer 'silent' directly. */
+export async function choosePrintMode(): Promise<PrintModeChoice> {
+  const api = printBridge()
+  if (api?.choosePrintMode) {
+    try {
+      return await api.choosePrintMode()
+    } catch (err) {
+      console.warn('[print] chooser error:', err)
+      return 'cancel'
+    }
+  }
+  return 'silent'
+}
+
 /**
  * Send a built document to the printer.
  *
  * Desktop app: the main process renders it in a hidden window and calls
- * webContents.print({ silent: true }) — the job goes straight to the OS
- * DEFAULT printer with no dialog and no app picker (window.open popups are
- * denied there anyway, which is why printing used to do nothing).
+ * webContents.print() — 'silent' spools straight to the OS DEFAULT printer
+ * (no dialog, no app picker); 'dialog' opens the system print dialog (like
+ * Ctrl+P). window.open popups are denied there anyway, which is why printing
+ * used to do nothing.
  *
+ * Without an explicit `mode` the user is asked first (the print chooser).
  * Plain browser (dev server / e2e): falls back to the old print popup.
  */
-export async function printHtmlToPrinter(html: string, title?: string): Promise<void> {
+export async function printHtmlToPrinter(
+  html: string,
+  title?: string,
+  mode?: PrintMode,
+): Promise<void> {
+  const picked = mode ?? (await choosePrintMode())
+  if (picked === 'cancel') return
   const api = printBridge()
   if (api?.printHtml) {
     try {
-      const res = await api.printHtml(html, title)
+      const res = await api.printHtml(html, title, picked)
       if (!res.ok) console.warn('[print] failed:', res.error)
     } catch (err) {
       console.warn('[print] bridge error:', err)
@@ -593,11 +630,13 @@ export async function printHtmlToPrinter(html: string, title?: string): Promise<
  * Resolves when the dialog/job has finished, so callers can clean up
  * print-only state (e.g. the dashboard body class) afterwards.
  */
-export async function printCurrentPage(): Promise<void> {
+export async function printCurrentPage(mode?: PrintMode): Promise<void> {
+  const picked = mode ?? (await choosePrintMode())
+  if (picked === 'cancel') return
   const api = printBridge()
   if (api?.printPage) {
     try {
-      const res = await api.printPage()
+      const res = await api.printPage(picked)
       if (!res.ok) console.warn('[print] page print failed:', res.error)
     } catch (err) {
       console.warn('[print] bridge error:', err)
@@ -647,7 +686,13 @@ export async function exportHtmlPdf(
   return { ok: true }
 }
 
-/** Print one built document (desktop: silent default printer; browser: popup). */
-export function printDocument(doc: PrintDoc, config: PrintDesignerConfig, extras: PrintDocExtras): void {
-  void printHtmlToPrinter(buildPrintHtml(doc, config, extras))
+/** Print one built document (desktop: silent default printer; browser: popup).
+ *  Without an explicit `mode` the user is asked first. */
+export function printDocument(
+  doc: PrintDoc,
+  config: PrintDesignerConfig,
+  extras: PrintDocExtras,
+  mode?: PrintMode,
+): void {
+  void printHtmlToPrinter(buildPrintHtml(doc, config, extras), undefined, mode)
 }
