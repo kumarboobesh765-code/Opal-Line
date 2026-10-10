@@ -37,9 +37,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Printing bridge — window.open() popups are denied by the main window's
   // window-open handler, so print flows send the built HTML here instead.
   // printHtml spools straight to the OS default printer (no dialog).
-  printHtml: (html: string, title?: string): Promise<PrintBridgeResult> =>
-    ipcRenderer.invoke('print:html', html, title),
-  printPage: (): Promise<PrintBridgeResult> => ipcRenderer.invoke('print:page'),
+  printHtml: (html: string, title?: string, mode?: 'silent' | 'dialog'): Promise<PrintBridgeResult> =>
+    ipcRenderer.invoke('print:html', html, title, mode),
+  printPage: (mode?: 'silent' | 'dialog'): Promise<PrintBridgeResult> => ipcRenderer.invoke('print:page', mode),
+  // "How do you want to print?" chooser — native message box with
+  // Default printer / Choose printer and options… / Cancel.
+  choosePrintMode: (): Promise<'silent' | 'dialog' | 'cancel'> =>
+    ipcRenderer.invoke('print:choose-mode'),
   previewHtml: (html: string, title?: string): Promise<PrintBridgeResult> =>
     ipcRenderer.invoke('print:preview', html, title),
   exportPdf: (html: string, suggestedName?: string): Promise<PdfBridgeResult> =>

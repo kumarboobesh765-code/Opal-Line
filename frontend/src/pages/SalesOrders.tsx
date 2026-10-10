@@ -386,7 +386,7 @@ export default function SalesOrdersPage() {
       return
     }
     const config = docType === 'packing-slip' ? packingConfig : pickConfig
-    printDocuments(
+    void printDocuments(
       withItems.map((o) => ({
         doc: buildOrderPrintDoc(o),
         config,

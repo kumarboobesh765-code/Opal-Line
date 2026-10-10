@@ -30,6 +30,10 @@ export interface PrintResult {
   error?: string
 }
 
+/** How a print job should run: straight to the default printer, or through
+ *  the system print dialog (the Ctrl+P-style picker). */
+export type PrintMode = 'silent' | 'dialog'
+
 export interface PdfResult {
   ok: boolean
   cancelled?: boolean
@@ -144,13 +148,16 @@ function printAttempt(wc: WebContents, silent: boolean): Promise<boolean> {
 
 export function printWebContents(
   wc: WebContents,
-  opts: { fallbackToDialog?: boolean } = {},
+  opts: { fallbackToDialog?: boolean; mode?: PrintMode } = {},
 ): Promise<PrintResult> {
   const once = (silent: boolean): Promise<boolean> => printAttempt(wc, silent)
+  // mode 'dialog' is the user's explicit "Choose printer & options" choice:
+  // skip the silent attempt and go straight to the system print dialog.
+  const silent = opts.mode !== 'dialog'
   return (async () => {
     try {
-      if (await once(true)) return { ok: true }
-      if (opts.fallbackToDialog === false) {
+      if (silent && await once(true)) return { ok: true }
+      if (silent && opts.fallbackToDialog === false) {
         return { ok: false, error: 'silent print to the default printer failed (is a default printer configured?)' }
       }
       const ok = await once(false)
@@ -161,14 +168,23 @@ export function printWebContents(
   })()
 }
 
-/** Spool `html` to the system default printer (no dialog), queued. */
-export function printHtml(html: string, opts: { title?: string; fallbackToDialog?: boolean } = {}): Promise<PrintResult> {
+/**
+ * Spool `html` to the printer, queued.
+ * Default: silent, straight to the OS default printer. With `mode: 'dialog'`
+ * (the user's explicit "Choose printer & options" pick) the system print
+ * dialog is opened directly instead — the same window Ctrl+P gives.
+ */
+export function printHtml(
+  html: string,
+  opts: { title?: string; fallbackToDialog?: boolean; mode?: PrintMode } = {},
+): Promise<PrintResult> {
   const title = opts.title ?? 'Opal Line Billing — Print'
+  const silent = opts.mode !== 'dialog'
   return enqueue(async () => {
     try {
       return await withRenderedDocument(html, title, async (win) => {
-        if (await printOnce(win, true)) return { ok: true }
-        if (opts.fallbackToDialog === false) {
+        if (silent && await printOnce(win, true)) return { ok: true }
+        if (silent && opts.fallbackToDialog === false) {
           return { ok: false, error: 'silent print to the default printer failed (is a default printer configured?)' }
         }
         // The default printer refused — show the document and let the system

@@ -6,7 +6,7 @@ import { execSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { pruneLogIfTooBig } from './logrotate'
 import { consolidateUserData } from './userdata'
-import { printHtml, previewHtml, pdfFromHtml, printWebContents, type PrintResult, type PdfResult } from './print'
+import { printHtml, previewHtml, pdfFromHtml, printWebContents, type PrintResult, type PdfResult, type PrintMode } from './print'
 import * as https from 'node:https'
 
 let mainWindow: BrowserWindow | null = null
@@ -683,9 +683,37 @@ function loadAppInWindow(): void {
 // The renderer's print/PDF/preview flows land here (electron/print.ts) because
 // the main window denies every window.open() popup. printHtml spools to the
 // OS default printer silently — no dialog, no app picker.
-ipcMain.handle('print:html', (_e, html: unknown, title: unknown): Promise<PrintResult> | PrintResult => {
+ipcMain.handle('print:html', (_e, html: unknown, title: unknown, mode: unknown): Promise<PrintResult> | PrintResult => {
   if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
-  return printHtml(html, { title: typeof title === 'string' ? title : undefined })
+  return printHtml(html, {
+    title: typeof title === 'string' ? title : undefined,
+    mode: mode === 'dialog' ? 'dialog' : undefined,
+  })
+})
+
+// The "how do you want to print?" chooser shown before every print. Native
+// message box, so it works no matter which window the flow started from:
+//   Default printer             → silent job to the OS default printer
+//   Choose printer and options… → the system print dialog (same as Ctrl+P)
+//   Cancel                       → nothing is printed
+ipcMain.handle('print:choose-mode', (): Promise<PrintMode | 'cancel'> => {
+  const options: Electron.MessageBoxOptions = {
+    type: 'question',
+    title: 'Print',
+    message: 'How do you want to print?',
+    detail:
+      'Default printer — sends the job straight to your Windows default printer.\n\n' +
+      'Choose printer and options… — opens the system print dialog (like Ctrl+P) ' +
+      'to pick the printer, number of copies and preferences.',
+    buttons: ['Default printer', 'Choose printer and options…', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  }
+  const show = mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options)
+  return show.then(({ response }) => (response === 0 ? 'silent' : response === 1 ? 'dialog' : 'cancel'))
 })
 ipcMain.handle('print:preview', (_e, html: unknown, title: unknown): Promise<PrintResult> | PrintResult => {
   if (typeof html !== 'string' || html.length === 0) return { ok: false, error: 'empty document' }
@@ -699,9 +727,9 @@ ipcMain.handle('export:pdf', (_e, html: unknown, suggestedName: unknown): Promis
 })
 // The @media print flows (Dashboard, DayBook, invoice dialog) print the app
 // window itself — silently, to the default printer.
-ipcMain.handle('print:page', (): Promise<PrintResult> | PrintResult => {
+ipcMain.handle('print:page', (_e, mode: unknown): Promise<PrintResult> | PrintResult => {
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'no window to print' }
-  return printWebContents(mainWindow.webContents)
+  return printWebContents(mainWindow.webContents, { mode: mode === 'dialog' ? 'dialog' : undefined })
 })
 
 function stopPostgres(): void {
